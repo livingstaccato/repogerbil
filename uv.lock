@@ -714,6 +714,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/00/4b/ccc026168948fec4f7555b9164c724cf4125eac006e176541483d2c959be/pydantic_settings-2.13.1-py3-none-any.whl", hash = "sha256:d56fd801823dbeae7f0975e1f8c8e25c258eb75d278ea7abb5d9cebb01b56237", size = 58929, upload-time = "2026-02-19T13:45:06.034Z" },
 ]
 
+[package.optional-dependencies]
+toml = [
+    { name = "tomli" },
+]
+
 [[package]]
 name = "pygments"
 version = "2.20.0"
@@ -873,7 +878,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
+    { name = "pydantic-settings", extra = ["toml"] },
     { name = "pyyaml" },
     { name = "rich" },
 ]
@@ -896,7 +901,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "pydantic-settings", extras = ["toml"], specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
 ]

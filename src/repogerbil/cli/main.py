@@ -346,3 +346,40 @@ def _audit_commits(
                 verb_ok += 1  # pragma: no cover — needs verb-classifiable commit in test
 
     return total, prefixed, verb_ok, ambiguous, bad_msgs
+
+
+@cli.command()
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.option("--year", type=int, required=True, help="ISO year")
+@click.option("--week", type=int, required=True, help="ISO week number")
+@click.option("--output-dir", type=click.Path(), default=".", help="Where to write the summary")
+@click.option("--prompt", "prompt_mode", is_flag=True, help="Output LLM prompt instead of markdown")
+def summary(
+    changelog_dir: str,
+    year: int,
+    week: int,
+    output_dir: str,
+    prompt_mode: bool,
+) -> None:
+    """Generate a weekly summary from changelogs."""
+    from repogerbil.core.summary import (
+        collect_week_data,
+        generate_summary_markdown,
+        generate_summary_prompt,
+    )
+
+    data = collect_week_data(Path(changelog_dir), year, week)
+    if not data.repos:
+        click.echo(f"No changelogs found for {data.week_label}")
+        return
+
+    if prompt_mode:
+        text = generate_summary_prompt(data)
+        out_path = Path(output_dir) / f"{data.week_label}-prompt.md"
+    else:
+        text = generate_summary_markdown(data)
+        out_path = Path(output_dir) / f"{data.week_label}.md"
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(text)
+    click.echo(f"Wrote {out_path} ({len(data.repos)} repos, {data.total_commits} commits)")

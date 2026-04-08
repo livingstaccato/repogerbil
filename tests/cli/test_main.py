@@ -375,6 +375,54 @@ class TestAuditEdgeCases:
         assert "0 commits" in result.output
 
 
+class TestSummary:
+    def test_summary_markdown(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "cl"
+        out.mkdir()
+        runner = CliRunner()
+        _generate_changelog(runner, repo, out)
+        summary_out = tmp_path / "summaries"
+        summary_out.mkdir()
+        result = runner.invoke(
+            cli,
+            ["summary", str(out), "--year", "2026", "--week", "15", "--output-dir", str(summary_out)],
+        )
+        assert result.exit_code == 0
+        assert "Wrote" in result.output
+
+    def test_summary_prompt(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "cl"
+        out.mkdir()
+        runner = CliRunner()
+        _generate_changelog(runner, repo, out)
+        summary_out = tmp_path / "summaries"
+        summary_out.mkdir()
+        result = runner.invoke(
+            cli,
+            [
+                "summary",
+                str(out),
+                "--year",
+                "2026",
+                "--week",
+                "15",
+                "--output-dir",
+                str(summary_out),
+                "--prompt",
+            ],
+        )
+        assert result.exit_code == 0
+        assert "prompt" in result.output.lower() or "Wrote" in result.output
+
+    def test_summary_no_data(self, tmp_path: Path) -> None:
+        cl_dir = tmp_path / "empty"
+        cl_dir.mkdir()
+        result = CliRunner().invoke(cli, ["summary", str(cl_dir), "--year", "2020", "--week", "1"])
+        assert "No changelogs" in result.output
+
+
 class TestFixStats:
     def test_fix_stats(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)

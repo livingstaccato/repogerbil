@@ -214,3 +214,137 @@ class TestFindSimilarFileChanges:
 
         results = find_similar_file_changes(store, ["src/main.py"], n=5)
         assert isinstance(results, list)
+
+
+class TestSearchByScope:
+    def test_finds_by_scope(self, tmp_path: Path, store: VectorStore) -> None:
+        from repogerbil.core.search import search_by_scope
+
+        cl_dir = tmp_path / "changelogs"
+        repo_dir = cl_dir / "repo-a"
+        repo_dir.mkdir(parents=True)
+        # Write changelog with scoped commit messages
+        (repo_dir / "2026-04-07-repo-a-changelog.yaml").write_text(
+            yaml.dump(
+                {
+                    "date": "2026-04-07",
+                    "repo": "repo-a",
+                    "title": "Parity fixes",
+                    "summary": "Fixed parity issues",
+                    "stats": {"commits": 2, "files_changed": 3, "insertions": 10, "deletions": 5},
+                    "changes": [
+                        {
+                            "title": "Parity",
+                            "category": "remediate",
+                            "severity": "behavioral",
+                            "files": [{"path": "src/parity.py", "summary": "fix"}],
+                            "points": [
+                                {"text": "fix(parity): sync twcfig.dat", "files": ["src/parity.py"]},
+                                {"text": "fix(worker): handle timeout", "files": ["src/worker.py"]},
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
+        index_changelogs(store, cl_dir)
+        results = search_by_scope(store, "parity", n=5)
+        assert len(results) >= 1
+        assert "parity" in results[0].get("metadata", {}).get("scopes", "")
+
+
+class TestFindLowQuality:
+    def test_finds_low_quality(self, tmp_path: Path, store: VectorStore) -> None:
+        from repogerbil.core.search import find_low_quality
+
+        cl_dir = tmp_path / "changelogs"
+        # Write a low-quality changelog (TODO title, no files)
+        repo_dir = cl_dir / "repo-bad"
+        repo_dir.mkdir(parents=True)
+        (repo_dir / "2026-04-07-repo-bad-changelog.yaml").write_text(
+            yaml.dump(
+                {
+                    "date": "2026-04-07",
+                    "repo": "repo-bad",
+                    "title": "Quick fix",
+                    "summary": "Did stuff",
+                    "stats": {"commits": 5, "files_changed": 20, "insertions": 100, "deletions": 50},
+                    "review": ["ambiguous commit 1", "ambiguous commit 2"],
+                    "changes": [{"title": "Stuff", "category": "baseline", "points": []}],
+                }
+            )
+        )
+        # And a high-quality one
+        _write_changelog(
+            cl_dir / "repo-good" / "2026-04-07-repo-good-changelog.yaml",
+            "repo-good",
+            "2026-04-07",
+            "Detailed work",
+        )
+        index_changelogs(store, cl_dir)
+        results = find_low_quality(store, n=5)
+        # Low quality should appear first
+        assert len(results) >= 1
+
+
+class TestExtractScopes:
+    def test_extracts_scopes(self) -> None:
+        from repogerbil.core.search import _extract_scopes
+
+        data = {
+            "changes": [
+                {
+                    "points": [
+                        {"text": "fix(parity): something"},
+                        {"text": "feat(go): something else"},
+                        {"text": "just a plain message"},
+                    ]
+                }
+            ]
+        }
+        scopes = _extract_scopes(data)
+        assert scopes == ["go", "parity"]
+
+    def test_empty(self) -> None:
+        from repogerbil.core.search import _extract_scopes
+
+        assert _extract_scopes({}) == []
+
+
+class TestComputeQuality:
+    def test_full_quality(self) -> None:
+        from repogerbil.core.search import _compute_quality
+
+        data = {
+            "title": "Real title",
+            "summary": "Real summary",
+            "stats": {"files_changed": 10},
+            "bulk": [{"files": 5}],
+            "changes": [
+                {
+                    "files": [{"path": "a.py"}, {"path": "b.py"}],
+                    "points": [{"files": ["c.py"]}],
+                }
+            ],
+        }
+        q = _compute_quality(data)
+        assert q["quality_has_title"] is True
+        assert q["quality_has_summary"] is True
+        assert q["quality_coverage"] == 80.0
+        assert q["quality_review_count"] == 0
+
+    def test_low_quality(self) -> None:
+        from repogerbil.core.search import _compute_quality
+
+        data = {
+            "title": "TODO: summarize",
+            "summary": "TODO: write",
+            "stats": {"files_changed": 100},
+            "review": ["a", "b", "c"],
+            "changes": [],
+        }
+        q = _compute_quality(data)
+        assert q["quality_has_title"] is False
+        assert q["quality_has_summary"] is False
+        assert q["quality_review_count"] == 3
+        assert q["quality_coverage"] == 0.0

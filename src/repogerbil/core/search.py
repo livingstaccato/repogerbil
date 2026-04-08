@@ -40,76 +40,8 @@ def index_changelogs(
             continue
 
         for yaml_file in sorted(repo_dir.glob("*-changelog.yaml")):
-            data = _load_yaml(yaml_file)
-            if not data or not data.get("title") or not data.get("date"):
-                continue
-
-            repo = data.get("repo", repo_dir.name)
-            date_str = str(data["date"])[:10]
-            title = data["title"]
-            summary = data.get("summary", "")
-            stats = data.get("stats", {})
-
-            if title.startswith("TODO"):
-                continue
-
-            # #4: Cross-repo timeline — embed date + category distribution as metadata
-            categories = _extract_categories(data)
-            cat_str = " ".join(f"{k}:{v}" for k, v in sorted(categories.items(), key=lambda x: -x[1]))
-
-            # #5: Category distribution as metadata
-            dominant_cat = max(categories, key=categories.get) if categories else ""  # type: ignore[arg-type]
-
-            store.upsert_changelog(
-                repo=repo,
-                date_str=date_str,
-                title=title,
-                summary=summary,
-                metadata={
-                    "commits": stats.get("commits", 0),
-                    "files_changed": stats.get("files_changed", 0),
-                    "dominant_category": dominant_cat,
-                    "category_distribution": cat_str,
-                },
-            )
-
-            # #1: File path embeddings
-            all_filepaths = _extract_filepaths(data)
-            if all_filepaths:  # pragma: no branch
-                store.upsert_filepaths(
-                    changelog_id=f"{repo}/{date_str}",
-                    filepaths=all_filepaths,
-                    metadata={"repo": repo, "date": date_str},
-                )
-
-            # Index change sections with enriched metadata
-            for i, change in enumerate(data.get("changes") or []):
-                change_title = change.get("title", "")
-                # #2: Commit message clusters — embed all point texts together
-                points_text = " ".join(
-                    p.get("text", "") for p in (change.get("points") or []) if isinstance(p, dict)
-                )
-                category = change.get("category", "")
-                severity = change.get("severity", "")
-
-                store.upsert_change(
-                    changelog_id=f"{repo}/{date_str}",
-                    index=i,
-                    title=change_title,
-                    points_text=points_text,
-                    metadata={
-                        "category": category or "",
-                        "severity": severity or "",
-                        "repo": repo,
-                        "date": date_str,
-                    },
-                )
-
-            # #3: Diff content embeddings (optional)
-            if include_diffs and diff_source_repos and repo in diff_source_repos:  # pragma: no cover
-                _index_diffs(store, repo, date_str, diff_source_repos[repo])
-
-            indexed += 1
+            if _index_single_changelog(store, yaml_file, repo_dir.name, include_diffs, diff_source_repos):
+                indexed += 1
 
     return indexed
 
@@ -174,6 +106,36 @@ def find_similar_file_changes(
     return store.search_filepaths(query, n=n)
 
 
+def search_by_scope(
+    store: VectorStore,
+    scope: str,
+    n: int = 10,
+) -> list[dict[str, Any]]:
+    """Find changes tagged with a specific scope (e.g., parity, worker, go)."""
+    results = store.search_changes(scope, n=n * 3)
+    return [r for r in results if scope in r.get("metadata", {}).get("scopes", "").split()][:n]
+
+
+def find_low_quality(
+    store: VectorStore,
+    n: int = 20,
+) -> list[dict[str, Any]]:
+    """Find changelogs with lowest quality scores (most needing work)."""
+    # Search broadly, then sort by coverage
+    results = store.search_changelogs("changelog", n=n * 5)
+    scored = []
+    for r in results:
+        meta = r.get("metadata", {})
+        coverage = meta.get("quality_coverage", 100)
+        review_count = meta.get("quality_review_count", 0)
+        has_title = meta.get("quality_has_title", True)
+        # Lower is worse
+        score = coverage - (review_count * 10) - (0 if has_title else 50)
+        scored.append((score, r))
+    scored.sort(key=lambda x: x[0])
+    return [r for _, r in scored[:n]]
+
+
 def find_work_pattern(
     store: VectorStore,
     category: str,
@@ -187,6 +149,94 @@ def find_work_pattern(
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 
+def _index_single_changelog(
+    store: VectorStore,
+    yaml_file: Path,
+    default_repo: str,
+    include_diffs: bool,
+    diff_source_repos: dict[str, str] | None,
+) -> bool:
+    """Index a single changelog file into the store. Returns True if indexed."""
+    data = _load_yaml(yaml_file)
+    if not data or not data.get("title") or not data.get("date"):
+        return False
+
+    repo = data.get("repo", default_repo)
+    date_str = str(data["date"])[:10]
+    title = data["title"]
+    summary = data.get("summary", "")
+    stats = data.get("stats", {})
+
+    if title.startswith("TODO"):
+        return False
+
+    categories = _extract_categories(data)
+    cat_str = " ".join(f"{k}:{v}" for k, v in sorted(categories.items(), key=lambda x: -x[1]))
+    dominant_cat = max(categories, key=categories.get) if categories else ""  # type: ignore[arg-type]
+    scopes = _extract_scopes(data)
+    quality = _compute_quality(data)
+
+    store.upsert_changelog(
+        repo=repo,
+        date_str=date_str,
+        title=title,
+        summary=summary,
+        metadata={
+            "commits": stats.get("commits", 0),
+            "files_changed": stats.get("files_changed", 0),
+            "dominant_category": dominant_cat,
+            "category_distribution": cat_str,
+            "scopes": " ".join(scopes),
+            **quality,
+        },
+    )
+
+    all_filepaths = _extract_filepaths(data)
+    if all_filepaths:  # pragma: no branch
+        store.upsert_filepaths(
+            changelog_id=f"{repo}/{date_str}",
+            filepaths=all_filepaths,
+            metadata={"repo": repo, "date": date_str},
+        )
+
+    _index_change_sections(store, data, repo, date_str)
+
+    if include_diffs and diff_source_repos and repo in diff_source_repos:  # pragma: no cover
+        _index_diffs(store, repo, date_str, diff_source_repos[repo])
+
+    return True
+
+
+def _index_change_sections(store: VectorStore, data: dict[str, Any], repo: str, date_str: str) -> None:
+    """Index individual change sections from a changelog."""
+    for i, change in enumerate(data.get("changes") or []):
+        change_title = change.get("title", "")
+        points_text = " ".join(p.get("text", "") for p in (change.get("points") or []) if isinstance(p, dict))
+        category = change.get("category", "")
+        severity = change.get("severity", "")
+
+        section_scopes: set[str] = set()
+        for p in change.get("points") or []:
+            if isinstance(p, dict):  # pragma: no branch
+                m = _SCOPE_RE.match(p.get("text", ""))
+                if m:
+                    section_scopes.add(m.group(1).lower())
+
+        store.upsert_change(
+            changelog_id=f"{repo}/{date_str}",
+            index=i,
+            title=change_title,
+            points_text=points_text,
+            metadata={
+                "category": category or "",
+                "severity": severity or "",
+                "repo": repo,
+                "date": date_str,
+                "scopes": " ".join(sorted(section_scopes)),
+            },
+        )
+
+
 def _extract_categories(data: dict[str, Any]) -> dict[str, int]:
     """Extract category distribution from changelog data."""
     categories: dict[str, int] = {}
@@ -195,6 +245,74 @@ def _extract_categories(data: dict[str, Any]) -> dict[str, int]:
         if cat:  # pragma: no branch
             categories[cat] = categories.get(cat, 0) + 1
     return categories
+
+
+_SCOPE_RE = __import__("re").compile(r"^\w+\(([^)]+)\)[!]?:\s")
+
+
+def _extract_scopes(data: dict[str, Any]) -> list[str]:
+    """Extract unique scopes from commit subjects in points."""
+    scopes: set[str] = set()
+    for change in data.get("changes") or []:
+        for point in change.get("points") or []:
+            if isinstance(point, dict):  # pragma: no branch
+                text = point.get("text", "")
+                m = _SCOPE_RE.match(text)
+                if m:
+                    scopes.add(m.group(1).lower())
+    return sorted(scopes)
+
+
+def _compute_quality(data: dict[str, Any]) -> dict[str, Any]:
+    """Compute quality metrics for a changelog.
+
+    Returns metadata dict with quality indicators.
+    """
+    stats = data.get("stats", {})
+    files_changed = stats.get("files_changed", 0)
+
+    # Count files accounted for
+    bulk_files = sum(b.get("files", 0) for b in (data.get("bulk") or []))
+    change_files: set[str] = set()
+    for change in data.get("changes") or []:
+        for f in change.get("files") or []:
+            if isinstance(f, dict) and f.get("path"):  # pragma: no branch
+                change_files.add(str(f["path"]))
+        for point in change.get("points") or []:
+            if isinstance(point, dict):  # pragma: no branch
+                for pf in point.get("files") or []:
+                    if isinstance(pf, str):  # pragma: no branch
+                        change_files.add(pf)
+    accounted = bulk_files + len(change_files)
+
+    # Coverage ratio
+    coverage = (accounted / files_changed * 100) if files_changed > 0 else 100.0
+
+    # Review items
+    review_count = len(data.get("review") or [])
+
+    # Bulk ratio
+    bulk_ratio = (bulk_files / files_changed * 100) if files_changed > 0 else 0.0
+
+    # Has real title (not TODO)
+    title = data.get("title", "")
+    has_title = bool(title) and not title.startswith("TODO")
+
+    # Has summary
+    summary = data.get("summary", "")
+    has_summary = bool(summary) and not summary.startswith("TODO")
+
+    # Change section count
+    change_count = len(data.get("changes") or [])
+
+    return {
+        "quality_coverage": round(coverage, 1),
+        "quality_review_count": review_count,
+        "quality_bulk_pct": round(bulk_ratio, 1),
+        "quality_has_title": has_title,
+        "quality_has_summary": has_summary,
+        "quality_change_sections": change_count,
+    }
 
 
 def _extract_filepaths(data: dict[str, Any]) -> list[str]:

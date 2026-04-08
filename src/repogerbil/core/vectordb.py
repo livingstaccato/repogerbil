@@ -31,6 +31,14 @@ class VectorStore:
             "changes",
             metadata={"hnsw:space": "cosine"},
         )
+        self._filepaths = self._client.get_or_create_collection(
+            "filepaths",
+            metadata={"hnsw:space": "cosine"},
+        )
+        self._diffs = self._client.get_or_create_collection(
+            "diffs",
+            metadata={"hnsw:space": "cosine"},
+        )
 
     def upsert_changelog(
         self,
@@ -136,6 +144,76 @@ class VectorStore:
         formatted = _format_results(results)  # type: ignore[arg-type]
         return [r for r in formatted if r["id"] != changelog_id][:n]
 
+    def upsert_filepaths(
+        self,
+        changelog_id: str,
+        filepaths: list[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Upsert file paths as a single embedded document per changelog."""
+        if not filepaths:
+            return
+        doc_id = f"{changelog_id}/files"
+        text = " ".join(filepaths)
+        embedding = self._embedder.embed(text)
+        meta = {"changelog_id": changelog_id, **(metadata or {})}
+        meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
+        self._filepaths.upsert(
+            ids=[doc_id],
+            embeddings=[embedding],  # type: ignore[arg-type]
+            documents=[text],
+            metadatas=[meta],
+        )
+
+    def upsert_diff(
+        self,
+        changelog_id: str,
+        filepath: str,
+        diff_text: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Upsert a diff chunk for a specific file."""
+        doc_id = f"{changelog_id}/diff/{filepath}"
+        embedding = self._embedder.embed(diff_text[:2000])  # cap embedding input
+        meta = {
+            "changelog_id": changelog_id,
+            "filepath": filepath,
+            **(metadata or {}),
+        }
+        meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
+        self._diffs.upsert(
+            ids=[doc_id],
+            embeddings=[embedding],  # type: ignore[arg-type]
+            documents=[diff_text[:5000]],  # cap stored text
+            metadatas=[meta],
+        )
+
+    def search_filepaths(
+        self,
+        query: str,
+        n: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search by file path similarity."""
+        embedding = self._embedder.embed(query)
+        results = self._filepaths.query(
+            query_embeddings=[embedding],  # type: ignore[arg-type]
+            n_results=n,
+        )
+        return _format_results(results)  # type: ignore[arg-type]
+
+    def search_diffs(
+        self,
+        query: str,
+        n: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search diff content by semantic similarity."""
+        embedding = self._embedder.embed(query)
+        results = self._diffs.query(
+            query_embeddings=[embedding],  # type: ignore[arg-type]
+            n_results=n,
+        )
+        return _format_results(results)  # type: ignore[arg-type]
+
     @property
     def changelog_count(self) -> int:
         """Number of indexed changelogs."""
@@ -145,6 +223,16 @@ class VectorStore:
     def change_count(self) -> int:
         """Number of indexed change sections."""
         return self._changes.count()
+
+    @property
+    def filepath_count(self) -> int:
+        """Number of indexed filepath documents."""
+        return self._filepaths.count()
+
+    @property
+    def diff_count(self) -> int:
+        """Number of indexed diff chunks."""
+        return self._diffs.count()
 
 
 def _format_results(results: dict[str, Any]) -> list[dict[str, Any]]:

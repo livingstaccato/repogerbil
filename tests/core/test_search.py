@@ -36,7 +36,8 @@ def _write_changelog(path: Path, repo: str, date_str: str, title: str, category:
                         "title": title,
                         "category": category,
                         "severity": "behavioral",
-                        "points": [{"text": f"Did {title.lower()}"}],
+                        "files": [{"path": "src/main.py", "summary": title}],
+                        "points": [{"text": f"Did {title.lower()}", "files": ["src/main.py"]}],
                     },
                 ],
             }
@@ -153,3 +154,63 @@ class TestFindRelatedWork:
         related = find_related_work(store, "repo-a", "2026-04-07", n=5)
         # Should not include repo-a itself
         assert all(not r["id"].startswith("repo-a/") for r in related)
+
+
+class TestSearchFilepaths:
+    def test_search_by_filepath(self, tmp_path: Path, store: VectorStore) -> None:
+        from repogerbil.core.search import search_filepaths
+
+        cl_dir = tmp_path / "changelogs"
+        _write_changelog(
+            cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml", "repo-a", "2026-04-07", "Work"
+        )
+        index_changelogs(store, cl_dir)
+        results = search_filepaths(store, "main.py", n=5)
+        assert isinstance(results, list)
+        assert len(results) >= 1
+
+    def test_search_diffs(self, tmp_path: Path, store: VectorStore) -> None:
+        from repogerbil.core.search import search_diffs
+
+        store.upsert_diff("repo-a/2026-04-07", "src/main.py", "+print('hello')", metadata={"repo": "repo-a"})
+        results = search_diffs(store, "print hello", n=5)
+        assert len(results) >= 1
+
+
+class TestFindWorkPattern:
+    def test_finds_by_dominant_category(self, tmp_path: Path, store: VectorStore) -> None:
+        cl_dir = tmp_path / "changelogs"
+        _write_changelog(
+            cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml",
+            "repo-a",
+            "2026-04-07",
+            "Fix bugs",
+            "remediate",
+        )
+        _write_changelog(
+            cl_dir / "repo-b" / "2026-04-07-repo-b-changelog.yaml",
+            "repo-b",
+            "2026-04-07",
+            "Add feature",
+            "instantiate",
+        )
+        index_changelogs(store, cl_dir)
+
+        from repogerbil.core.search import find_work_pattern
+
+        results = find_work_pattern(store, "remediate", n=5)
+        assert all(r.get("metadata", {}).get("dominant_category") == "remediate" for r in results)
+
+
+class TestFindSimilarFileChanges:
+    def test_finds_similar(self, tmp_path: Path, store: VectorStore) -> None:
+        cl_dir = tmp_path / "changelogs"
+        _write_changelog(
+            cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml", "repo-a", "2026-04-07", "Work"
+        )
+        index_changelogs(store, cl_dir)
+
+        from repogerbil.core.search import find_similar_file_changes
+
+        results = find_similar_file_changes(store, ["src/main.py"], n=5)
+        assert isinstance(results, list)

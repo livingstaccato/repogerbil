@@ -93,3 +93,27 @@ class TestSearchChangesWithFilter:
         store.upsert_change("repo-b/2026-04-07", 0, "Fix B", "auth fix", metadata={"repo": "repo-b"})
         results = store.search_changes("auth", n=10, repo="repo-a")
         assert len(results) >= 1
+
+
+class TestUpsertFilepaths:
+    def test_upsert_and_search(self, store: VectorStore) -> None:
+        store.upsert_filepaths(
+            "repo-a/2026-04-07", ["src/main.py", "src/utils.py"], metadata={"repo": "repo-a"}
+        )
+        assert store.filepath_count == 1
+        results = store.search_filepaths("main.py", n=5)
+        assert len(results) >= 1
+
+    def test_empty_filepaths(self, store: VectorStore) -> None:
+        store.upsert_filepaths("repo-a/2026-04-07", [])
+        assert store.filepath_count == 0
+
+
+class TestUpsertDiff:
+    def test_upsert_and_search(self, store: VectorStore) -> None:
+        store.upsert_diff(
+            "repo-a/2026-04-07", "src/main.py", "+print('hello')\n-print('bye')", metadata={"repo": "repo-a"}
+        )
+        assert store.diff_count == 1
+        results = store.search_diffs("print hello", n=5)
+        assert len(results) >= 1

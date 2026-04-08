@@ -10,6 +10,9 @@ Turns messy git histories into clean, documented daily commits by combining chan
 pip install repogerbil
 # or
 uv add repogerbil
+
+# Optional: vector database for semantic search
+pip install repogerbil[vectordb]
 ```
 
 ## Quick Start
@@ -33,11 +36,32 @@ repogerbil verify /path/to/changelogs /path/to/repo
 # Fix stats to match git truth
 repogerbil fix-stats /path/to/changelogs /path/to/repo
 
+# Enrich changelogs with per-section stats + impact
+repogerbil enrich /path/to/changelogs /path/to/repo --depth package
+
+# Generate weekly summary
+repogerbil summary /path/to/changelogs --year 2026 --week 15
+
+# Show missing changelog dates across all tracked repos
+repogerbil missing /path/to/changelogs --config .repogerbil.toml
+
+# Backfill all missing changelogs
+repogerbil backfill /path/to/changelogs --config .repogerbil.toml
+
 # Preview a squash
 repogerbil squash /path/to/repo --dry-run
 
 # Squash with changelog-based commit messages
 repogerbil squash /path/to/repo --changelog-dir /path/to/changelogs
+
+# Index changelogs for semantic search (requires vectordb extra)
+repogerbil index /path/to/changelogs
+
+# Semantic search across all changelogs
+repogerbil search "security hardening" --top 5
+
+# Find related cross-repo work
+repogerbil related provide-telemetry --date 2026-04-07
 ```
 
 ## Commands
@@ -48,14 +72,35 @@ repogerbil squash /path/to/repo --changelog-dir /path/to/changelogs
 | `changelog` | Generate changelog YAML (draft, analyze, or prompt mode) |
 | `fix-stats` | Correct changelog stats to match git truth |
 | `verify` | Check stats accuracy + file coverage |
+| `enrich` | Add per-section stats + import impact to changelogs |
 | `squash` | Consolidate commits into daily/weekly groups |
 | `audit` | Report commit message prefix adoption |
+| `summary` | Generate weekly cross-repo summary |
+| `missing` | Show missing changelog dates across tracked repos |
+| `backfill` | Batch generate changelogs for all missing dates |
+| `index` | Index changelogs into vector database (requires `[vectordb]`) |
+| `search` | Semantic search across changelogs (requires `[vectordb]`) |
+| `related` | Find related work in other repos (requires `[vectordb]`) |
 
 ## Changelog Modes
 
 - **Draft** (default): Skeleton with TODO placeholders, commit subjects as points
 - **Analyze** (`--analyze`): Complete changelog with real titles, summaries, grouped sections
 - **Prompt** (`--prompt`): LLM-ready markdown with diffs for external analysis
+
+## Vector Database
+
+With `pip install repogerbil[vectordb]`, changelogs are indexed with 7 data dimensions:
+
+| Dimension | What it enables |
+|-----------|-----------------|
+| Title + summary | Semantic search across repos |
+| Change sections | Per-section search, category filtering |
+| File paths | "What else changed when login.py was modified?" |
+| Diff content (opt-in) | Code-level semantic search |
+| Category distribution | Work pattern matching |
+| Scopes | `search --scope parity` across all repos |
+| Quality metrics | Surface changelogs needing the most work |
 
 ## Configuration
 
@@ -79,13 +124,15 @@ action = "skip"
 
 [repos.my-important-repo]
 backfill_depth = "thorough"
+
+[tracked]
+uwarp-space = "/path/to/uwarp-space"
+provide-telemetry = "/path/to/provide-telemetry"
 ```
 
 **Resolution order**: CLI flags > env vars (`REPOGERBIL_*`) > `.repogerbil.toml` > defaults
 
 ## Vocabulary
-
-Changelogs use a structured vocabulary for categories and severities:
 
 | Category | Conventional | Description |
 |----------|-------------|-------------|

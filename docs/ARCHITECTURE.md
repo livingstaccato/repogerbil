@@ -4,24 +4,29 @@
 
 ```
 repogerbil/
-├── core/         Pure library — no CLI, no I/O assumptions
-│   ├── git.py        Subprocess git analysis
-│   ├── classify.py   Commit classification (prefix + verb + file rules)
-│   ├── changelog.py  Changelog generation (draft, analyze, prompt)
-│   ├── cadence.py    Time-based grouping (daily/hourly/weekly)
-│   ├── consolidate.py Cherry-pick squash with changelog messages
-│   ├── diff.py       Diff reading with skip patterns
-│   ├── verify.py     Stats accuracy + coverage checking
-│   ├── enrich.py     Per-section stats + impact analysis
-│   ├── audit.py      Missing changelog detection
-│   ├── summary.py    Weekly summary generation
-│   ├── config.py     pydantic-settings with TOML + env vars
-│   └── vocabulary.py Category/severity definitions
-├── cli/          Click CLI — thin wrappers around core
-│   └── main.py   11 commands
-└── plugin/       Claude Code integration
-    ├── skills/   /repogerbil skill
-    └── agents/   analyzer agent
+├── core/              Pure library — no CLI, no I/O assumptions
+│   ├── git.py             Subprocess git analysis
+│   ├── classify.py        Commit classification (prefix + verb + file rules)
+│   ├── changelog.py       Changelog generation (draft, analyze, prompt)
+│   ├── cadence.py         Time-based grouping (daily/hourly/weekly)
+│   ├── consolidate.py     Cherry-pick squash with changelog messages
+│   ├── diff.py            Diff reading with skip patterns
+│   ├── verify.py          Stats accuracy + coverage checking
+│   ├── enrich.py          Per-section stats + impact analysis
+│   ├── audit.py           Missing changelog detection across tracked repos
+│   ├── summary.py         Weekly summary generation
+│   ├── config.py          pydantic-settings with TOML + env vars
+│   ├── vocabulary.py      Category/severity definitions
+│   ├── embeddings.py      Embedding model wrapper (sentence-transformers or hash)
+│   ├── vectordb.py        ChromaDB wrapper with 4 collections
+│   └── search.py          High-level semantic search + indexing
+├── cli/               Click CLI — thin wrappers around core
+│   ├── main.py            14 commands
+│   └── commands/
+│       └── vectordb_cmds.py  Optional vector DB commands (index, search, related)
+└── plugin/            Claude Code integration
+    ├── skills/            /repogerbil skill
+    └── agents/            analyzer agent
 ```
 
 ## Design Principles
@@ -34,7 +39,11 @@ repogerbil/
 
 4. **100% coverage from day one** — every function has tests. Defensive branches use `pragma: no cover` with explanatory comments. Integration test covers the full pipeline.
 
-5. **Conventional commits as input** — the classifier maps `feat:`, `fix:`, `refactor:` etc. to the vocabulary. Verb heuristics handle the 86% of history without prefixes.
+5. **Conventional commits as input** — the classifier maps `feat:`, `fix:`, `refactor:` etc. to the vocabulary. Verb heuristics handle unprefixed commits. Scope extraction indexes `(scope)` for search.
+
+6. **Vector DB is optional** — all core commands work without chromadb. The `index`, `search`, and `related` commands require `pip install repogerbil[vectordb]`.
+
+7. **No file over 500 lines** — enforced by `scripts/check_max_loc.py` in pre-commit.
 
 ## Data Flow
 
@@ -58,7 +67,14 @@ Source repo (git)
     ├─ enrich_changelog() ──────→ modified YAML with stats/impact
     │
     ├─ find_missing() ──────────→ MissingDate[]
-    └─ collect_week_data() ─────→ WeekSummaryData
+    ├─ collect_week_data() ─────→ WeekSummaryData
+    │
+    └─ index_changelogs() ──────→ VectorStore (7 dimensions)
+        ├─ search_changelogs()      semantic search
+        ├─ search_by_scope()        scope-based filtering
+        ├─ find_related_work()      cross-repo correlation
+        ├─ find_low_quality()       quality-based ranking
+        └─ search_diffs()           code-level search
 ```
 
 ## Key Types
@@ -70,3 +86,14 @@ Source repo (git)
 - **Settings** — pydantic-settings: full config with TOML + env resolution
 - **TimeGroup** — frozen dataclass: period_start, period_end, commits, files_affected
 - **ConsolidationResult** — frozen dataclass: target_branch, backup_branch, backup_tag, counts
+- **VectorStore** — ChromaDB wrapper: changelogs, changes, filepaths, diffs collections
+- **Embedder** — Protocol: embed(text) → list[float], embed_batch(texts) → list[list[float]]
+
+## Vector DB Collections
+
+| Collection | Documents | Metadata |
+|-----------|-----------|----------|
+| changelogs | title + summary | repo, date, commits, files, dominant_category, scopes, quality_* |
+| changes | section title + points | category, severity, repo, date, scopes |
+| filepaths | space-joined file paths | repo, date |
+| diffs | diff text per file | repo, date, filepath |

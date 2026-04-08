@@ -5,7 +5,7 @@
 Initial release.
 
 ### Features
-- **11 CLI commands**: status, changelog, fix-stats, verify, squash, audit, summary, missing, backfill, enrich
+- **14 CLI commands**: status, changelog, fix-stats, verify, squash, audit, summary, missing, backfill, enrich, index, search, related
 - **Changelog generation**: draft, analyze (heuristic), and prompt (LLM-ready) modes
 - **Commit classification**: conventional prefix parser, 35+ verb heuristics, file rules (bulk/skip/classify)
 - **Commit consolidation**: daily/hourly/weekly squash with changelog-based commit messages, backup branch + tag
@@ -14,6 +14,7 @@ Initial release.
 - **Enrichment**: per-section diff stats + import impact analysis (file/package/cross-repo)
 - **Audit**: commit message prefix adoption tracking with ambiguous message detection
 - **Missing/backfill**: find gaps across tracked repos, batch generate changelogs
+- **Vector database** (optional): ChromaDB-backed semantic search across changelogs with 7 data dimensions — titles, changes, file paths, diff content, category distributions, scopes, quality metrics
 - **Claude Code plugin**: skill (/repogerbil) + analyzer agent
 
 ### Configuration
@@ -22,7 +23,8 @@ Initial release.
 - Tracked repo registry for multi-repo workflows
 
 ### Quality
-- 245 tests, 100% branch coverage
+- 284 tests, 100% branch coverage
 - mypy strict, ruff lint+format, bandit security
 - Pre-commit hooks (format on commit, full gates on push)
 - Integration test (create repo → changelog → verify → squash)
+- 500-line file limit enforced

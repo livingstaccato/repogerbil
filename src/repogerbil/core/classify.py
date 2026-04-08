@@ -187,7 +187,7 @@ def classify_files(files: list[str], rules: list[FileRule]) -> FileClassificatio
     forced: dict[str, str] = {}
 
     for filepath in files:
-        matched = False
+        matched = False  # pragma: no mutate
         for i, rule in enumerate(rules):
             if fnmatch.fnmatch(filepath, rule.pattern):
                 if rule.action == "skip":

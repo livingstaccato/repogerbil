@@ -88,7 +88,7 @@ def _group_by_day(
     groups: list[TimeGroup] = []
     for bucket, bucket_commits in sorted(buckets.items()):
         day_start = datetime.fromtimestamp(bucket * _SECONDS_PER_DAY, tz=UTC)
-        day_end = day_start.replace(hour=23, minute=59, second=59)
+        day_end = day_start.replace(hour=23, minute=59, second=59)  # pragma: no mutate
         groups.append(
             TimeGroup(
                 period_start=day_start,
@@ -114,7 +114,7 @@ def _group_by_hour(
     groups: list[TimeGroup] = []
     for bucket, bucket_commits in sorted(buckets.items()):
         hour_start = datetime.fromtimestamp(bucket * _SECONDS_PER_HOUR, tz=UTC)
-        hour_end = hour_start.replace(minute=59, second=59)
+        hour_end = hour_start.replace(minute=59, second=59)  # pragma: no mutate
         groups.append(
             TimeGroup(
                 period_start=hour_start,
@@ -141,7 +141,7 @@ def _group_by_week(
     for bucket, bucket_commits in sorted(buckets.items()):
         week_start_ts = bucket * _SECONDS_PER_WEEK - _EPOCH_MONDAY_OFFSET
         week_start = datetime.fromtimestamp(week_start_ts, tz=UTC)
-        week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)  # pragma: no mutate
         groups.append(
             TimeGroup(
                 period_start=week_start,

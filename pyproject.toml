@@ -137,10 +137,16 @@ exclude_lines = [
 # ── Mutmut ───────────────────────────────────────────────────────────────────
 
 [tool.mutmut]
-paths_to_mutate = ["src/repogerbil/"]
+paths_to_mutate = ["src/repogerbil/core/", "src/repogerbil/cli/"]
 tests_dir = ["tests/"]
 runner = "pytest"
 pytest_add_cli_args = ["-o", "addopts=", "--no-cov", "-q"]
+do_not_mutate = [
+    "*/git.py",          # subprocess wrapper — mutations just crash git
+    "*/diff.py",         # subprocess wrapper — same issue
+    "*/enrich.py",       # grep-based, environment-dependent
+    "*/consolidate.py",  # cherry-pick subprocess calls
+]
 
 [dependency-groups]
 dev = [

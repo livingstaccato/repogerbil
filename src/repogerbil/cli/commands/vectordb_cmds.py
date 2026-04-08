@@ -25,7 +25,8 @@ def _get_store(db_path: str | None) -> object:
         from repogerbil.core.embeddings import SentenceTransformerEmbedder
 
         embedder = SentenceTransformerEmbedder()
-    except ImportError:
+    except (ImportError, OSError):
+        click.echo("Using hash-based embedder (sentence-transformers unavailable)")
         embedder = SimpleHashEmbedder()  # type: ignore[assignment]
 
     return VectorStore(path, embedder)

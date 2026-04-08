@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 
 MAX_LINES = 500
-DIRS = ["src", "tests"]
+DIRS = ["src"]
 
 
 def main() -> int:

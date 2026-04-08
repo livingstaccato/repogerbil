@@ -124,3 +124,18 @@ class TestTimeGroup:
         )
         with pytest.raises(AttributeError):
             group.commits = []  # type: ignore[misc]
+
+
+class TestGroupsToJson:
+    def test_exports_json(self) -> None:
+        import json
+
+        from repogerbil.core.cadence import groups_to_json
+
+        commits = [_make_commit("a1", "2026-04-07", "first")]
+        groups = group_by_cadence(commits, "daily")
+        result = groups_to_json(groups, "daily")
+        data = json.loads(result)
+        assert data["cadence"] == "daily"
+        assert data["group_count"] == 1
+        assert data["groups"][0]["commit_count"] == 1

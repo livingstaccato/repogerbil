@@ -151,3 +151,24 @@ def _group_by_week(
             )
         )
     return groups
+
+
+def groups_to_json(groups: list[TimeGroup], cadence: str) -> str:
+    """Export time groups as JSON for external analysis."""
+    import json
+
+    data = {
+        "cadence": cadence,
+        "group_count": len(groups),
+        "groups": [
+            {
+                "period_start": g.period_start.isoformat(),
+                "period_end": g.period_end.isoformat(),
+                "commit_count": len(g.commits),
+                "commits": [{"hash": c.hash, "date": c.date, "subject": c.subject} for c in g.commits],
+                "files_affected": g.files_affected,
+            }
+            for g in groups
+        ],
+    }
+    return json.dumps(data, indent=2)

@@ -491,3 +491,48 @@ class TestFixStats:
         _generate_changelog(runner, repo, out)
         result = runner.invoke(cli, ["fix-stats", str(out / repo.name), str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
+
+
+class TestSummaryForce:
+    def test_summary_exists_no_force(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "cl"
+        out.mkdir()
+        runner = CliRunner()
+        _generate_changelog(runner, repo, out)
+        summary_out = tmp_path / "summaries"
+        summary_out.mkdir()
+        runner.invoke(
+            cli, ["summary", str(out), "--year", "2026", "--week", "15", "--output-dir", str(summary_out)]
+        )
+        result = runner.invoke(
+            cli, ["summary", str(out), "--year", "2026", "--week", "15", "--output-dir", str(summary_out)]
+        )
+        assert "Exists" in result.output
+
+    def test_summary_force_overwrite(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "cl"
+        out.mkdir()
+        runner = CliRunner()
+        _generate_changelog(runner, repo, out)
+        summary_out = tmp_path / "summaries"
+        summary_out.mkdir()
+        runner.invoke(
+            cli, ["summary", str(out), "--year", "2026", "--week", "15", "--output-dir", str(summary_out)]
+        )
+        result = runner.invoke(
+            cli,
+            [
+                "summary",
+                str(out),
+                "--year",
+                "2026",
+                "--week",
+                "15",
+                "--output-dir",
+                str(summary_out),
+                "--force",
+            ],
+        )
+        assert "Wrote" in result.output

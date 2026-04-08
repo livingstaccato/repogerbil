@@ -50,6 +50,13 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+# Register distill/snapshot commands
+from repogerbil.cli.commands.distill_cmds import export_cadence, preview, snapshot  # noqa: E402
+
+cli.add_command(snapshot)
+cli.add_command(export_cadence)
+cli.add_command(preview)
+
 
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True))
@@ -284,27 +291,7 @@ def distill(
         click.echo(f"Tag: {result.backup_tag}")
 
 
-def _collect_commits(path: Path, since: str | None) -> list[Any]:
-    """Collect all commits, optionally filtered by date."""
-    dates = sorted(get_active_dates(path))
-    if since:
-        dates = [d for d in dates if d >= since]
-    all_commits: list[Any] = []
-    for date_str in dates:
-        all_commits.extend(get_commits_for_date(path, date_str, include_files=True))
-    return all_commits
-
-
-def _load_changelog_messages(changelog_dir: str, repo_name: str) -> dict[str, str]:
-    """Load changelog titles+summaries as commit messages."""
-    messages: dict[str, str] = {}
-    cl_path = Path(changelog_dir)
-    for yaml_file in cl_path.glob(f"*-{repo_name}-changelog.yaml"):
-        data = yaml.safe_load(yaml_file.read_text())
-        if isinstance(data, dict) and data.get("date") and data.get("title"):  # pragma: no branch
-            date_key = str(data["date"])[:10]
-            messages[date_key] = f"{data['title']}\n\n{data.get('summary', '')}"
-    return messages
+from repogerbil.cli.commands.distill_cmds import _collect_commits, _load_changelog_messages  # noqa: E402
 
 
 @cli.command()
@@ -365,12 +352,14 @@ def _audit_commits(
 @click.option("--week", type=int, required=True, help="ISO week number")
 @click.option("--output-dir", type=click.Path(), default=".", help="Where to write the summary")
 @click.option("--prompt", "prompt_mode", is_flag=True, help="Output LLM prompt instead of markdown")
+@click.option("--force", is_flag=True, help="Overwrite existing file")
 def summary(
     changelog_dir: str,
     year: int,
     week: int,
     output_dir: str,
     prompt_mode: bool,
+    force: bool,
 ) -> None:
     """Generate a weekly summary from changelogs."""
     from repogerbil.core.summary import (
@@ -390,6 +379,10 @@ def summary(
     else:
         text = generate_summary_markdown(data)
         out_path = Path(output_dir) / f"{data.week_label}.md"
+
+    if out_path.exists() and not force:
+        click.echo(f"Exists: {out_path.name} (use --force to overwrite)")
+        return
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)

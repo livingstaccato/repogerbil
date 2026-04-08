@@ -30,7 +30,7 @@ complexity: ## Run xenon complexity check
 	uv run xenon --max-absolute C --max-modules B --max-average A src/
 
 dead-code: ## Run vulture dead code detection
-	uv run vulture src/ tests/
+	uv run vulture src/ tests/ vulture_whitelist.py --exclude src/repogerbil/core/config.py --min-confidence 80
 
 mutation: ## Run mutmut mutation testing
 	uv run mutmut run

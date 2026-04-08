@@ -50,6 +50,7 @@ packages = ["src/repogerbil"]
 line-length = 111
 indent-width = 4
 target-version = "py311"
+extend-exclude = ["vulture_whitelist.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "ANN", "B", "C90", "SIM", "PTH", "RUF", "S"]

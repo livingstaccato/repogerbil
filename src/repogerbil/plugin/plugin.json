@@ -1,0 +1,17 @@
+{
+  "name": "repogerbil",
+  "version": "0.1.0",
+  "description": "Git history documentation and consolidation",
+  "skills": [
+    {
+      "name": "repogerbil",
+      "path": "skills/repogerbil.md"
+    }
+  ],
+  "agents": [
+    {
+      "name": "analyzer",
+      "path": "agents/analyzer.md"
+    }
+  ]
+}

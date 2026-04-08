@@ -31,6 +31,12 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.optional-dependencies]
+vectordb = [
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
+]
+
 [project.scripts]
 repogerbil = "repogerbil.cli.main:cli"
 

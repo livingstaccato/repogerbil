@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      # Checkout source
+      - uses: actions/checkout@v4
+
+      # Install uv
+      - uses: astral-sh/setup-uv@v5
+
+      # Install Python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Install dependencies
+      - run: uv sync --all-extras
+
+      # Lint and format check
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: ruff lint
+        run: uv run ruff check .
+
+      # Type check
+      - name: mypy
+        run: uv run mypy src tests
+
+      # Security scan
+      - name: bandit
+        run: uv run bandit -r src -ll
+
+      # Tests with 100% coverage
+      - name: pytest
+        run: uv run pytest --cov-report=xml
+
+      # Upload coverage
+      - name: upload coverage
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml

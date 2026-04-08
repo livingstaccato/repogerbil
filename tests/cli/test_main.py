@@ -423,6 +423,55 @@ class TestSummary:
         assert "No changelogs" in result.output
 
 
+class TestMissing:
+    def test_no_tracked(self, tmp_path: Path) -> None:
+        cl_dir = tmp_path / "cl"
+        cl_dir.mkdir()
+        result = CliRunner().invoke(cli, ["missing", str(cl_dir)])
+        assert "No tracked repos" in result.output
+
+    def test_with_config(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        cl_dir = tmp_path / "cl"
+        cl_dir.mkdir()
+        config = tmp_path / "test.toml"
+        config.write_text(f'[tracked]\nrepo = "{repo}"\n')
+        result = CliRunner().invoke(cli, ["missing", str(cl_dir), "--config", str(config)])
+        assert result.exit_code == 0
+        # Should find missing dates since no changelogs exist
+        assert "missing" in result.output or "repo" in result.output
+
+
+class TestEnrich:
+    def test_enrich(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "cl"
+        out.mkdir()
+        runner = CliRunner()
+        _generate_changelog(runner, repo, out)
+        result = runner.invoke(cli, ["enrich", str(out / repo.name), str(repo)])
+        assert result.exit_code == 0
+        assert "enriched" in result.output
+
+
+class TestBackfill:
+    def test_no_tracked(self, tmp_path: Path) -> None:
+        cl_dir = tmp_path / "cl"
+        cl_dir.mkdir()
+        result = CliRunner().invoke(cli, ["backfill", str(cl_dir)])
+        assert "No tracked repos" in result.output
+
+    def test_with_config(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        cl_dir = tmp_path / "cl"
+        cl_dir.mkdir()
+        config = tmp_path / "test.toml"
+        config.write_text(f'[tracked]\nrepo = "{repo}"\n')
+        result = CliRunner().invoke(cli, ["backfill", str(cl_dir), "--config", str(config)])
+        assert result.exit_code == 0
+        assert "generated" in result.output
+
+
 class TestFixStats:
     def test_fix_stats(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)

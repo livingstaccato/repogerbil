@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     )
     file_rules: list[FileRule] = Field(default_factory=list)
     repos: dict[str, RepoOverride] = Field(default_factory=dict)
+    tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
+    changelog_dir: str = ""  # root directory for changelog output
 
     @classmethod
     def settings_customise_sources(

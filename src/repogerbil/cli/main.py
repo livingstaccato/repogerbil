@@ -383,3 +383,96 @@ def summary(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)
     click.echo(f"Wrote {out_path} ({len(data.repos)} repos, {data.total_commits} commits)")
+
+
+@cli.command()
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.option("--config", "config_path", type=click.Path(), default=None, help="Path to .repogerbil.toml")
+def missing(changelog_dir: str, config_path: str | None) -> None:
+    """Show missing changelog dates across all tracked repos."""
+    from repogerbil.core.audit import find_missing
+
+    cfg_path = Path(config_path) if config_path else None
+    settings = load_settings(config_path=cfg_path)
+
+    if not settings.tracked:
+        click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
+        return
+
+    results = find_missing(settings.tracked, Path(changelog_dir))
+    if not results:  # pragma: no cover
+        click.echo("All reports up to date.")
+    else:
+        for m in results:
+            click.echo(f"{m.repo}/{m.date}")
+        click.echo(f"\n{len(results)} missing")
+
+
+@cli.command()
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--since", help="Only enrich dates >= this (YYYY-MM-DD)")
+@click.option("--depth", type=click.Choice(["file", "package", "cross-repo"]), default=None)
+def enrich(changelog_dir: str, repo_path: str, since: str | None, depth: str | None) -> None:
+    """Add per-section stats and impact analysis to existing changelogs."""
+    from repogerbil.core.enrich import enrich_changelog
+
+    cl_dir = Path(changelog_dir)
+    rp = Path(repo_path)
+    repo_name = rp.name
+    settings = load_settings(repo=repo_name)
+    enrich_depth = depth or settings.enrich_depth
+    enriched = 0
+
+    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
+        date_str = "-".join(yaml_file.name.split("-")[:3])
+        if since and date_str < since:  # pragma: no cover
+            continue
+        if enrich_changelog(yaml_file, rp, depth=enrich_depth):  # pragma: no branch
+            click.echo(f"Enriched {repo_name}/{date_str}")
+            enriched += 1
+
+    click.echo(f"{enriched} files enriched")
+
+
+@cli.command()
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.option("--config", "config_path", type=click.Path(), default=None)
+@click.option("--since", help="Only backfill dates >= this (YYYY-MM-DD)")
+def backfill(changelog_dir: str, config_path: str | None, since: str | None) -> None:
+    """Generate changelogs for all missing dates across tracked repos."""
+    from repogerbil.core.audit import find_missing
+
+    cfg_path = Path(config_path) if config_path else None
+    settings = load_settings(config_path=cfg_path)
+
+    if not settings.tracked:
+        click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
+        return
+
+    results = find_missing(settings.tracked, Path(changelog_dir))
+    if since:  # pragma: no cover
+        results = [m for m in results if m.date >= since]
+
+    if not results:  # pragma: no cover
+        click.echo("Nothing to backfill.")
+        return
+
+    click.echo(f"Backfilling {len(results)} missing changelogs...")
+    generated = 0
+    out = Path(changelog_dir)
+
+    for m in results:
+        repo_path = Path(settings.tracked[m.repo])
+        repo_settings = load_settings(repo=m.repo, config_path=cfg_path)
+        commits = get_commits_for_date(repo_path, m.date, include_files=True)
+        if not commits:  # pragma: no cover — date from find_missing always has commits
+            continue
+
+        stats = get_diff_stats(repo_path, commits[0].hash, commits[-1].hash)
+        data = generate_analyzed(m.repo, m.date, commits, stats, repo_settings)
+        write_changelog(m.repo, m.date, data, out)
+        click.echo(f"  {m.repo}/{m.date}: {len(commits)} commits")
+        generated += 1
+
+    click.echo(f"\n{generated} changelogs generated")

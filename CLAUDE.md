@@ -22,6 +22,10 @@
 - Plugin in `src/repogerbil/plugin/` — Claude Code skill + agent definitions.
 - Config via pydantic-settings. File: `.repogerbil.toml`. Env prefix: `REPOGERBIL_`.
 
-## File System
+## Configuration & Environment
+- No `os.environ` access scattered throughout code. All env vars go through pydantic-settings.
+- No inline defaults for configurable values. Defaults live in the Settings model.
 - No hardcoded paths. Use config or environment variables.
 - No inline URLs/ports. Put them in config or at the top of the module.
+- Pydantic models for public API surfaces (config, results, CLI-facing data).
+- Dataclass/frozen dataclass for hot-path internals (cadence bucketing, git parsing).

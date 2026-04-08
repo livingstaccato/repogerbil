@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""Commit consolidation — squash daily commits with changelog-based messages."""
+"""Commit consolidation — distill daily commits with changelog-based messages."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def consolidate(
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_branch = f"{source_branch}-backup-{timestamp}"
-    backup_tag = f"repogerbil/pre-squash/{timestamp}"
+    backup_tag = f"repogerbil/pre-distill/{timestamp}"
     total_commits = sum(len(g.commits) for g in groups)
 
     if dry_run:
@@ -90,7 +90,7 @@ def _consolidate_group(
     changelog_messages: dict[str, str] | None,
     preserve_timestamps: bool,
 ) -> None:
-    """Cherry-pick and squash a single group into one commit."""
+    """Cherry-pick and distill a single group into one commit."""
     for commit in group.commits:
         parents = _run_git(
             repo_path,

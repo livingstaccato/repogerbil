@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end integration test: create repo → generate changelog → verify → squash."""
+"""End-to-end integration test: create repo → generate changelog → verify → distill."""
 
 from pathlib import Path
 import subprocess
@@ -61,7 +61,7 @@ def _create_test_repo(tmp_path: Path) -> Path:
 
 class TestEndToEnd:
     def test_full_pipeline(self, tmp_path: Path) -> None:
-        """Create repo → status → changelog → verify → squash."""
+        """Create repo → status → changelog → verify → distill."""
         repo = _create_test_repo(tmp_path)
         out = tmp_path / "changelogs"
         out.mkdir()
@@ -104,15 +104,15 @@ class TestEndToEnd:
         assert result.exit_code == 0
         assert "classifiable" in result.output
 
-        # Step 4: Squash (dry-run)
-        result = runner.invoke(cli, ["squash", str(repo), "--dry-run"])
+        # Step 4: Distill (dry-run)
+        result = runner.invoke(cli, ["distill", str(repo), "--dry-run"])
         assert result.exit_code == 0
         assert "2 daily groups" in result.output
 
-        # Step 5: Squash (real) with changelog messages
+        # Step 5: Distill (real) with changelog messages
         result = runner.invoke(
             cli,
-            ["squash", str(repo), "--target-branch", "clean", "--changelog-dir", str(cl_dir)],
+            ["distill", str(repo), "--target-branch", "clean", "--changelog-dir", str(cl_dir)],
         )
         assert result.exit_code == 0
         assert "Consolidated" in result.output

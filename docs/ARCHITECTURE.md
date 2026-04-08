@@ -9,7 +9,7 @@ repogerbil/
 │   ├── classify.py        Commit classification (prefix + verb + file rules)
 │   ├── changelog.py       Changelog generation (draft, analyze, prompt)
 │   ├── cadence.py         Time-based grouping (daily/hourly/weekly)
-│   ├── consolidate.py     Cherry-pick squash with changelog messages
+│   ├── consolidate.py     Cherry-pick distill with changelog messages
 │   ├── diff.py            Diff reading with skip patterns
 │   ├── verify.py          Stats accuracy + coverage checking
 │   ├── enrich.py          Per-section stats + impact analysis
@@ -61,7 +61,7 @@ Source repo (git)
     ├─ generate_prompt() ───────→ markdown for LLM
     │
     ├─ group_by_cadence() ──────→ TimeGroup[]
-    ├─ consolidate() ───────────→ squashed branch + backup
+    ├─ consolidate() ───────────→ distilled branch + backup
     │
     ├─ verify_changelog() ──────→ VerifyResult
     ├─ enrich_changelog() ──────→ modified YAML with stats/impact

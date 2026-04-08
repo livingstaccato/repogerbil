@@ -18,7 +18,7 @@ CLI flags and environment variables (`REPOGERBIL_*`) override the config file.
 ```toml
 # .repogerbil.toml
 
-# Commit grouping cadence for squash
+# Commit grouping cadence for distill
 cadence = "daily"                    # hourly | daily | weekly
 
 # How much of the commit message to capture
@@ -39,13 +39,13 @@ enrich_depth = "package"             # file | package | cross-repo
 # Tolerance for stats verification (%)
 tolerance = 20
 
-# Preserve original timestamps when squashing
+# Preserve original timestamps when distilling
 preserve_timestamps = true
 
-# Create backup branch + tag before squash
+# Create backup branch + tag before distill
 create_backup = true
 
-# Target branch name for squash output
+# Target branch name for distill output
 target_branch = "repogerbil-consolidated"
 
 # Where to write changelogs

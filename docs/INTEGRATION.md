@@ -42,15 +42,15 @@ repogerbil summary /path/to/repo-reports --year 2026 --week 15 --output-dir /pat
 
 ## With messometer
 
-messometer was the predecessor for commit consolidation. repogerbil's `squash` command replaces messometer's `auto` and `apply` commands.
+messometer was the predecessor for commit consolidation. repogerbil's `distill` command replaces messometer's `auto` and `apply` commands.
 
 ### Migration
 
 | messometer | repogerbil |
 |-----------|------------|
 | `messometer extract --cadence daily` | `repogerbil changelog --analyze` |
-| `messometer auto ./snapshot --cadence daily` | `repogerbil squash --changelog-dir` |
-| `messometer apply --script consolidate.sh` | `repogerbil squash` (no script step) |
+| `messometer auto ./snapshot --cadence daily` | `repogerbil distill --changelog-dir` |
+| `messometer apply --script consolidate.sh` | `repogerbil distill` (no script step) |
 | `messometer status` | `repogerbil status` |
 
 ### Key Differences

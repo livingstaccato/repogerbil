@@ -234,13 +234,13 @@ def _report_verification(
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
-@click.option("--since", help="Only squash dates >= this (YYYY-MM-DD)")
+@click.option("--since", help="Only distill dates >= this (YYYY-MM-DD)")
 @click.option("--target-branch", default=None, help="Target branch name")
 @click.option("--dry-run", is_flag=True, help="Preview only")
 @click.option(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
-def squash(
+def distill(
     repo_path: str,
     cadence: str | None,
     since: str | None,
@@ -248,7 +248,7 @@ def squash(
     dry_run: bool,
     changelog_dir: str | None,
 ) -> None:
-    """Squash commits into daily/weekly consolidated commits."""
+    """Distill commits into daily/weekly consolidated commits."""
     path = Path(repo_path)
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence

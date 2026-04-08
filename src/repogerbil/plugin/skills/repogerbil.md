@@ -1,6 +1,6 @@
 ---
 name: repogerbil
-description: Git history documentation and consolidation — generate changelogs, verify stats, squash commits, audit prefix adoption. Context-aware when invoked without arguments.
+description: Git history documentation and consolidation — generate changelogs, verify stats, distill commits, audit prefix adoption. Context-aware when invoked without arguments.
 user-invocable: true
 ---
 
@@ -26,13 +26,13 @@ Map user requests to `repogerbil` CLI commands:
 | "what's missing?" | `repogerbil status .` then check for gaps |
 | "verify the changelogs" | `repogerbil verify <changelog_dir> .` |
 | "fix the stats" | `repogerbil fix-stats <changelog_dir> .` |
-| "squash this repo" | `repogerbil squash . --dry-run` first, then confirm |
+| "distill this repo" | `repogerbil distill . --dry-run` first, then confirm |
 | "audit commit messages" | `repogerbil audit . --show-bad` |
 | "generate a prompt for this" | `repogerbil changelog . --date DATE --prompt` |
 
 ## Important
 
-- Always `--dry-run` before squash. Squashing is destructive.
-- The tool creates backup branches and tags before squash — but verify first.
+- Always `--dry-run` before distill. Distilling is destructive.
+- The tool creates backup branches and tags before distill — but verify first.
 - Use `--analyze` for complete changelogs, plain mode for draft skeletons.
 - Config lives in `.repogerbil.toml` — check for per-repo overrides.

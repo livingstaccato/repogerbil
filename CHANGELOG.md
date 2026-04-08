@@ -5,10 +5,10 @@
 Initial release.
 
 ### Features
-- **14 CLI commands**: status, changelog, fix-stats, verify, squash, audit, summary, missing, backfill, enrich, index, search, related
+- **14 CLI commands**: status, changelog, fix-stats, verify, distill, audit, summary, missing, backfill, enrich, index, search, related
 - **Changelog generation**: draft, analyze (heuristic), and prompt (LLM-ready) modes
 - **Commit classification**: conventional prefix parser, 35+ verb heuristics, file rules (bulk/skip/classify)
-- **Commit consolidation**: daily/hourly/weekly squash with changelog-based commit messages, backup branch + tag
+- **Commit consolidation**: daily/hourly/weekly distill with changelog-based commit messages, backup branch + tag
 - **Stats verification**: two-level checking (accuracy + file coverage via bulk entries)
 - **Weekly summaries**: aggregate changelogs by ISO week, generate markdown or LLM prompts
 - **Enrichment**: per-section diff stats + import impact analysis (file/package/cross-repo)
@@ -26,5 +26,5 @@ Initial release.
 - 284 tests, 100% branch coverage
 - mypy strict, ruff lint+format, bandit security
 - Pre-commit hooks (format on commit, full gates on push)
-- Integration test (create repo → changelog → verify → squash)
+- Integration test (create repo → changelog → verify → distill)
 - 500-line file limit enforced

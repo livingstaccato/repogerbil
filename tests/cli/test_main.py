@@ -252,39 +252,39 @@ class TestAudit:
         assert "0% classifiable" in result.output or "0 commits" in result.output
 
 
-class TestSquash:
+class TestDistill:
     def test_dry_run(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--dry-run"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
         assert result.exit_code == 0
         assert "groups" in result.output
 
     def test_dry_run_with_since(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--dry-run", "--since", "2026-04-07"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run", "--since", "2026-04-07"])
         assert result.exit_code == 0
 
     def test_dry_run_with_cadence(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--dry-run", "--cadence", "weekly"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run", "--cadence", "weekly"])
         assert result.exit_code == 0
 
     def test_no_commits(self, tmp_path: Path) -> None:
         repo = tmp_path / "empty"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--dry-run"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
         assert "No commits" in result.output
 
-    def test_real_squash(self, tmp_path: Path) -> None:
+    def test_real_distill(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--target-branch", "test-squash"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--target-branch", "test-distill"])
         assert result.exit_code == 0
         assert "Consolidated" in result.output
         assert "Backup" in result.output
         assert "Tag" in result.output
 
-    def test_squash_with_changelog_dir(self, tmp_path: Path) -> None:
+    def test_distill_with_changelog_dir(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
         out = tmp_path / "cl"
         out.mkdir()
@@ -292,7 +292,7 @@ class TestSquash:
         _generate_changelog(runner, repo, out)
         result = runner.invoke(
             cli,
-            ["squash", str(repo), "--target-branch", "cl-squash", "--changelog-dir", str(out / repo.name)],
+            ["distill", str(repo), "--target-branch", "cl-distill", "--changelog-dir", str(out / repo.name)],
         )
         assert result.exit_code == 0
         assert "Consolidated" in result.output
@@ -352,10 +352,10 @@ class TestVerifyEdgeCases:
         assert "All good" in result.output
 
 
-class TestSquashEdgeCases:
-    def test_squash_backup_output(self, tmp_path: Path) -> None:
+class TestDistillEdgeCases:
+    def test_distill_backup_output(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
-        result = CliRunner().invoke(cli, ["squash", str(repo), "--target-branch", "backup-test"])
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--target-branch", "backup-test"])
         assert "Backup:" in result.output
         assert "Tag:" in result.output
 

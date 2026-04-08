@@ -48,11 +48,11 @@ repogerbil missing /path/to/changelogs --config .repogerbil.toml
 # Backfill all missing changelogs
 repogerbil backfill /path/to/changelogs --config .repogerbil.toml
 
-# Preview a squash
-repogerbil squash /path/to/repo --dry-run
+# Preview a distill
+repogerbil distill /path/to/repo --dry-run
 
-# Squash with changelog-based commit messages
-repogerbil squash /path/to/repo --changelog-dir /path/to/changelogs
+# Distill with changelog-based commit messages
+repogerbil distill /path/to/repo --changelog-dir /path/to/changelogs
 
 # Index changelogs for semantic search (requires vectordb extra)
 repogerbil index /path/to/changelogs
@@ -73,7 +73,7 @@ repogerbil related provide-telemetry --date 2026-04-07
 | `fix-stats` | Correct changelog stats to match git truth |
 | `verify` | Check stats accuracy + file coverage |
 | `enrich` | Add per-section stats + import impact to changelogs |
-| `squash` | Consolidate commits into daily/weekly groups |
+| `distill` | Consolidate commits into daily/weekly groups |
 | `audit` | Report commit message prefix adoption |
 | `summary` | Generate weekly cross-repo summary |
 | `missing` | Show missing changelog dates across tracked repos |

@@ -40,6 +40,17 @@ def cli() -> None:
     """repogerbil — Git history documentation and consolidation."""
 
 
+# Register optional vectordb commands
+try:
+    from repogerbil.cli.commands.vectordb_cmds import index, related, search  # pragma: no cover
+
+    cli.add_command(index)  # pragma: no cover
+    cli.add_command(search)  # pragma: no cover
+    cli.add_command(related)  # pragma: no cover
+except ImportError:  # pragma: no cover
+    pass
+
+
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True))
 def status(repo_path: str) -> None:

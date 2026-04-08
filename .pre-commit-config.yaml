@@ -31,6 +31,15 @@ repos:
 
   - repo: local
     hooks:
+      - id: max-loc
+        name: python max loc (500)
+        entry: uv run python scripts/check_max_loc.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        types: [python]
+        stages: [pre-commit]
+
       - id: mypy
         name: mypy strict
         entry: uv run mypy src tests

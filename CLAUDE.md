@@ -7,6 +7,7 @@
 
 ## Code Quality
 - 100% test coverage enforced. Every new function needs tests before commit.
+- No file over 500 lines. If a file grows past 500, split into a module directory with `__init__.py` exports.
 - mypy strict mode. No `type: ignore` without a comment explaining why.
 - ruff lint + format must pass.
 - All quality gates: `make quality` (lint, type-check, security, complexity, dead-code, test).

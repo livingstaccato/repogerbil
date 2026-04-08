@@ -95,6 +95,13 @@ warn_no_return = true
 namespace_packages = true
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "sentence_transformers.*",
+]
+ignore_missing_imports = true
+
 # ── Pytest ───────────────────────────────────────────────────────────────────
 
 [tool.pytest.ini_options]
@@ -128,6 +135,9 @@ norecursedirs = [".git", "build", "dist", "*.egg-info", ".venv"]
 [tool.coverage.run]
 source = ["src/repogerbil"]
 branch = true
+omit = [
+    "src/repogerbil/cli/commands/vectordb_cmds.py",
+]
 
 [tool.coverage.report]
 fail_under = 100

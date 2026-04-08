@@ -375,28 +375,6 @@ class TestAuditEdgeCases:
         assert "0 commits" in result.output
 
 
-class TestParseDiffToFiles:
-    def test_basic(self) -> None:
-        from repogerbil.cli.main import _parse_diff_to_files
-
-        raw = "diff --git a/src/a.py b/src/a.py\n+line1\n+line2\ndiff --git a/src/b.py b/src/b.py\n-removed\n"
-        result = _parse_diff_to_files(raw)
-        assert "src/a.py" in result
-        assert "src/b.py" in result
-
-    def test_empty(self) -> None:
-        from repogerbil.cli.main import _parse_diff_to_files
-
-        assert _parse_diff_to_files("") == {}
-
-    def test_malformed_diff_header(self) -> None:
-        from repogerbil.cli.main import _parse_diff_to_files
-
-        raw = "diff --git malformed\n+content\n"
-        result = _parse_diff_to_files(raw)
-        assert result == {}
-
-
 class TestFixStats:
     def test_fix_stats(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)

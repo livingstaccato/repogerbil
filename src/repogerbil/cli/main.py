@@ -23,8 +23,8 @@ from repogerbil.core.changelog import (
 from repogerbil.core.classify import classify_commit
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
+from repogerbil.core.diff import get_diff_content
 from repogerbil.core.git import (
-    _run_git,
     get_active_dates,
     get_commits_for_date,
     get_diff_stats,
@@ -114,29 +114,13 @@ def _handle_prompt_mode(
     """Handle --prompt flag: generate LLM prompt with optional diffs."""
     diff_content: dict[str, str] = {}
     if settings.backfill_depth == "thorough":  # pragma: no cover — requires thorough config in CWD
-        raw = _run_git(path, "diff", f"{commits[0].hash}^..{commits[-1].hash}", "--no-color", timeout=120)
-        diff_content = _parse_diff_to_files(raw)
+        diff_content = get_diff_content(path, commits[0].hash, commits[-1].hash)
 
     prompt_text = generate_prompt(repo_name, date, commits, stats, diff_content)
     prompt_path = out / repo_name / f"{date}-{repo_name}-prompt.md"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text(prompt_text)
     click.echo(f"Wrote {prompt_path}")
-
-
-def _parse_diff_to_files(raw: str) -> dict[str, str]:
-    """Parse raw git diff output into per-file chunks."""
-    current_file: str | None = None
-    diffs: dict[str, list[str]] = {}
-    for line in raw.splitlines():
-        if line.startswith("diff --git"):
-            parts = line.split(" b/", 1)
-            current_file = parts[1] if len(parts) == 2 else None
-            if current_file:
-                diffs[current_file] = []
-        elif current_file is not None:
-            diffs[current_file].append(line)
-    return {f: "\n".join(lines) for f, lines in diffs.items() if lines}
 
 
 @cli.command(name="fix-stats")

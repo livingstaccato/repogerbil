@@ -209,7 +209,7 @@ def _extract_filepaths(data: dict[str, Any]) -> list[str]:
                 for pf in point.get("files") or []:
                     if isinstance(pf, str):  # pragma: no branch
                         paths.add(pf)
-    return sorted(paths)
+    return sorted(p for p in paths if isinstance(p, str))
 
 
 def _index_diffs(  # pragma: no cover — requires real git repos with multi-commit dates

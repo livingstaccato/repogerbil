@@ -1,10 +1,17 @@
 # Configuration Reference
 
-## File Location
+## File Discovery
 
-repogerbil looks for `.repogerbil.toml` in the current directory, then `~/.config/repogerbil/config.toml`.
+repogerbil finds `.repogerbil.toml` by walking up from the current directory to the filesystem root — same pattern as `.git` discovery. If not found, it falls back to `~/.config/repogerbil/config.toml`.
 
-CLI flags override config file values. Environment variables (`REPOGERBIL_*`) override the config file but are overridden by CLI flags.
+This means you can place `.repogerbil.toml` in a parent directory (e.g., `/Users/tim/code/gh/`) and it will be found from any subdirectory — repo-reports, uwarp-space, repogerbil itself.
+
+**Search order:**
+1. `.repogerbil.toml` in CWD
+2. `.repogerbil.toml` in parent directories (walking up)
+3. `~/.config/repogerbil/config.toml` (user-level fallback)
+
+CLI flags and environment variables (`REPOGERBIL_*`) override the config file.
 
 ## Full Example
 
@@ -104,6 +111,6 @@ REPOGERBIL_BACKFILL_DEPTH=thorough
 
 1. CLI flags (highest)
 2. Environment variables (`REPOGERBIL_*`)
-3. Project config (`.repogerbil.toml`)
-4. User config (`~/.config/repogerbil/config.toml`)
+3. `.repogerbil.toml` found by walking up from CWD
+4. `~/.config/repogerbil/config.toml` (user-level fallback)
 5. Defaults (lowest)

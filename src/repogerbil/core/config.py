@@ -28,10 +28,33 @@ class RepoOverride(BaseModel):
     message_depth: Literal["subject", "refs", "full"] | None = None
 
 
+def find_config_file(name: str = ".repogerbil.toml") -> Path | None:
+    """Walk from CWD up to filesystem root looking for config file.
+
+    Falls back to ~/.config/repogerbil/config.toml if not found.
+    """
+    current = Path.cwd()
+    while True:
+        candidate = current / name
+        if candidate.exists():
+            return candidate
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    # User-level fallback
+    user_config = Path.home() / ".config" / "repogerbil" / "config.toml"
+    if user_config.exists():
+        return user_config
+
+    return None
+
+
 class Settings(BaseSettings):
     """repogerbil configuration with layered resolution.
 
-    Priority: CLI flags > env vars > project .repogerbil.toml > user config > defaults.
+    Priority: CLI flags > env vars > walked .repogerbil.toml > ~/.config fallback > defaults.
     """
 
     model_config = SettingsConfigDict(
@@ -71,7 +94,7 @@ class Settings(BaseSettings):
         file_secret_settings: Any,
     ) -> tuple[Any, ...]:
         """Add TOML config source to the settings resolution chain."""
-        toml_path = cls._toml_path or ".repogerbil.toml"
+        toml_path = cls._toml_path or find_config_file() or ".repogerbil.toml"
         return (
             init_settings,
             env_settings,

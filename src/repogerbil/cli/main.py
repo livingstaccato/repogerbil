@@ -5,7 +5,33 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
+from typing import Any
+
 import click
+import yaml
+
+from repogerbil.core.cadence import group_by_cadence
+from repogerbil.core.changelog import (
+    generate_analyzed,
+    generate_draft,
+    generate_prompt,
+    update_stats,
+    write_changelog,
+)
+from repogerbil.core.classify import classify_commit
+from repogerbil.core.config import load_settings
+from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
+from repogerbil.core.git import (
+    _run_git,
+    get_active_dates,
+    get_commits_for_date,
+    get_diff_stats,
+)
+from repogerbil.core.verify import count_accounted_files, verify_changelog
+
+_PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s")
 
 
 @click.group()
@@ -18,4 +44,319 @@ def cli() -> None:
 @click.argument("repo_path", type=click.Path(exists=True))
 def status(repo_path: str) -> None:
     """Show repository status and what needs work."""
-    click.echo(f"Status for {repo_path}: not yet implemented")
+    path = Path(repo_path)
+    dates = get_active_dates(path)
+    click.echo(f"Repository: {path.name}")
+    click.echo(f"Active dates: {len(dates)}")
+    if dates:
+        click.echo(f"Date range: {min(dates)} to {max(dates)}")
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--date", required=True, help="Date (YYYY-MM-DD)")
+@click.option("--output-dir", type=click.Path(), default=".", help="Output directory")
+@click.option("--analyze", is_flag=True, help="Generate complete changelog (not just draft)")
+@click.option("--prompt", "prompt_mode", is_flag=True, help="Output LLM prompt instead of YAML")
+@click.option("--force", is_flag=True, help="Overwrite existing files")
+@click.option("--message-depth", type=click.Choice(["subject", "refs", "full"]), default=None)
+def changelog(
+    repo_path: str,
+    date: str,
+    output_dir: str,
+    analyze: bool,
+    prompt_mode: bool,
+    force: bool,
+    message_depth: str | None,
+) -> None:
+    """Generate a changelog for a repository date."""
+    path = Path(repo_path)
+    out = Path(output_dir)
+    repo_name = path.name
+    settings = load_settings(repo=repo_name)
+    depth = message_depth or settings.message_depth
+
+    commits = get_commits_for_date(path, date, message_depth=depth, include_files=True)
+    if not commits:
+        click.echo(f"No commits found for {repo_name} on {date}")
+        return
+
+    stats = get_diff_stats(path, commits[0].hash, commits[-1].hash)
+    click.echo(f"{repo_name}/{date}: {len(commits)} commits, {stats.files_changed} files")
+
+    if prompt_mode:
+        _handle_prompt_mode(path, repo_name, date, commits, stats, settings, out)
+        return
+
+    out_path = out / repo_name / f"{date}-{repo_name}-changelog.yaml"
+    if out_path.exists() and not force:
+        click.echo(f"Exists: {out_path.name} (use --force to overwrite)")
+        return
+
+    data = (
+        generate_analyzed(repo_name, date, commits, stats, settings)
+        if analyze
+        else generate_draft(repo_name, date, commits, stats, settings)
+    )
+    written = write_changelog(repo_name, date, data, out)
+    click.echo(f"Wrote {written}")
+
+
+def _handle_prompt_mode(
+    path: Path,
+    repo_name: str,
+    date: str,
+    commits: list[Any],
+    stats: Any,
+    settings: Any,
+    out: Path,
+) -> None:
+    """Handle --prompt flag: generate LLM prompt with optional diffs."""
+    diff_content: dict[str, str] = {}
+    if settings.backfill_depth == "thorough":
+        raw = _run_git(path, "diff", f"{commits[0].hash}^..{commits[-1].hash}", "--no-color", timeout=120)
+        diff_content = _parse_diff_to_files(raw)
+
+    prompt_text = generate_prompt(repo_name, date, commits, stats, diff_content)
+    prompt_path = out / repo_name / f"{date}-{repo_name}-prompt.md"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(prompt_text)
+    click.echo(f"Wrote {prompt_path}")
+
+
+def _parse_diff_to_files(raw: str) -> dict[str, str]:
+    """Parse raw git diff output into per-file chunks."""
+    current_file: str | None = None
+    diffs: dict[str, list[str]] = {}
+    for line in raw.splitlines():
+        if line.startswith("diff --git"):
+            parts = line.split(" b/", 1)
+            current_file = parts[1] if len(parts) == 2 else None
+            if current_file:
+                diffs[current_file] = []
+        elif current_file is not None:
+            diffs[current_file].append(line)
+    return {f: "\n".join(lines) for f, lines in diffs.items() if lines}
+
+
+@cli.command(name="fix-stats")
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--since", help="Only fix dates >= this (YYYY-MM-DD)")
+def fix_stats(changelog_dir: str, repo_path: str, since: str | None) -> None:
+    """Fix stats in existing changelogs to match git truth."""
+    cl_dir = Path(changelog_dir)
+    rp = Path(repo_path)
+    repo_name = rp.name
+    fixed = 0
+
+    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
+        date_str = "-".join(yaml_file.name.split("-")[:3])
+        if since and date_str < since:
+            continue
+        commits = get_commits_for_date(rp, date_str)
+        if not commits:
+            continue
+        stats = get_diff_stats(rp, commits[0].hash, commits[-1].hash)
+        if update_stats(yaml_file, stats, len(commits)):
+            click.echo(f"Fixed {repo_name}/{date_str}: {len(commits)} commits, {stats.files_changed} files")
+            fixed += 1
+
+    click.echo(f"{fixed} files updated")
+
+
+@cli.command()
+@click.argument("changelog_dir", type=click.Path(exists=True))
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--since", help="Only verify dates >= this (YYYY-MM-DD)")
+@click.option("--tolerance", type=int, default=None, help="% tolerance (default: from config)")
+def verify(changelog_dir: str, repo_path: str, since: str | None, tolerance: int | None) -> None:
+    """Verify changelog stats against git truth."""
+    cl_dir = Path(changelog_dir)
+    rp = Path(repo_path)
+    repo_name = rp.name
+    settings = load_settings(repo=repo_name)
+    tol = tolerance if tolerance is not None else settings.tolerance
+
+    stat_issues, coverage_issues, checked = _run_verification(cl_dir, rp, repo_name, since, tol)
+    _report_verification(stat_issues, coverage_issues, checked)
+
+
+def _run_verification(
+    cl_dir: Path,
+    rp: Path,
+    repo_name: str,
+    since: str | None,
+    tol: int,
+) -> tuple[list[str], list[str], int]:
+    """Run verification across all changelog files."""
+    stat_issues: list[str] = []
+    coverage_issues: list[str] = []
+    checked = 0
+
+    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
+        date_str = "-".join(yaml_file.name.split("-")[:3])
+        if since and date_str < since:
+            continue
+        result = verify_changelog(yaml_file, rp, tolerance=tol)
+        if result is None:
+            continue
+        checked += 1
+        if not result.stats_match:
+            stat_issues.append(
+                f"  {repo_name}/{result.date}: {result.reported_files} reported vs {result.actual_files} actual"
+            )
+        data = yaml.safe_load(yaml_file.read_text())
+        if data and result.actual_files > 0:
+            accounted = count_accounted_files(data)
+            coverage = accounted / result.actual_files * 100
+            if coverage < (100 - tol):
+                coverage_issues.append(
+                    f"  {repo_name}/{result.date}: {result.actual_files} files, {accounted} accounted ({coverage:.0f}%)"
+                )
+
+    return stat_issues, coverage_issues, checked
+
+
+def _report_verification(stat_issues: list[str], coverage_issues: list[str], checked: int) -> None:
+    """Report verification results."""
+    if stat_issues:
+        click.echo("Stats mismatches:")
+        for line in stat_issues:
+            click.echo(line)
+    if coverage_issues:
+        click.echo("Coverage gaps:")
+        for line in coverage_issues:
+            click.echo(line)
+    if not stat_issues and not coverage_issues:
+        click.echo(f"All good ({checked} checked)")
+    else:
+        click.echo(f"{len(stat_issues)} stat issues, {len(coverage_issues)} coverage gaps ({checked} checked)")
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
+@click.option("--since", help="Only squash dates >= this (YYYY-MM-DD)")
+@click.option("--target-branch", default=None, help="Target branch name")
+@click.option("--dry-run", is_flag=True, help="Preview only")
+@click.option(
+    "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
+)
+def squash(
+    repo_path: str,
+    cadence: str | None,
+    since: str | None,
+    target_branch: str | None,
+    dry_run: bool,
+    changelog_dir: str | None,
+) -> None:
+    """Squash commits into daily/weekly consolidated commits."""
+    path = Path(repo_path)
+    settings = load_settings(repo=path.name)
+    cad = cadence or settings.cadence
+    branch = target_branch or settings.target_branch
+
+    all_commits = _collect_commits(path, since)
+    if not all_commits:
+        click.echo("No commits found")
+        return
+
+    groups = group_by_cadence(all_commits, cad)
+    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
+
+    changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
+
+    if dry_run:
+        for p in generate_consolidation_preview(groups):
+            click.echo(f"  {p['date']}: {p['commit_count']} commits, {p['files_affected']} files")
+        return
+
+    result = consolidate(
+        path,
+        groups,
+        target_branch=branch,
+        changelog_messages=changelog_messages,
+        preserve_timestamps=settings.preserve_timestamps,
+        create_backup=settings.create_backup,
+    )
+    click.echo(f"Consolidated to {result.target_branch}")
+    if result.backup_branch:
+        click.echo(f"Backup: {result.backup_branch}")
+    if result.backup_tag:
+        click.echo(f"Tag: {result.backup_tag}")
+
+
+def _collect_commits(path: Path, since: str | None) -> list[Any]:
+    """Collect all commits, optionally filtered by date."""
+    dates = sorted(get_active_dates(path))
+    if since:
+        dates = [d for d in dates if d >= since]
+    all_commits: list[Any] = []
+    for date_str in dates:
+        all_commits.extend(get_commits_for_date(path, date_str, include_files=True))
+    return all_commits
+
+
+def _load_changelog_messages(changelog_dir: str, repo_name: str) -> dict[str, str]:
+    """Load changelog titles+summaries as commit messages."""
+    messages: dict[str, str] = {}
+    cl_path = Path(changelog_dir)
+    for yaml_file in cl_path.glob(f"*-{repo_name}-changelog.yaml"):
+        data = yaml.safe_load(yaml_file.read_text())
+        if isinstance(data, dict) and data.get("date") and data.get("title"):
+            date_key = str(data["date"])[:10]
+            messages[date_key] = f"{data['title']}\n\n{data.get('summary', '')}"
+    return messages
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--since", help="Only check commits since this date")
+@click.option("--show-bad", is_flag=True, help="List unclassifiable messages")
+def audit(repo_path: str, since: str | None, show_bad: bool) -> None:
+    """Audit commit message quality (prefix adoption)."""
+    path = Path(repo_path)
+    total, prefixed, verb_ok, ambiguous, bad_msgs = _audit_commits(path, since)
+
+    classifiable = prefixed + verb_ok
+    pct = (classifiable / total * 100) if total else 0
+    click.echo(
+        f"{path.name}: {total} commits, {prefixed} prefixed, "
+        f"{verb_ok} verb, {ambiguous} ambiguous ({pct:.0f}% classifiable)"
+    )
+
+    if show_bad and bad_msgs:
+        click.echo("Ambiguous commits:")
+        for msg in bad_msgs[:20]:
+            click.echo(f"  {msg}")
+        if len(bad_msgs) > 20:
+            click.echo(f"  ... and {len(bad_msgs) - 20} more")
+
+
+def _audit_commits(
+    path: Path,
+    since: str | None,
+) -> tuple[int, int, int, int, list[str]]:
+    """Count prefix adoption across commits."""
+    dates = sorted(get_active_dates(path))
+    if since:
+        dates = [d for d in dates if d >= since]
+
+    total = prefixed = verb_ok = ambiguous = 0
+    bad_msgs: list[str] = []
+
+    for date_str in dates:
+        for c in get_commits_for_date(path, date_str):
+            if c.subject.startswith("Merge"):
+                continue
+            total += 1
+            if _PREFIX_RE.match(c.subject):
+                prefixed += 1
+            elif classify_commit(c.subject).needs_review:
+                ambiguous += 1
+                bad_msgs.append(c.subject)
+            else:
+                verb_ok += 1
+
+    return total, prefixed, verb_ok, ambiguous, bad_msgs

@@ -185,13 +185,13 @@ def detect_duplicate_fixes(store: VectorStore, commit_subject: str) -> list[dict
 
 ```bash
 # Index all changelogs into the vector DB
-repogerbil index /path/to/changelogs
+gerbil index /path/to/changelogs
 
 # Semantic search across all changelogs
-repogerbil search "security hardening" --top 10
+gerbil search "security hardening" --top 10
 
 # Find related work across repos for a specific date
-repogerbil related uwarp-space --date 2026-04-07
+gerbil related uwarp-space --date 2026-04-07
 
 # Find similar commits (deduplication check)
 repogerbil similar "fix(parity): sync twcfig.dat"

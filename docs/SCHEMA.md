@@ -59,10 +59,10 @@ changes:                               # required — grouped change sections
 ## Field Rules
 
 - `title` + `summary` are always first
-- `stats` comes from `git diff --shortstat` (corrected by `repogerbil fix-stats`)
+- `stats` comes from `git diff --shortstat` (corrected by `gerbil fix-stats`)
 - `bulk` declares mechanical changes that shouldn't render on the site
 - `review` lists commits that couldn't be auto-classified (clear after manual review)
-- `changes[].stats` and `changes[].impact` are added by `repogerbil enrich`
+- `changes[].stats` and `changes[].impact` are added by `gerbil enrich`
 - `changes[].category`/`severity` can be null (derived from points)
 
 ## Verification Formula
@@ -71,4 +71,4 @@ changes:                               # required — grouped change sections
 sum(bulk[].files) + count(unique files in changes) ≈ stats.files_changed
 ```
 
-`repogerbil verify` checks both stats accuracy and file coverage.
+`gerbil verify` checks both stats accuracy and file coverage.

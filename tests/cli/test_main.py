@@ -50,7 +50,7 @@ class TestHelp:
     def test_help(self) -> None:
         result = CliRunner().invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "repogerbil" in result.output
+        assert "gerbil" in result.output
 
 
 class TestStatus:

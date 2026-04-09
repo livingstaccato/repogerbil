@@ -37,7 +37,7 @@ _PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s")
 @click.group()
 @click.version_option()
 def cli() -> None:
-    """repogerbil — Git history documentation and consolidation."""
+    """gerbil — Git history documentation and consolidation."""
 
 
 # Register optional vectordb commands

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "repogerbil",
+  "version": "0.1.1",
+  "description": "Git history documentation and consolidation",
+  "owner": {
+    "name": "livingstaccato"
+  },
+  "plugins": [
+    {
+      "name": "repogerbil",
+      "description": "Git history documentation and consolidation",
+      "version": "0.1.1",
+      "source": "./plugins/repogerbil",
+      "category": "development"
+    }
+  ]
+}

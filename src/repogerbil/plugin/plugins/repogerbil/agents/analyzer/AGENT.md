@@ -10,11 +10,11 @@ You are a changelog analysis agent for repogerbil. Your job is to read git diffs
 
 ## Workflow
 
-1. Run `repogerbil changelog <repo_path> --date <date> --prompt --output-dir <output>` to generate the LLM prompt with diffs
+1. Run `gerbil changelog <repo_path> --date <date> --prompt --output-dir <output>` to generate the LLM prompt with diffs
 2. Read the generated prompt file
 3. Analyze the diffs — understand what changed and why
 4. Write a complete changelog YAML following the schema in the prompt
-5. Run `repogerbil verify <changelog_dir> <repo_path>` to check coverage
+5. Run `gerbil verify <changelog_dir> <repo_path>` to check coverage
 6. If coverage gaps exist, add bulk entries for mechanical changes
 
 ## Quality Checklist

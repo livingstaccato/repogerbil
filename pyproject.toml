@@ -38,7 +38,7 @@ vectordb = [
 ]
 
 [project.scripts]
-repogerbil = "repogerbil.cli.main:cli"
+gerbil = "repogerbil.cli.main:cli"
 
 [project.urls]
 Repository = "https://github.com/livingstaccato/repogerbil"

@@ -22,22 +22,22 @@ bbsbot = "/Users/tim/code/gh/undef-games/bbsbot"
 
 ```bash
 # Check what's missing
-repogerbil missing /path/to/repo-reports --config .repogerbil.toml
+gerbil missing /path/to/repo-reports --config .repogerbil.toml
 
 # Backfill all gaps
-repogerbil backfill /path/to/repo-reports --config .repogerbil.toml
+gerbil backfill /path/to/repo-reports --config .repogerbil.toml
 
 # Generate today's changelogs
-repogerbil changelog /path/to/repo --date $(date +%Y-%m-%d) --analyze --output-dir /path/to/repo-reports
+gerbil changelog /path/to/repo --date $(date +%Y-%m-%d) --analyze --output-dir /path/to/repo-reports
 
 # Fix any stats drift
-repogerbil fix-stats /path/to/repo-reports/uwarp-space /path/to/uwarp-space
+gerbil fix-stats /path/to/repo-reports/uwarp-space /path/to/uwarp-space
 
 # Verify everything
-repogerbil verify /path/to/repo-reports/uwarp-space /path/to/uwarp-space
+gerbil verify /path/to/repo-reports/uwarp-space /path/to/uwarp-space
 
 # Generate weekly summary
-repogerbil summary /path/to/repo-reports --year 2026 --week 15 --output-dir /path/to/repo-reports/summaries
+gerbil summary /path/to/repo-reports --year 2026 --week 15 --output-dir /path/to/repo-reports/summaries
 ```
 
 ## With messometer
@@ -48,10 +48,10 @@ messometer was the predecessor for commit consolidation. repogerbil's `distill` 
 
 | messometer | repogerbil |
 |-----------|------------|
-| `messometer extract --cadence daily` | `repogerbil changelog --analyze` |
-| `messometer auto ./snapshot --cadence daily` | `repogerbil distill --changelog-dir` |
-| `messometer apply --script consolidate.sh` | `repogerbil distill` (no script step) |
-| `messometer status` | `repogerbil status` |
+| `messometer extract --cadence daily` | `gerbil changelog --analyze` |
+| `messometer auto ./snapshot --cadence daily` | `gerbil distill --changelog-dir` |
+| `messometer apply --script consolidate.sh` | `gerbil distill` (no script step) |
+| `messometer status` | `gerbil status` |
 
 ### Key Differences
 
@@ -63,17 +63,28 @@ messometer was the predecessor for commit consolidation. repogerbil's `distill` 
 
 ### Plugin Installation
 
+**Development / testing:**
+
 ```bash
-# Copy plugin files to Claude Code plugins directory
-cp -r src/repogerbil/plugin ~/.claude/plugins/repogerbil
+claude --plugin-dir ./src/repogerbil/plugin
+```
+
+**Permanent install (via marketplace):**
+
+```bash
+# Add marketplace (once)
+/plugin marketplace add livingstaccato/repogerbil
+
+# Install
+/plugin install repogerbil
 ```
 
 ### Usage
 
 ```
-/repogerbil                     # context-aware — detects repo, suggests work
-/repogerbil audit --show-bad    # direct command
-/repogerbil catch up            # conversational — asks what to do
+/gerbil                     # context-aware — detects repo, suggests work
+/gerbil audit --show-bad    # direct command
+/gerbil catch up            # conversational — asks what to do
 ```
 
 ## With Hugo (sight/staccato-hugo)
@@ -81,5 +92,5 @@ cp -r src/repogerbil/plugin ~/.claude/plugins/repogerbil
 repogerbil generates YAML changelogs that `tools/generate_hugo_data.py` in repo-reports converts to Hugo-compatible JSON for the livingstaccato.com site. The pipeline:
 
 ```
-repogerbil changelog → YAML → generate_hugo_data.py → JSON → Hugo → site
+gerbil changelog → YAML → generate_hugo_data.py → JSON → Hugo → site
 ```

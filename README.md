@@ -19,49 +19,49 @@ pip install repogerbil[vectordb]
 
 ```bash
 # See what's in a repo
-repogerbil status /path/to/repo
+gerbil status /path/to/repo
 
 # Generate a changelog for today
-repogerbil changelog /path/to/repo --date 2026-04-07 --analyze
+gerbil changelog /path/to/repo --date 2026-04-07 --analyze
 
 # Generate an LLM prompt with diffs
-repogerbil changelog /path/to/repo --date 2026-04-07 --prompt
+gerbil changelog /path/to/repo --date 2026-04-07 --prompt
 
 # Audit commit message quality
-repogerbil audit /path/to/repo --show-bad
+gerbil audit /path/to/repo --show-bad
 
 # Verify changelog accuracy
-repogerbil verify /path/to/changelogs /path/to/repo
+gerbil verify /path/to/changelogs /path/to/repo
 
 # Fix stats to match git truth
-repogerbil fix-stats /path/to/changelogs /path/to/repo
+gerbil fix-stats /path/to/changelogs /path/to/repo
 
 # Enrich changelogs with per-section stats + impact
-repogerbil enrich /path/to/changelogs /path/to/repo --depth package
+gerbil enrich /path/to/changelogs /path/to/repo --depth package
 
 # Generate weekly summary
-repogerbil summary /path/to/changelogs --year 2026 --week 15
+gerbil summary /path/to/changelogs --year 2026 --week 15
 
 # Show missing changelog dates across all tracked repos
-repogerbil missing /path/to/changelogs --config .repogerbil.toml
+gerbil missing /path/to/changelogs --config .repogerbil.toml
 
 # Backfill all missing changelogs
-repogerbil backfill /path/to/changelogs --config .repogerbil.toml
+gerbil backfill /path/to/changelogs --config .repogerbil.toml
 
 # Preview a distill
-repogerbil distill /path/to/repo --dry-run
+gerbil distill /path/to/repo --dry-run
 
 # Distill with changelog-based commit messages
-repogerbil distill /path/to/repo --changelog-dir /path/to/changelogs
+gerbil distill /path/to/repo --changelog-dir /path/to/changelogs
 
 # Index changelogs for semantic search (requires vectordb extra)
-repogerbil index /path/to/changelogs
+gerbil index /path/to/changelogs
 
 # Semantic search across all changelogs
-repogerbil search "security hardening" --top 5
+gerbil search "security hardening" --top 5
 
 # Find related cross-repo work
-repogerbil related provide-telemetry --date 2026-04-07
+gerbil related provide-telemetry --date 2026-04-07
 ```
 
 ## Commands
@@ -166,10 +166,15 @@ Control how files are handled during `--analyze`:
 ## Claude Code Plugin
 
 repogerbil includes a Claude Code plugin with:
-- **Skill** (`/repogerbil`): Context-aware changelog and history management
+- **Skill** (`/gerbil`): Context-aware changelog and history management
 - **Agent** (`analyzer`): Deep diff analysis for thorough changelog generation
 
 Plugin files are in `src/repogerbil/plugin/`.
+
+```bash
+# Development / testing
+claude --plugin-dir ./src/repogerbil/plugin
+```
 
 ## Development
 

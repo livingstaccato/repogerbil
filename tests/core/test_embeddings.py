@@ -7,6 +7,10 @@ from repogerbil.core.embeddings import SimpleHashEmbedder
 
 
 class TestSimpleHashEmbedder:
+    def test_default_dimensions_is_384(self) -> None:
+        e = SimpleHashEmbedder()
+        assert e._dimensions == 384
+
     def test_embed_returns_list(self) -> None:
         e = SimpleHashEmbedder()
         result = e.embed("hello world")
@@ -40,3 +44,7 @@ class TestSimpleHashEmbedder:
         e = SimpleHashEmbedder()
         result = e.embed("test")
         assert all(-1.0 <= v <= 1.0 for v in result)
+
+    def test_embed_has_stable_prefix_values(self) -> None:
+        e = SimpleHashEmbedder(dimensions=4)
+        assert e.embed("hello") == [-0.65625, 0.890625, -0.3984375, 0.453125]

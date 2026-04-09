@@ -108,7 +108,7 @@ class TestFindConfigFile:
         import os
 
         monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
-        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: tmp_path))
         result = find_config_file()
         assert result == config
 
@@ -119,7 +119,7 @@ class TestFindConfigFile:
         config.write_text('cadence = "daily"\n')
         child = tmp_path / "child" / "grandchild"
         child.mkdir(parents=True)
-        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: child))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: child))
         result = find_config_file()
         assert result == config
 
@@ -128,7 +128,7 @@ class TestFindConfigFile:
 
         child = tmp_path / "nowhere"
         child.mkdir()
-        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: child))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: child))
         result = find_config_file()
         # May find a real config in the filesystem or return None
         # Just verify it doesn't crash
@@ -144,8 +144,8 @@ class TestFindConfigFile:
         # Point CWD to a dir with no config
         empty = tmp_path / "empty"
         empty.mkdir()
-        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: empty))
-        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: empty))
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
         result = find_config_file()
         assert result is not None
         assert "config.toml" in str(result)

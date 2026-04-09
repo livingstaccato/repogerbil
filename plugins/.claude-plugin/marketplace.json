@@ -11,7 +11,7 @@
       "name": "repogerbil",
       "description": "Git history documentation and consolidation",
       "version": "0.1.1",
-      "source": "./plugins/repogerbil",
+      "source": "./repogerbil",
       "category": "development"
     }
   ]

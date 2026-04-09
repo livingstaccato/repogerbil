@@ -33,7 +33,7 @@ dead-code: ## Run vulture dead code detection
 	uv run vulture src/ tests/ vulture_whitelist.py --exclude src/repogerbil/core/config.py --min-confidence 80
 
 mutation: ## Run mutmut mutation testing
-	uv run mutmut run
+	uv run mutmut run --max-children 8
 
 quality: lint type-check security complexity dead-code test ## Run all quality gates
 

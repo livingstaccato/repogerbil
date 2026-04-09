@@ -26,6 +26,7 @@ class RepoOverride(BaseModel):
 
     backfill_depth: Literal["heuristic", "thorough"] | None = None
     message_depth: Literal["subject", "refs", "full"] | None = None
+    skip_dates: list[str] = Field(default_factory=list)
 
 
 def find_config_file(name: str = ".repogerbil.toml") -> Path | None:

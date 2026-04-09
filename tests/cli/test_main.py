@@ -5,11 +5,13 @@
 
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 from click.testing import CliRunner
+import pytest
 import yaml
 
-from repogerbil.cli.main import cli
+from repogerbil.cli.main import _handle_prompt_mode, cli
 
 
 def _init_test_repo(tmp_path: Path) -> Path:
@@ -170,6 +172,38 @@ class TestChangelog:
             ],
         )
         assert result.exit_code == 0
+
+
+class TestHandlePromptMode:
+    def test_uses_empty_diff_content_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "out"
+        seen: dict[str, object] = {}
+
+        def fake_generate_prompt(
+            repo_name: str, date: str, commits: list[object], stats: object, diff_content: dict[str, str]
+        ) -> str:
+            seen["repo_name"] = repo_name
+            seen["date"] = date
+            seen["commits"] = commits
+            seen["stats"] = stats
+            seen["diff_content"] = diff_content
+            return "prompt-body"
+
+        monkeypatch.setattr("repogerbil.cli.main.generate_prompt", fake_generate_prompt)
+
+        commits = [SimpleNamespace(hash="a1"), SimpleNamespace(hash="a2")]
+        stats = SimpleNamespace(files_changed=2)
+        settings = SimpleNamespace(backfill_depth="standard")
+
+        _handle_prompt_mode(repo, repo.name, "2026-04-07", commits, stats, settings, out)
+
+        assert seen["repo_name"] == repo.name
+        assert seen["date"] == "2026-04-07"
+        assert seen["commits"] == commits
+        assert seen["stats"] == stats
+        assert seen["diff_content"] == {}
+        assert (out / repo.name / "2026-04-07-repo-prompt.md").read_text() == "prompt-body"
 
 
 class TestVerify:
@@ -536,3 +570,54 @@ class TestSummaryForce:
             ],
         )
         assert "Wrote" in result.output
+
+
+class TestLintCommand:
+    def test_lint_valid_files(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "out"
+        _generate_changelog(runner, repo, out)
+
+        result = runner.invoke(cli, ["lint", str(out)])
+        assert result.exit_code == 0
+        assert "files checked" in result.output
+
+    def test_lint_catches_errors(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        cl_dir = tmp_path / "changelogs" / "bad-repo"
+        cl_dir.mkdir(parents=True)
+        (cl_dir / "2026-04-08-bad-repo-changelog.yaml").write_text(yaml.dump({"changes": "not a list"}))
+
+        result = runner.invoke(cli, ["lint", str(tmp_path / "changelogs")])
+        assert result.exit_code == 1
+        assert "ERROR" in result.output
+
+    def test_lint_errors_only(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        cl_dir = tmp_path / "changelogs" / "myrepo"
+        cl_dir.mkdir(parents=True)
+        data = {
+            "date": "2026-04-08",
+            "repo": "myrepo",
+            "title": "Test",
+            "summary": "Test",
+            "stats": {"files_changed": 1, "insertions": 1, "deletions": 0},
+            "changes": [{"title": "A"}],  # missing category/severity = warnings only
+        }
+        (cl_dir / "2026-04-08-myrepo-changelog.yaml").write_text(yaml.dump(data))
+
+        result = runner.invoke(cli, ["lint", str(tmp_path / "changelogs"), "--errors-only"])
+        assert result.exit_code == 0
+        assert "WARN" not in result.output
+
+    def test_lint_filter_repo(self, tmp_path: Path) -> None:
+        runner = CliRunner()
+        for name in ("repo-a", "repo-b"):
+            d = tmp_path / "changelogs" / name
+            d.mkdir(parents=True)
+            (d / f"2026-04-08-{name}-changelog.yaml").write_text(yaml.dump({"changes": "bad"}))
+
+        result = runner.invoke(cli, ["lint", str(tmp_path / "changelogs"), "repo-a"])
+        assert "repo-a" in result.output
+        assert "repo-b" not in result.output

@@ -4,7 +4,7 @@
 
 repogerbil finds `.repogerbil.toml` by walking up from the current directory to the filesystem root — same pattern as `.git` discovery. If not found, it falls back to `~/.config/repogerbil/config.toml`.
 
-This means you can place `.repogerbil.toml` in a parent directory (e.g., `/Users/tim/code/gh/`) and it will be found from any subdirectory — repo-reports, uwarp-space, repogerbil itself.
+This means you can place `.repogerbil.toml` in a parent directory and it will be found from any subdirectory.
 
 **Search order:**
 1. `.repogerbil.toml` in CWD
@@ -77,16 +77,21 @@ category = "qualify"
 # Per-repo overrides
 [repos.uwarp-space]
 backfill_depth = "thorough"
+skip_dates = ["2025-03-15"]           # known artifact dates to ignore
 
 [repos.provide-telemetry]
 backfill_depth = "thorough"
 message_depth = "refs"
 
+[repos.tw2002]
+# Archived repo — no source path, gap detection uses existing changelog range
+
 # Tracked repos for missing/backfill commands
 [tracked]
-uwarp-space = "/Users/tim/code/gh/undef-games/uwarp-space"
-provide-telemetry = "/Users/tim/code/gh/provide-io/provide-telemetry"
-bbsbot = "/Users/tim/code/gh/undef-games/bbsbot"
+uwarp-space = "/path/to/uwarp-space"
+provide-telemetry = "/path/to/provide-telemetry"
+bbsbot = "/path/to/bbsbot"
+tw2002 = ""                           # empty string = archived, no source
 ```
 
 ## Environment Variables

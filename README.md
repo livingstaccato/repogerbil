@@ -11,6 +11,9 @@ pip install repogerbil
 # or
 uv add repogerbil
 
+# Run without a permanent install
+uvx repogerbil --help
+
 # Optional: vector database for semantic search
 pip install repogerbil[vectordb]
 ```
@@ -163,17 +166,30 @@ Control how files are handled during `--analyze`:
 - **skip**: Ignore entirely (not in stats, bulk, or changes)
 - **classify**: Keep in changes but force a specific category
 
-## Claude Code Plugin
+## AI Plugin Integration
 
-repogerbil includes a Claude Code plugin with:
-- **Skill** (`/gerbil`): Context-aware changelog and history management
+repogerbil ships a shared plugin at `plugins/repogerbil/` with:
+- **Skill** (`gerbil`): Context-aware changelog and history management
 - **Agent** (`analyzer`): Deep diff analysis for thorough changelog generation
+- **Claude manifest**: `plugins/repogerbil/.claude-plugin/plugin.json`
+- **Codex manifest**: `plugins/repogerbil/.codex-plugin/plugin.json`
 
-Plugin files are in `src/repogerbil/plugin/`.
+For Claude Code development and testing:
 
 ```bash
-# Development / testing
-claude --plugin-dir ./src/repogerbil/plugin
+claude --plugin-dir ./plugins
+```
+
+Codex uses the same shared plugin directory, with local marketplace metadata in `.agents/plugins/marketplace.json`.
+
+To install the bundled plugin files from an installed package:
+
+```bash
+# Codex: writes into ~/.agents/plugins/marketplace.json and ~/plugins/repogerbil
+uvx repogerbil plugin install --target codex
+
+# Claude Code: writes into ~/plugins/.claude-plugin/marketplace.json and ~/plugins/repogerbil
+uvx repogerbil plugin install --target claude
 ```
 
 ## Development

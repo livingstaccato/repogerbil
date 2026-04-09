@@ -271,19 +271,8 @@ def _compute_quality(data: dict[str, Any]) -> dict[str, Any]:
     stats = data.get("stats", {})
     files_changed = stats.get("files_changed", 0)
 
-    # Count files accounted for
-    bulk_files = sum(b.get("files", 0) for b in (data.get("bulk") or []))
-    change_files: set[str] = set()
-    for change in data.get("changes") or []:
-        for f in change.get("files") or []:
-            if isinstance(f, dict) and f.get("path"):  # pragma: no branch
-                change_files.add(str(f["path"]))
-        for point in change.get("points") or []:
-            if isinstance(point, dict):  # pragma: no branch
-                for pf in point.get("files") or []:
-                    if isinstance(pf, str):  # pragma: no branch
-                        change_files.add(pf)
-    accounted = bulk_files + len(change_files)
+    bulk_files = _count_bulk_files(data)
+    accounted = bulk_files + len(_collect_change_files(data))
 
     # Coverage ratio
     coverage = (accounted / files_changed * 100) if files_changed > 0 else 100.0
@@ -313,6 +302,36 @@ def _compute_quality(data: dict[str, Any]) -> dict[str, Any]:
         "quality_has_summary": has_summary,
         "quality_change_sections": change_count,
     }
+
+
+def _count_bulk_files(data: dict[str, Any]) -> int:
+    """Count files represented by bulk entries."""
+    return sum(bulk.get("files", 0) for bulk in (data.get("bulk") or []))
+
+
+def _collect_change_files(data: dict[str, Any]) -> set[str]:
+    """Collect unique file paths represented by change entries and points."""
+    change_files: set[str] = set()
+    for change in data.get("changes") or []:
+        _add_change_file_paths(change_files, change)
+    return change_files
+
+
+def _add_change_file_paths(change_files: set[str], change: dict[str, Any]) -> None:
+    """Add all explicit file paths from a single change block."""
+    for file_entry in change.get("files") or []:
+        if isinstance(file_entry, dict) and file_entry.get("path"):  # pragma: no branch
+            change_files.add(str(file_entry["path"]))
+    for point in change.get("points") or []:
+        if isinstance(point, dict):  # pragma: no branch
+            _add_point_file_paths(change_files, point)
+
+
+def _add_point_file_paths(change_files: set[str], point: dict[str, Any]) -> None:
+    """Add all file paths referenced by a single point."""
+    for point_file in point.get("files") or []:
+        if isinstance(point_file, str):  # pragma: no branch
+            change_files.add(point_file)
 
 
 def _extract_filepaths(data: dict[str, Any]) -> list[str]:

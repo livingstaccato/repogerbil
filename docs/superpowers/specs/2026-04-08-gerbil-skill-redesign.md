@@ -2,7 +2,7 @@
 
 ## Context
 
-The `/gerbil` skill currently exposes 7 of 14 CLI commands and lacks config-aware behavior. It doesn't know about `.repogerbil.toml`, can't auto-detect `changelog_dir`, and misses powerful features like backfill, enrich, preview, snapshot, and vectordb search. All messometer features have been fully integrated into the CLI — the skill just hasn't caught up.
+The `/gerbil` skill currently exposes 7 of 14 CLI commands and lacks config-aware behavior. It doesn't know about `.repogerbil.toml`, can't auto-detect `changelog_dir`, and misses powerful features like backfill, enrich, preview, snapshot, and vectordb search.
 
 This redesign makes the skill comprehensive and intelligent: full command coverage, config auto-detection, and multi-step workflow patterns for common tasks.
 
@@ -111,13 +111,13 @@ gerbil related <repo> --date YYYY-MM-DD
 
 ## Scope
 
-Single file change: `src/repogerbil/plugin/plugins/repogerbil/skills/gerbil/SKILL.md`
+Single file change: `plugins/repogerbil/skills/gerbil/SKILL.md`
 
 No code changes — this is purely a skill documentation update.
 
 ## Verification
 
-1. Load the plugin: `claude --plugin-dir ./src/repogerbil/plugin`
+1. Load the plugin: `claude --plugin-dir ./plugins`
 2. Invoke `/gerbil` with no arguments — verify it runs context-aware mode
 3. Invoke `/gerbil catch up` — verify it chains the correct commands
 4. Invoke `/gerbil search "test"` — verify it checks for vectordb extra first

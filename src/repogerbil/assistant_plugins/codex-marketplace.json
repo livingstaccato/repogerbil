@@ -1,0 +1,20 @@
+{
+  "name": "repogerbil-local",
+  "interface": {
+    "displayName": "RepoGerbil Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "repogerbil",
+      "source": {
+        "source": "local",
+        "path": "./plugins/repogerbil"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 {
   "permissions": {
-    "additionalDirectories": [
-      "/Users/tim/code/gh/livingstaccato/repo-reports"
+    "allow": [
+      "Bash(gerbil status:*)",
+      "Bash(gerbil audit:*)",
+      "Bash([ ! -d src/repogerbil/plugin ])"
     ]
   }
 }

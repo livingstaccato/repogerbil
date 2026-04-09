@@ -1,0 +1,36 @@
+{
+  "name": "repogerbil",
+  "version": "0.1.1",
+  "description": "Git history documentation and consolidation workflows for Codex.",
+  "author": {
+    "name": "Tim Perkins",
+    "email": "opensource@livingstaccato.com",
+    "url": "https://github.com/livingstaccato"
+  },
+  "homepage": "https://github.com/livingstaccato/repogerbil",
+  "repository": "https://github.com/livingstaccato/repogerbil",
+  "license": "Apache-2.0",
+  "keywords": [
+    "git",
+    "changelog",
+    "history"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "RepoGerbil",
+    "shortDescription": "Generate changelogs, audit history, and distill commits.",
+    "longDescription": "RepoGerbil adds Codex workflows for documenting git history, verifying changelog accuracy, consolidating noisy commits, and searching changelog archives.",
+    "developerName": "livingstaccato",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/livingstaccato/repogerbil",
+    "defaultPrompt": [
+      "Audit this repo's commit message quality with gerbil.",
+      "Generate today's analyzed changelog for this repo.",
+      "Preview a daily distill and explain the risk."
+    ]
+  }
+}

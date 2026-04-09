@@ -20,7 +20,7 @@
 ## Architecture
 - Core library in `src/repogerbil/core/` — pure functions, no CLI dependencies.
 - CLI in `src/repogerbil/cli/` — Click commands, thin wrappers around core.
-- Plugin in `src/repogerbil/plugin/` — Claude Code skill + agent definitions.
+- Plugin in `plugins/repogerbil/` — shared skill + agent definitions for Claude Code and Codex. Load with `claude --plugin-dir ./plugins`.
 - Config via pydantic-settings. File: `.repogerbil.toml`. Env prefix: `REPOGERBIL_`.
 
 ## Configuration & Environment

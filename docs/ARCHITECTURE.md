@@ -24,9 +24,19 @@ repogerbil/
 │   ├── main.py            14 commands
 │   └── commands/
 │       └── vectordb_cmds.py  Optional vector DB commands (index, search, related)
-└── plugin/            Claude Code integration
-    ├── skills/            /repogerbil skill
-    └── agents/            analyzer agent
+```
+
+## Plugin Layout
+
+```
+plugins/
+└── repogerbil/            Shared Claude Code + Codex plugin
+    ├── .claude-plugin/    Claude Code manifest
+    ├── .codex-plugin/     Codex manifest
+    ├── skills/
+    │   └── gerbil/        /gerbil skill
+    └── agents/
+        └── analyzer/      changelog analysis agent
 ```
 
 ## Design Principles

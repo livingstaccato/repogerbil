@@ -57,6 +57,16 @@ cli.add_command(snapshot)
 cli.add_command(export_cadence)
 cli.add_command(preview)
 
+# Register lint command
+from repogerbil.cli.commands.lint_cmd import lint  # noqa: E402
+
+cli.add_command(lint)
+
+# Register plugin commands
+from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
+
+cli.add_command(plugin)
+
 
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True))
@@ -403,7 +413,7 @@ def missing(changelog_dir: str, config_path: str | None) -> None:
         click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
         return
 
-    results = find_missing(settings.tracked, Path(changelog_dir))
+    results = find_missing(settings.tracked, Path(changelog_dir), repo_overrides=settings.repos)
     if not results:  # pragma: no cover
         click.echo("All reports up to date.")
     else:
@@ -454,7 +464,7 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None) -> 
         click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
         return
 
-    results = find_missing(settings.tracked, Path(changelog_dir))
+    results = find_missing(settings.tracked, Path(changelog_dir), repo_overrides=settings.repos)
     if since:  # pragma: no cover
         results = [m for m in results if m.date >= since]
 

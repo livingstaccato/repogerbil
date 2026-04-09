@@ -219,3 +219,52 @@ class TestGenerateSummaryPrompt:
         assert "Feature A" in prompt
         assert "Instructions" in prompt
         assert "narrative" in prompt.lower()
+
+    def test_exact_structure_and_spacing(self) -> None:
+        data = WeekSummaryData(
+            week_label="2026-W15",
+            week_start="2026-04-06",
+            week_end="2026-04-12",
+            repos=[
+                RepoWeekData(
+                    repo="my-repo",
+                    dates=["2026-04-07", "2026-04-08"],
+                    total_commits=5,
+                    total_files=10,
+                    total_insertions=100,
+                    total_deletions=50,
+                    titles=["Feature A", "Fix B"],
+                    categories={"remediate": 1, "instantiate": 2},
+                ),
+            ],
+            total_commits=5,
+            total_files=10,
+        )
+
+        prompt = generate_summary_prompt(data)
+
+        assert prompt.splitlines() == [
+            "# Write a weekly summary for 2026-W15",
+            "## Period: 2026-04-06 to 2026-04-12",
+            "## Totals: 5 commits across 1 repos, 10 files",
+            "",
+            "## Per-repo data:",
+            "",
+            "### my-repo",
+            "- 5 commits, 10 files, +100/-50",
+            "- Dates active: 2026-04-07, 2026-04-08",
+            "- Titles:",
+            "  - Feature A",
+            "  - Fix B",
+            "- Categories: instantiate(2), remediate(1)",
+            "",
+            "## Instructions",
+            "",
+            "Write a narrative weekly summary in markdown. Structure:",
+            "1. Overview paragraph (2-4 sentences, what defined the week)",
+            "2. Per-repo highlights (bullet points, not just listing titles)",
+            "3. Cross-repo themes if any repos coordinated",
+            "",
+            "Use present tense. Be specific about what shipped, not just what was worked on.",
+            "Output format: markdown file titled '# Week 2026-W15'",
+        ]

@@ -105,6 +105,10 @@ class TestHasCoverageGap:
     def test_within_tolerance(self) -> None:
         assert has_coverage_gap({"bulk": [{"files": 8}]}, actual_files=10, tolerance=30) is False
 
+    def test_default_tolerance_boundary(self) -> None:
+        assert has_coverage_gap({"bulk": [{"files": 80}]}, actual_files=100) is False
+        assert has_coverage_gap({"bulk": [{"files": 79}]}, actual_files=100) is True
+
 
 class TestVerifyChangelog:
     def test_valid_changelog(self, tmp_path: Path) -> None:

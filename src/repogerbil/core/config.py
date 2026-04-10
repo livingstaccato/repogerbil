@@ -17,6 +17,7 @@ class CategoryDefinition(BaseModel):
 
     label: str
     conventional: str = "chore"
+    verb: str = ""  # imperative verb used in multi-commit section titles, e.g. "Add", "Fix"
     description: str = ""
 
 
@@ -37,17 +38,17 @@ def _default_categories() -> dict[str, CategoryDefinition]:
         "docs": CategoryDefinition(label="docs", conventional="docs"),
         "chore": CategoryDefinition(label="chore", conventional="chore"),
         # ── Semantic categories ────────────────────────────────────────────
-        "instantiate": CategoryDefinition(label="feat", conventional="feat"),
-        "interface": CategoryDefinition(label="feat", conventional="feat"),
-        "remediate": CategoryDefinition(label="fix", conventional="fix"),
-        "harden": CategoryDefinition(label="fix", conventional="fix"),
-        "margin": CategoryDefinition(label="fix", conventional="fix"),
-        "decouple": CategoryDefinition(label="refactor", conventional="refactor"),
-        "qualify": CategoryDefinition(label="test", conventional="test"),
-        "streamline": CategoryDefinition(label="perf", conventional="perf"),
-        "specify": CategoryDefinition(label="docs", conventional="docs"),
-        "baseline": CategoryDefinition(label="chore", conventional="chore"),
-        "deprecate": CategoryDefinition(label="remove", conventional="refactor"),
+        "instantiate": CategoryDefinition(label="feat", conventional="feat", verb="Add"),
+        "interface": CategoryDefinition(label="feat", conventional="feat", verb="Wire"),
+        "remediate": CategoryDefinition(label="fix", conventional="fix", verb="Fix"),
+        "harden": CategoryDefinition(label="fix", conventional="fix", verb="Harden"),
+        "margin": CategoryDefinition(label="fix", conventional="fix", verb="Buffer"),
+        "decouple": CategoryDefinition(label="refactor", conventional="refactor", verb="Refactor"),
+        "qualify": CategoryDefinition(label="test", conventional="test", verb="Test"),
+        "streamline": CategoryDefinition(label="perf", conventional="perf", verb="Optimize"),
+        "specify": CategoryDefinition(label="docs", conventional="docs", verb="Document"),
+        "baseline": CategoryDefinition(label="chore", conventional="chore", verb="Update"),
+        "deprecate": CategoryDefinition(label="remove", conventional="refactor", verb="Remove"),
     }
 
 
@@ -97,6 +98,7 @@ class VocabularyConfig(BaseSettings):
         [vocabulary.extra_categories.hotfix]
         label = "hotfix"
         conventional = "fix"
+        verb = "Patch"
 
         [vocabulary.extra_prefix_map]
         hotfix = "hotfix"

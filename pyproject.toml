@@ -146,7 +146,6 @@ source = ["src/repogerbil"]
 branch = true
 omit = [
     "src/repogerbil/cli/commands/vectordb_cmds.py",
-    "src/repogerbil/cli/commands/distill_cmds.py",
 ]
 
 [tool.coverage.report]

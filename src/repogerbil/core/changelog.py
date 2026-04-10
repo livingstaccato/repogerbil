@@ -171,20 +171,6 @@ def _group_commits(
     return groups, review
 
 
-_CAT_VERB: dict[str, str] = {
-    "instantiate": "Add",
-    "interface": "Wire",
-    "decouple": "Refactor",
-    "remediate": "Fix",
-    "harden": "Harden",
-    "margin": "Buffer",
-    "qualify": "Test",
-    "streamline": "Optimize",
-    "specify": "Document",
-    "baseline": "Update",
-    "deprecate": "Remove",
-}
-
 _STRIP_PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s*")
 
 
@@ -213,7 +199,8 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
             section_cat = cat
             section_sev = classify_commit(group[0].subject, body=group[0].body, settings=settings).severity
         else:
-            verb = _CAT_VERB.get(cat, cat.title())
+            cat_defn = settings.vocabulary.categories.get(cat)
+            verb = (cat_defn.verb if cat_defn and cat_defn.verb else None) or cat.title()
             top_dir = _top_directory(group)
             title = f"{verb} {top_dir}/ ({len(group)} commits)" if top_dir else f"{verb}: {len(group)} commits"
             section_cat = cat

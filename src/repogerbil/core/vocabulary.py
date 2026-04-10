@@ -28,16 +28,40 @@ def conventional_to_category(prefix: str, vocab: VocabularyConfig | None = None)
     return p.get(prefix.lower())
 
 
-def get_root_category(category: str, vocab: VocabularyConfig | None = None) -> str:
-    """Find the root ancestor of a category in the hierarchy."""
+def get_root_categories(category: str, vocab: VocabularyConfig | None = None) -> set[str]:
+    """Return the set of root ancestor categories (those with no parents) via BFS.
+
+    For a category that IS a root (parents=[]), returns {category} itself.
+    For a DAG node with multiple parents, all root ancestors are returned.
+    """
     c = vocab.categories if vocab else CATEGORIES
-    current = category
-    visited = set()
+    if category not in c:
+        return {category}
 
-    while current in c and c[current].parent:
-        if current in visited:  # pragma: no cover — cycle detection
-            break
+    visited: set[str] = set()
+    queue: list[str] = [category]
+    roots: set[str] = set()
+
+    while queue:
+        current = queue.pop()
+        if current in visited:  # pragma: no cover — safety guard against cycles
+            continue
         visited.add(current)
-        current = c[current].parent
 
-    return current
+        defn = c.get(current)
+        if defn is None or not defn.parents:
+            roots.add(current)
+        else:
+            queue.extend(defn.parents)
+
+    return roots
+
+
+def get_root_category(category: str, vocab: VocabularyConfig | None = None) -> str:
+    """Return a single root ancestor (first found).
+
+    Deprecated: prefer ``get_root_categories`` for DAG vocabularies.
+    For tree-shaped vocabularies the result is deterministic.
+    """
+    roots = get_root_categories(category, vocab=vocab)
+    return next(iter(roots))

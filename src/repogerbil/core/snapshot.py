@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from repogerbil.core.cadence import TimeGroup
+from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 
 
@@ -76,9 +77,12 @@ def create_snapshot(
         # Build commit command with timestamp
         cmd = ["commit-tree", tree_sha, "-m", message]
 
-        # Parent: previous commit on main (if exists)
-        head = _run_git(dest_path, "rev-parse", "--verify", "HEAD", timeout=5).strip()
-        if head and not head.startswith("fatal"):
+        # Parent: previous commit on main (if any — empty repo raises GitCommandError)
+        try:
+            head = _run_git(dest_path, "rev-parse", "--verify", "HEAD", timeout=5).strip()
+        except GitCommandError:
+            head = ""
+        if head:
             cmd.extend(["-p", head])
 
         # Set timestamp via environment

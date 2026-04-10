@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import fnmatch
 import re
 
-from repogerbil.core.config import FileRule, Settings
+from repogerbil.core.config import FileRule, Settings, VocabularyConfig
 from repogerbil.core.vocabulary import PREFIX_TO_CATEGORY, SEVERITIES
 
 _PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?(!)?:\s*")
@@ -117,7 +117,10 @@ def classify_commit(
 
     result = _try_verb_heuristic(subject)
     if result is not None:
-        return result
+        # Apply severity vocabulary mapping (same as conventional prefix path)
+        sev_map = vocab.severities if vocab else SEVERITIES
+        resolved: str | None = sev_map.get(result.severity, result.severity) if result.severity else None
+        return Classification(category=result.category, severity=resolved, needs_review=False)
 
     return Classification(category=None, severity=None, needs_review=True)
 
@@ -154,14 +157,13 @@ def _try_conventional_prefix(
     if prefix == "feat" and _INTERFACE_RE.search(subject):
         category = "interface"
 
-    if severity != "architectural":
-        if prefix in _PREFIX_SEVERITY:
-            severity = _PREFIX_SEVERITY[prefix]
+    if severity != "architectural" and prefix in _PREFIX_SEVERITY:
+        severity = _PREFIX_SEVERITY[prefix]
 
     sev_map = vocab.severities if vocab else SEVERITIES
-    severity = sev_map.get(severity, severity)
+    resolved: str | None = sev_map.get(severity, severity)
 
-    return Classification(category=category, severity=severity, needs_review=False)
+    return Classification(category=category, severity=resolved, needs_review=False)
 
 
 def _try_verb_heuristic(subject: str) -> Classification | None:

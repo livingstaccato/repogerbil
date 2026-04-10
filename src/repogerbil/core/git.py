@@ -179,10 +179,25 @@ def get_commits_for_date(
 
 
 def get_diff_stats(repo_path: str | Path, first_hash: str, last_hash: str) -> DiffStats:
-    """Get aggregate diff stats between two commits."""
-    output = _run_git(repo_path, "diff", "--shortstat", f"{first_hash}^..{last_hash}", timeout=30)
+    """Get aggregate diff stats between two commits.
+
+    Uses ``first^..last`` to capture all changes in the range.  When
+    ``first`` is the initial commit (no parent) git returns a non-zero exit
+    code; in that case the function falls back to ``--root last``.
+    When both hashes are identical, returns zero stats (no diff).
+    """
+    from repogerbil.core.errors import GitCommandError
+
+    if first_hash == last_hash:
+        return DiffStats(commits=0, files_changed=0, insertions=0, deletions=0)
+
+    try:
+        output = _run_git(repo_path, "diff", "--shortstat", f"{first_hash}^..{last_hash}", timeout=30)
+    except GitCommandError:
+        output = ""
+
     stat_line = output.strip()
-    if not stat_line:  # pragma: no branch — first commit fallback
+    if not stat_line:  # pragma: no branch — first-commit fallback
         output = _run_git(repo_path, "diff", "--shortstat", "--root", last_hash, timeout=30)
         stat_line = output.strip()
     if not stat_line:

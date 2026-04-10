@@ -71,21 +71,25 @@ VALID_CATEGORIES = set(CATEGORIES.keys()) | {
     "standardize",
 }
 
-VALID_SEVERITIES = set(SEVERITIES.keys()) | {
-    "structural",
-    "foundational",
-    "systemic",
-    "sweeping",
-    "functional",
-    "operational",
-    "observable",
-    "external",
-    "mechanical",
-    "cosmetic",
-    "superficial",
-    "incidental",
-    "negligible",
-}
+VALID_SEVERITIES = (
+    set(SEVERITIES.keys())
+    | {v for v in SEVERITIES.values() if v is not None}
+    | {
+        "structural",
+        "foundational",
+        "systemic",
+        "sweeping",
+        "functional",
+        "operational",
+        "observable",
+        "external",
+        "mechanical",
+        "cosmetic",
+        "superficial",
+        "incidental",
+        "negligible",
+    }
+)
 
 
 @dataclass

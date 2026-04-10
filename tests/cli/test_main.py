@@ -621,3 +621,49 @@ class TestLintCommand:
         result = runner.invoke(cli, ["lint", str(tmp_path / "changelogs"), "repo-a"])
         assert "repo-a" in result.output
         assert "repo-b" not in result.output
+
+
+class TestMainEntryPoint:
+    def test_repogerbil_error_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from repogerbil.cli.main import main
+        from repogerbil.core.errors import RepogerbilError
+
+        def _raise() -> None:
+            raise RepogerbilError("git failure")
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_unexpected_exception_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from repogerbil.cli.main import main
+
+        def _raise() -> None:
+            raise RuntimeError("something broke")
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_debug_flag_stripped_from_argv(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from repogerbil.cli.main import main
+
+        monkeypatch.setattr(sys, "argv", ["gerbil", "--debug"])
+
+        call_count: list[int] = [0]
+
+        def _fake_cli() -> None:
+            call_count[0] += 1
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _fake_cli)
+
+        main()
+
+        assert call_count[0] == 1
+        assert "--debug" not in sys.argv

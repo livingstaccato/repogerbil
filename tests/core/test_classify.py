@@ -15,51 +15,51 @@ from repogerbil.core.config import FileRule
 class TestClassifyCommitConventional:
     def test_feat(self) -> None:
         r = classify_commit("feat: add new feature")
-        assert r == Classification("instantiate", "behavioral", False)
+        assert r == Classification("instantiate", "minor", False)
 
     def test_fix(self) -> None:
         r = classify_commit("fix: resolve crash")
-        assert r == Classification("remediate", "behavioral", False)
+        assert r == Classification("remediate", "minor", False)
 
     def test_refactor(self) -> None:
         r = classify_commit("refactor: extract module")
-        assert r == Classification("decouple", "internal", False)
+        assert r == Classification("decouple", "patch", False)
 
     def test_test(self) -> None:
         r = classify_commit("test: add unit tests")
-        assert r == Classification("qualify", "internal", False)
+        assert r == Classification("qualify", "patch", False)
 
     def test_docs(self) -> None:
         r = classify_commit("docs: update readme")
-        assert r == Classification("specify", "errata", False)
+        assert r == Classification("specify", None, False)
 
     def test_perf(self) -> None:
         r = classify_commit("perf: optimize hot path")
-        assert r == Classification("streamline", "behavioral", False)
+        assert r == Classification("streamline", "minor", False)
 
     def test_chore(self) -> None:
         r = classify_commit("chore: update deps")
-        assert r == Classification("baseline", "internal", False)
+        assert r == Classification("baseline", "patch", False)
 
     def test_ci(self) -> None:
         r = classify_commit("ci: fix workflow")
-        assert r == Classification("baseline", "internal", False)
+        assert r == Classification("baseline", "patch", False)
 
     def test_with_scope(self) -> None:
         r = classify_commit("feat(go): add sampling")
-        assert r == Classification("instantiate", "behavioral", False)
+        assert r == Classification("instantiate", "minor", False)
 
     def test_fix_harden(self) -> None:
         r = classify_commit("fix: harden auth validation")
-        assert r == Classification("harden", "behavioral", False)
+        assert r == Classification("harden", "minor", False)
 
     def test_fix_margin(self) -> None:
         r = classify_commit("fix: increase timeout for slow clients")
-        assert r == Classification("margin", "behavioral", False)
+        assert r == Classification("margin", "minor", False)
 
     def test_feat_interface(self) -> None:
         r = classify_commit("feat: add websocket transport")
-        assert r == Classification("interface", "behavioral", False)
+        assert r == Classification("interface", "minor", False)
 
     def test_unknown_prefix(self) -> None:
         r = classify_commit("xyz: something weird")
@@ -69,29 +69,29 @@ class TestClassifyCommitConventional:
 class TestClassifyCommitBreaking:
     def test_bang_in_subject(self) -> None:
         r = classify_commit("feat!: replace old API")
-        assert r.severity == "architectural"
+        assert r.severity == "major"
 
     def test_breaking_change_in_body(self) -> None:
         r = classify_commit("feat: new API", body="BREAKING CHANGE: old API removed")
-        assert r.severity == "architectural"
+        assert r.severity == "major"
 
     def test_auto_breaking_disabled(self) -> None:
         r = classify_commit("feat!: replace old API", auto_breaking=False)
-        assert r.severity == "behavioral"
+        assert r.severity == "minor"
 
     def test_fix_bang(self) -> None:
         r = classify_commit("fix!: breaking fix")
-        assert r.severity == "architectural"
+        assert r.severity == "major"
 
 
 class TestClassifyCommitMerge:
     def test_merge_commit(self) -> None:
         r = classify_commit("Merge pull request #42")
-        assert r == Classification("baseline", "errata", False)
+        assert r == Classification("baseline", None, False)
 
     def test_merge_branch(self) -> None:
         r = classify_commit("Merge branch 'feature'")
-        assert r == Classification("baseline", "errata", False)
+        assert r == Classification("baseline", None, False)
 
 
 class TestClassifyCommitVerb:
@@ -131,7 +131,7 @@ class TestClassifyCommitVerb:
     def test_version(self) -> None:
         r = classify_commit("v0.3.22")
         assert r.category == "baseline"
-        assert r.severity == "errata"
+        assert r.severity is None  # errata → None
 
     def test_hardened_verb(self) -> None:
         r = classify_commit("Harden policy parsing")

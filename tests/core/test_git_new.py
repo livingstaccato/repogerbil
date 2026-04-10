@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from repogerbil.core.git import (
@@ -23,7 +22,7 @@ def test_parse_shortstat() -> None:
     assert res["files_changed"] == 3
     assert res["insertions"] == 10
     assert res["deletions"] == 5
-    
+
     assert parse_shortstat("") == {"files_changed": 0, "insertions": 0, "deletions": 0}
 
 
@@ -111,8 +110,8 @@ def test_get_diff_stats_empty() -> None:
 
 def test_attach_file_lists_edge_cases() -> None:
     """_attach_file_lists edge cases: empty lines and non-hash lines."""
-    from repogerbil.core.git import _attach_file_lists, CommitInfo
-    
+    from repogerbil.core.git import CommitInfo, _attach_file_lists
+
     h1 = "a" * 40
     # Output with empty line and non-hash leading line (though unlikely in git)
     output = f"\n{h1}\nfile1.py\n\n"

@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
 
@@ -17,59 +17,118 @@ class CategoryDefinition(BaseModel):
 
     label: str
     conventional: str = "chore"
-    parent: str | None = None
+    parents: list[str] = Field(default_factory=list)  # DAG: zero or more parent category names
     description: str = ""
+
+
+# ── Default vocabulary builders ───────────────────────────────────────────────
+# Extracted to module-level functions so they are importable, testable, and
+# readable — no logic buried inside Field(default_factory=lambda: {...}).
+
+
+def _default_categories() -> dict[str, CategoryDefinition]:
+    """Return the default category taxonomy.
+
+    Conventional commit prefixes are the root nodes (parents=[]).
+    Semantic subcategories hang beneath them and support multiple parents (DAG).
+    """
+    return {
+        # ── Standard roots (conventional commit prefixes) ─────────────────
+        "feat": CategoryDefinition(label="feat", conventional="feat"),
+        "fix": CategoryDefinition(label="fix", conventional="fix"),
+        "refactor": CategoryDefinition(label="refactor", conventional="refactor"),
+        "test": CategoryDefinition(label="test", conventional="test"),
+        "perf": CategoryDefinition(label="perf", conventional="perf"),
+        "docs": CategoryDefinition(label="docs", conventional="docs"),
+        "chore": CategoryDefinition(label="chore", conventional="chore"),
+        # ── Semantic subcategories ─────────────────────────────────────────
+        "instantiate": CategoryDefinition(label="feat", conventional="feat", parents=["feat"]),
+        "interface": CategoryDefinition(label="feat", conventional="feat", parents=["instantiate", "specify"]),
+        "remediate": CategoryDefinition(label="fix", conventional="fix", parents=["fix"]),
+        "harden": CategoryDefinition(label="fix", conventional="fix", parents=["remediate"]),
+        "margin": CategoryDefinition(label="fix", conventional="fix", parents=["remediate"]),
+        "decouple": CategoryDefinition(label="refactor", conventional="refactor", parents=["refactor"]),
+        "qualify": CategoryDefinition(label="test", conventional="test", parents=["test"]),
+        "streamline": CategoryDefinition(label="perf", conventional="perf", parents=["perf"]),
+        "specify": CategoryDefinition(label="docs", conventional="docs", parents=["docs"]),
+        "baseline": CategoryDefinition(label="chore", conventional="chore", parents=["chore"]),
+        "deprecate": CategoryDefinition(label="remove", conventional="refactor", parents=["refactor"]),
+    }
+
+
+def _default_severities() -> dict[str, str | None]:
+    return {
+        "architectural": "major",
+        "behavioral": "minor",
+        "internal": "patch",
+        "errata": None,
+    }
+
+
+def _default_prefix_map() -> dict[str, str]:
+    return {
+        "feat": "instantiate",
+        "fix": "remediate",
+        "refactor": "decouple",
+        "test": "qualify",
+        "perf": "streamline",
+        "docs": "specify",
+        "spec": "specify",
+        "chore": "baseline",
+        "ci": "baseline",
+        "build": "baseline",
+        "style": "baseline",
+        "revert": "deprecate",
+        "rename": "decouple",
+        "config": "baseline",
+        "release": "baseline",
+    }
+
+
+# ── Vocabulary config ─────────────────────────────────────────────────────────
 
 
 class VocabularyConfig(BaseSettings):
     """Configuration for custom vocabulary categories and mappings.
 
-    Enables a graph of terms where custom categories can be associated
-    with the standard taxonomy.
+    Supports a DAG where custom categories can have multiple parents and
+    conventional commit prefixes serve as the root nodes of the hierarchy.
+
+    For additive customisation without replacing the full defaults, use
+    ``extra_categories`` and ``extra_prefix_map``.  Full replacement is still
+    possible by supplying ``categories`` / ``prefix_to_category`` directly.
+
+    Example ``.repogerbil.toml`` (additive):
+
+    .. code-block:: toml
+
+        [vocabulary.extra_categories.hotfix]
+        label = "hotfix"
+        conventional = "fix"
+        parents = ["remediate"]
+
+        [vocabulary.extra_prefix_map]
+        hotfix = "hotfix"
     """
 
-    categories: dict[str, CategoryDefinition] = Field(
-        default_factory=lambda: {
-            "instantiate": CategoryDefinition(label="feat", conventional="feat"),
-            "remediate": CategoryDefinition(label="fix", conventional="fix"),
-            "decouple": CategoryDefinition(label="refactor", conventional="refactor"),
-            "deprecate": CategoryDefinition(label="remove", conventional="remove"),
-            "interface": CategoryDefinition(label="feat", conventional="feat", parent="instantiate"),
-            "specify": CategoryDefinition(label="docs", conventional="docs"),
-            "qualify": CategoryDefinition(label="test", conventional="test"),
-            "margin": CategoryDefinition(label="fix", conventional="fix", parent="remediate"),
-            "harden": CategoryDefinition(label="fix", conventional="fix", parent="remediate"),
-            "streamline": CategoryDefinition(label="perf", conventional="perf"),
-            "baseline": CategoryDefinition(label="chore", conventional="chore"),
-        }
-    )
-    severities: dict[str, str | None] = Field(
-        default_factory=lambda: {
-            "architectural": "major",
-            "behavioral": "minor",
-            "internal": "patch",
-            "errata": None,
-        }
-    )
-    prefix_to_category: dict[str, str] = Field(
-        default_factory=lambda: {
-            "feat": "instantiate",
-            "fix": "remediate",
-            "refactor": "decouple",
-            "test": "qualify",
-            "perf": "streamline",
-            "docs": "specify",
-            "spec": "specify",
-            "chore": "baseline",
-            "ci": "baseline",
-            "build": "baseline",
-            "style": "baseline",
-            "revert": "deprecate",
-            "rename": "decouple",
-            "config": "baseline",
-            "release": "baseline",
-        }
-    )
+    categories: dict[str, CategoryDefinition] = Field(default_factory=_default_categories)
+    severities: dict[str, str | None] = Field(default_factory=_default_severities)
+    prefix_to_category: dict[str, str] = Field(default_factory=_default_prefix_map)
+
+    # Additive fields — merged on top of the defaults above.
+    extra_categories: dict[str, CategoryDefinition] = Field(default_factory=dict)
+    extra_prefix_map: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _merge_extras(self) -> VocabularyConfig:
+        if self.extra_categories:
+            self.categories = {**self.categories, **self.extra_categories}
+        if self.extra_prefix_map:
+            self.prefix_to_category = {**self.prefix_to_category, **self.extra_prefix_map}
+        return self
+
+
+# ── File classification rules ─────────────────────────────────────────────────
 
 
 class FileRule(BaseModel):
@@ -87,6 +146,9 @@ class RepoOverride(BaseModel):
     backfill_depth: Literal["heuristic", "thorough"] | None = None
     message_depth: Literal["subject", "refs", "full"] | None = None
     skip_dates: list[str] = Field(default_factory=list)
+
+
+# ── Settings discovery ────────────────────────────────────────────────────────
 
 
 def find_config_file(name: str = ".repogerbil.toml") -> Path | None:
@@ -110,6 +172,9 @@ def find_config_file(name: str = ".repogerbil.toml") -> Path | None:
         return user_config
 
     return None
+
+
+# ── Main settings model ───────────────────────────────────────────────────────
 
 
 class Settings(BaseSettings):

@@ -212,7 +212,7 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
     """Build the changes list from grouped commits."""
     changes: list[dict[str, Any]] = []
     # Use categories from config if available, otherwise fallback to default order
-    cat_order = list(settings.vocabulary.categories.keys()) + ["_unclassified"]
+    cat_order = [*settings.vocabulary.categories.keys(), "_unclassified"]
 
     for cat in cat_order:
         group = groups.get(cat)
@@ -226,9 +226,7 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
         elif len(group) == 1:
             title = _strip_prefix(group[0].subject)
             section_cat = cat
-            section_sev = classify_commit(
-                group[0].subject, body=group[0].body, settings=settings
-            ).severity
+            section_sev = classify_commit(group[0].subject, body=group[0].body, settings=settings).severity
         else:
             # Try to get verb from config (not yet supported in config but can be added later)
             # For now use the default mapping but could be expanded
@@ -236,9 +234,7 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
             top_dir = _top_directory(group)
             title = f"{verb} {top_dir}/ ({len(group)} commits)" if top_dir else f"{verb}: {len(group)} commits"
             section_cat = cat
-            section_sev = classify_commit(
-                group[0].subject, body=group[0].body, settings=settings
-            ).severity
+            section_sev = classify_commit(group[0].subject, body=group[0].body, settings=settings).severity
 
         points = [_commit_to_point(c, settings) for c in group]
 
@@ -320,8 +316,6 @@ def _generate_summary(stats: DiffStats, groups: dict[str, list[CommitInfo]], set
     cat_order = list(settings.vocabulary.categories.keys())
 
     for cat in cat_order:
-        if cat == "_unclassified":
-            continue
         group = groups.get(cat)
         if not group:
             continue

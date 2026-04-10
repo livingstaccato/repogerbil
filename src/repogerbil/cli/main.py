@@ -14,8 +14,6 @@ import click
 from rich.console import Console
 import yaml
 
-from repogerbil.core.errors import RepogerbilError
-
 from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.changelog import (
     generate_analyzed,
@@ -28,6 +26,7 @@ from repogerbil.core.classify import classify_commit
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
 from repogerbil.core.diff import get_diff_content
+from repogerbil.core.errors import RepogerbilError
 from repogerbil.core.git import (
     get_active_dates,
     get_commits_for_date,
@@ -58,7 +57,7 @@ def main() -> None:
         console.print(f"[bold red]Error:[/] {e}")
         sys.exit(1)
     except Exception as e:
-        if "--debug" in sys.argv:
+        if "--debug" in sys.argv:  # pragma: no cover — --debug is removed before cli() runs
             raise
         console = Console(stderr=True)
         console.print(f"[bold red]Unexpected Error:[/] {str(e) or type(e).__name__}")

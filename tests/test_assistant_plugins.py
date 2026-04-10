@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -184,3 +185,56 @@ def test_sync_repo_plugin_tree_replaces_symlinks(tmp_path: Path) -> None:
     assert not (repo_root / "plugins" / "repogerbil").is_symlink()
     assert not (repo_root / "plugins" / ".claude-plugin" / "marketplace.json").is_symlink()
     assert not (repo_root / ".agents" / "plugins" / "marketplace.json").is_symlink()
+
+
+def test_install_codex_defaults_to_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(assistant_plugins, "_default_codex_root", lambda: tmp_path / ".codex")
+
+    plugin_dest = assistant_plugins.install_bundled_plugin("codex")
+
+    assert plugin_dest == tmp_path / ".codex" / "plugins" / "repogerbil"
+    assert (plugin_dest / ".codex-plugin" / "plugin.json").exists()
+
+    marketplace = tmp_path / ".codex" / "plugins" / "marketplace.json"
+    assert marketplace.exists()
+
+    data = json.loads(marketplace.read_text())
+    assert data["plugins"][0]["name"] == "repogerbil"
+    assert data["plugins"][0]["source"]["path"] == str(plugin_dest)
+
+
+def test_install_claude_defaults_to_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+    plugin_dest = assistant_plugins.install_bundled_plugin("claude")
+
+    assert plugin_dest == tmp_path / "plugins" / "repogerbil"
+    assert (tmp_path / "plugins" / ".claude-plugin" / "marketplace.json").exists()
+
+
+def test_install_rejects_unknown_target() -> None:
+    with pytest.raises(ValueError, match="Unsupported target: bogus"):
+        assistant_plugins.install_bundled_plugin("bogus")
+
+
+def test_default_codex_root_uses_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+    assert assistant_plugins._default_codex_root() == tmp_path / ".codex"
+
+
+def test_rewrite_installed_marketplace_paths_preserves_non_target_entries(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugin"
+    data: dict[str, object] = {
+        "plugins": [
+            {"name": "other-plugin", "source": {"source": "local", "path": "./other"}},
+            {"name": "repogerbil", "source": "not-a-mapping"},
+        ]
+    }
+
+    rewritten = assistant_plugins._rewrite_installed_marketplace_paths(data, plugin_dir)
+    rewritten_plugins = cast(list[object], rewritten["plugins"])
+    original_plugins = cast(list[object], data["plugins"])
+
+    assert rewritten_plugins[0] == original_plugins[0]
+    assert rewritten_plugins[1] == original_plugins[1]

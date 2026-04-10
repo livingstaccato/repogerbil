@@ -8,10 +8,10 @@ from repogerbil.cli.main import (
     audit,
     backfill,
     changelog,
+    distill,
     enrich,
     fix_stats,
     missing,
-    squash,
     status,
     summary,
     verify,
@@ -33,4 +33,4 @@ VerifyResult.actual_deletions
 VerifyResult.accounted_files
 
 # Suppress unused variable warnings for pydantic-settings signature params
-_ = audit, backfill, changelog, enrich, fix_stats, missing, squash, status, summary, verify
+_ = audit, backfill, changelog, distill, enrich, fix_stats, missing, status, summary, verify

@@ -5,12 +5,14 @@
 
 from pathlib import Path
 import subprocess
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from repogerbil.core.git import (
     CommitInfo,
     DiffStats,
+    _attach_file_lists,
     get_active_dates,
     get_commits_for_date,
     get_diff_stats,
@@ -193,3 +195,75 @@ class TestGetDiffStats:
         h = out.stdout.strip()
         stats = get_diff_stats(repo, h, h)
         assert stats.files_changed == 0
+
+
+class TestGetDiffStatsMocked:
+    def test_first_commit_fallback(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="\n"),
+                MagicMock(returncode=0, stdout=" 1 file changed, 1 insertion(+)"),
+            ]
+            res = get_diff_stats(".", "hash1", "hash2")
+            assert res.files_changed == 1
+            assert mock_run.call_count == 2
+
+    def test_empty_output(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="\n")
+            res = get_diff_stats(".", "h1", "h2")
+            assert res.files_changed == 0
+
+
+class TestGetCommitsMocked:
+    def test_full_message_with_body(self) -> None:
+        h1, h2 = "a" * 40, "b" * 40
+        output = (
+            f"{h1}\x002026-04-10\x00feat: test\x00Body text\nFixes #123\x00END"
+            f"{h2}\x002026-04-10\x00fix: other\x00\x00END"
+        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output)
+            commits = get_commits_for_date(".", "2026-04-10", message_depth="full")
+            assert len(commits) == 2
+            assert commits[1].body == "Body text\nFixes #123"
+            assert commits[1].refs == ["#123"]
+
+    def test_subject_only_filters_by_date(self) -> None:
+        h1, h2 = "a" * 40, "b" * 40
+        output = f"{h1}\t2026-04-10\tfeat: test\n{h2}\t2026-04-11\tfix: other\n"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=output)
+            commits = get_commits_for_date(".", "2026-04-10", message_depth="subject")
+            assert len(commits) == 1
+            assert commits[0].subject == "feat: test"
+
+    def test_empty_output_returns_empty(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="")
+            assert get_commits_for_date(".", "2026-04-10") == []
+
+    def test_active_dates_empty(self) -> None:
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="\n")
+            assert get_active_dates(".") == set()
+
+
+class TestAttachFileLists:
+    def test_basic_attach(self) -> None:
+        h1 = "a" * 40
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout=f"{h1}\t2026-04-10\tfeat: test\n"),
+                MagicMock(returncode=0, stdout=f"{h1}\nfile1.py\nfile2.py\n"),
+            ]
+            commits = get_commits_for_date(".", "2026-04-10", include_files=True)
+            assert commits[0].files == ["file1.py", "file2.py"]
+
+    def test_edge_case_empty_lines(self) -> None:
+        h1 = "a" * 40
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"\n{h1}\nfile1.py\n\n")
+            commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test")]
+            res = _attach_file_lists(".", commits)
+            assert res[0].files == ["file1.py"]

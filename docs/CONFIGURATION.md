@@ -27,9 +27,6 @@ message_depth = "subject"            # subject | refs | full
 # Auto-detect breaking changes (feat!: → architectural)
 auto_breaking = true
 
-# Attach per-commit file lists in changelog points
-include_files = true
-
 # Depth for backfilling changelogs
 backfill_depth = "heuristic"         # heuristic | thorough
 
@@ -47,16 +44,6 @@ create_backup = true
 
 # Target branch name for distill output
 target_branch = "repogerbil-consolidated"
-
-# Where to write changelogs
-output = "data-repo"                 # data-repo | source-repo
-output_dir = ""                      # path (absolute or relative)
-
-# Root directory for changelog output
-changelog_dir = ""
-
-# Standard commit scopes (cross-repo convention)
-standard_scopes = ["go", "ts", "py", "ci", "freebsd", "deps", "docs"]
 
 # File rules — control how files are handled during --analyze
 [[file_rules]]

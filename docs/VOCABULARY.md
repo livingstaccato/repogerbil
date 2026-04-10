@@ -61,3 +61,32 @@ For commits without conventional prefixes, the leading verb is matched:
 | document | specify |
 
 Past tense variants (added, fixed, removed, etc.) are also matched.
+
+## Section Verbs
+
+When multiple commits share a category, the changelog groups them under a section title using an imperative verb (e.g. "Add src/ (3 commits)"). Each category has a default verb:
+
+| Category | Verb |
+|----------|------|
+| `instantiate` | Add |
+| `interface` | Wire |
+| `remediate` | Fix |
+| `harden` | Harden |
+| `margin` | Buffer |
+| `decouple` | Refactor |
+| `qualify` | Test |
+| `streamline` | Optimize |
+| `specify` | Document |
+| `baseline` | Update |
+| `deprecate` | Remove |
+
+Custom categories can set their own verb via the `verb` field in `.repogerbil.toml`:
+
+```toml
+[vocabulary.extra_categories.hotfix]
+label = "hotfix"
+conventional = "fix"
+verb = "Patch"
+```
+
+If no verb is set, the category name is title-cased (e.g. `mycat` → "Mycat").

@@ -6,6 +6,7 @@
 from repogerbil.core.classify import (
     Classification,
     FileClassification,
+    _try_conventional_prefix,
     classify_commit,
     classify_files,
 )
@@ -240,3 +241,33 @@ class TestClassifyFiles:
         assert len(r.bulk_entries) == 2
         assert r.bulk_entries[0]["files"] == 1  # lock
         assert r.bulk_entries[1]["files"] == 2  # mutants
+
+
+class TestConventionalPrefixInternal:
+    def test_regex_no_match(self) -> None:
+        assert _try_conventional_prefix("feat(scope) no-colon", "", True) is None
+        assert _try_conventional_prefix("!!!: test", "", True) is None
+
+    def test_unknown_prefix(self) -> None:
+        assert _try_conventional_prefix("unknown: message", "", True) is None
+
+    def test_errata_severity(self) -> None:
+        res = _try_conventional_prefix("docs: update", "", True)
+        assert res is not None
+        assert res.category == "specify"
+        assert res.severity is None
+
+    def test_behavioral_severity(self) -> None:
+        res = _try_conventional_prefix("feat: message", "", True)
+        assert res is not None
+        assert res.severity == "minor"
+
+    def test_breaking_flag(self) -> None:
+        res = _try_conventional_prefix("feat!: message", "", True)
+        assert res is not None
+        assert res.severity == "major"
+
+    def test_breaking_flag_ignored_when_disabled(self) -> None:
+        res = _try_conventional_prefix("feat!: message", "", False)
+        assert res is not None
+        assert res.severity == "minor"

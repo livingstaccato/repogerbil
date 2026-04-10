@@ -4,10 +4,11 @@
 """Tests for configuration loading."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from repogerbil.core.config import FileRule, RepoOverride, Settings, load_settings
+from repogerbil.core.config import FileRule, RepoOverride, Settings, find_config_file, load_settings
 
 
 class TestFileRule:
@@ -142,3 +143,63 @@ class TestFindConfigFile:
         result = find_config_file()
         assert result is not None
         assert "config.toml" in str(result)
+
+
+class TestLoadSettingsMocked:
+    def test_repo_override_applied(self) -> None:
+        s = Settings()
+        s.repos["myrepo"] = RepoOverride(backfill_depth="thorough", message_depth="full")
+        with patch("repogerbil.core.config.Settings", return_value=s):
+            result = load_settings(repo="myrepo")
+            assert result.backfill_depth == "thorough"
+            assert result.message_depth == "full"
+
+    def test_partial_override(self) -> None:
+        s = Settings()
+        s.repos["myrepo"] = RepoOverride(backfill_depth="thorough")
+        with patch("repogerbil.core.config.Settings", return_value=s):
+            result = load_settings(repo="myrepo")
+            assert result.backfill_depth == "thorough"
+            assert result.message_depth == "subject"
+
+    def test_no_repo_match(self) -> None:
+        result = load_settings(repo="nonexistent_repo")
+        assert result.backfill_depth == "heuristic"
+
+    def test_explicit_config_path(self, tmp_path: Path) -> None:
+        config = tmp_path / "custom.toml"
+        config.write_text('cadence = "weekly"\n')
+        result = load_settings(config_path=config)
+        assert result.cadence == "weekly"
+
+    def test_nonexistent_config_uses_defaults(self, tmp_path: Path) -> None:
+        result = load_settings(config_path=tmp_path / "nonexistent.toml")
+        assert result.cadence == "daily"
+
+
+class TestFindConfigFileMocked:
+    def test_home_fallback(self, tmp_path: Path) -> None:
+        with (
+            patch("pathlib.Path.cwd", return_value=tmp_path),
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+        ):
+            config_dir = tmp_path / "home" / ".config" / "repogerbil"
+            config_dir.mkdir(parents=True)
+            config_file = config_dir / "config.toml"
+            config_file.write_text("")
+            assert find_config_file() == config_file
+
+    def test_not_found_returns_none(self, tmp_path: Path) -> None:
+        with (
+            patch("pathlib.Path.cwd", return_value=tmp_path),
+            patch("pathlib.Path.home", return_value=tmp_path / "home"),
+        ):
+            assert find_config_file() is None
+
+    def test_walks_to_parent(self, tmp_path: Path) -> None:
+        config_file = tmp_path / ".repogerbil.toml"
+        config_file.write_text("")
+        child = tmp_path / "child" / "grandchild"
+        child.mkdir(parents=True)
+        with patch("pathlib.Path.cwd", return_value=child):
+            assert find_config_file() == config_file

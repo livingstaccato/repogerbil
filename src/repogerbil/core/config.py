@@ -17,7 +17,6 @@ class CategoryDefinition(BaseModel):
 
     label: str
     conventional: str = "chore"
-    parents: list[str] = Field(default_factory=list)  # DAG: zero or more parent category names
     description: str = ""
 
 
@@ -27,13 +26,9 @@ class CategoryDefinition(BaseModel):
 
 
 def _default_categories() -> dict[str, CategoryDefinition]:
-    """Return the default category taxonomy.
-
-    Conventional commit prefixes are the root nodes (parents=[]).
-    Semantic subcategories hang beneath them and support multiple parents (DAG).
-    """
+    """Return the default category taxonomy."""
     return {
-        # ── Standard roots (conventional commit prefixes) ─────────────────
+        # ── Conventional commit prefix categories ─────────────────────────
         "feat": CategoryDefinition(label="feat", conventional="feat"),
         "fix": CategoryDefinition(label="fix", conventional="fix"),
         "refactor": CategoryDefinition(label="refactor", conventional="refactor"),
@@ -41,18 +36,18 @@ def _default_categories() -> dict[str, CategoryDefinition]:
         "perf": CategoryDefinition(label="perf", conventional="perf"),
         "docs": CategoryDefinition(label="docs", conventional="docs"),
         "chore": CategoryDefinition(label="chore", conventional="chore"),
-        # ── Semantic subcategories ─────────────────────────────────────────
-        "instantiate": CategoryDefinition(label="feat", conventional="feat", parents=["feat"]),
-        "interface": CategoryDefinition(label="feat", conventional="feat", parents=["instantiate", "specify"]),
-        "remediate": CategoryDefinition(label="fix", conventional="fix", parents=["fix"]),
-        "harden": CategoryDefinition(label="fix", conventional="fix", parents=["remediate"]),
-        "margin": CategoryDefinition(label="fix", conventional="fix", parents=["remediate"]),
-        "decouple": CategoryDefinition(label="refactor", conventional="refactor", parents=["refactor"]),
-        "qualify": CategoryDefinition(label="test", conventional="test", parents=["test"]),
-        "streamline": CategoryDefinition(label="perf", conventional="perf", parents=["perf"]),
-        "specify": CategoryDefinition(label="docs", conventional="docs", parents=["docs"]),
-        "baseline": CategoryDefinition(label="chore", conventional="chore", parents=["chore"]),
-        "deprecate": CategoryDefinition(label="remove", conventional="refactor", parents=["refactor"]),
+        # ── Semantic categories ────────────────────────────────────────────
+        "instantiate": CategoryDefinition(label="feat", conventional="feat"),
+        "interface": CategoryDefinition(label="feat", conventional="feat"),
+        "remediate": CategoryDefinition(label="fix", conventional="fix"),
+        "harden": CategoryDefinition(label="fix", conventional="fix"),
+        "margin": CategoryDefinition(label="fix", conventional="fix"),
+        "decouple": CategoryDefinition(label="refactor", conventional="refactor"),
+        "qualify": CategoryDefinition(label="test", conventional="test"),
+        "streamline": CategoryDefinition(label="perf", conventional="perf"),
+        "specify": CategoryDefinition(label="docs", conventional="docs"),
+        "baseline": CategoryDefinition(label="chore", conventional="chore"),
+        "deprecate": CategoryDefinition(label="remove", conventional="refactor"),
     }
 
 
@@ -91,9 +86,6 @@ def _default_prefix_map() -> dict[str, str]:
 class VocabularyConfig(BaseSettings):
     """Configuration for custom vocabulary categories and mappings.
 
-    Supports a DAG where custom categories can have multiple parents and
-    conventional commit prefixes serve as the root nodes of the hierarchy.
-
     For additive customisation without replacing the full defaults, use
     ``extra_categories`` and ``extra_prefix_map``.  Full replacement is still
     possible by supplying ``categories`` / ``prefix_to_category`` directly.
@@ -105,7 +97,6 @@ class VocabularyConfig(BaseSettings):
         [vocabulary.extra_categories.hotfix]
         label = "hotfix"
         conventional = "fix"
-        parents = ["remediate"]
 
         [vocabulary.extra_prefix_map]
         hotfix = "hotfix"
@@ -193,22 +184,15 @@ class Settings(BaseSettings):
     cadence: Literal["hourly", "daily", "weekly"] = "daily"
     message_depth: Literal["subject", "refs", "full"] = "subject"
     auto_breaking: bool = True
-    include_files: bool = True
     backfill_depth: Literal["heuristic", "thorough"] = "heuristic"
     enrich_depth: Literal["file", "package", "cross-repo"] = "package"
     tolerance: int = Field(default=20, ge=0, le=100)
     preserve_timestamps: bool = True
     create_backup: bool = True
     target_branch: str = "repogerbil-consolidated"
-    output: Literal["data-repo", "source-repo"] = "data-repo"
-    output_dir: str = ""
-    standard_scopes: list[str] = Field(
-        default_factory=lambda: ["go", "ts", "py", "ci", "freebsd", "deps", "docs"],
-    )
     file_rules: list[FileRule] = Field(default_factory=list)
     repos: dict[str, RepoOverride] = Field(default_factory=dict)
     tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
-    changelog_dir: str = ""  # root directory for changelog output
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
 
     @classmethod

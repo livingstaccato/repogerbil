@@ -48,15 +48,8 @@ class TestSettings:
         assert settings.auto_breaking is True
         assert settings.tolerance == 20
         assert settings.target_branch == "repogerbil-consolidated"
-        assert settings.output == "data-repo"
         assert settings.file_rules == []
         assert settings.repos == {}
-
-    def test_standard_scopes_default(self) -> None:
-        settings = Settings()
-        assert "go" in settings.standard_scopes
-        assert "ts" in settings.standard_scopes
-        assert "py" in settings.standard_scopes
 
 
 class TestLoadSettings:

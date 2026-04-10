@@ -171,21 +171,6 @@ def _group_commits(
     return groups, review
 
 
-_CAT_ORDER = [
-    "instantiate",
-    "interface",
-    "decouple",
-    "remediate",
-    "harden",
-    "margin",
-    "qualify",
-    "streamline",
-    "specify",
-    "baseline",
-    "deprecate",
-    "_unclassified",
-]
-
 _CAT_VERB: dict[str, str] = {
     "instantiate": "Add",
     "interface": "Wire",
@@ -228,8 +213,6 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
             section_cat = cat
             section_sev = classify_commit(group[0].subject, body=group[0].body, settings=settings).severity
         else:
-            # Try to get verb from config (not yet supported in config but can be added later)
-            # For now use the default mapping but could be expanded
             verb = _CAT_VERB.get(cat, cat.title())
             top_dir = _top_directory(group)
             title = f"{verb} {top_dir}/ ({len(group)} commits)" if top_dir else f"{verb}: {len(group)} commits"

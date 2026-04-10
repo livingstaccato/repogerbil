@@ -10,7 +10,6 @@ from repogerbil.core.config import CategoryDefinition, Settings, VocabularyConfi
 from repogerbil.core.vocabulary import (
     category_to_conventional,
     conventional_to_category,
-    get_root_categories,
 )
 
 
@@ -48,38 +47,11 @@ def test_custom_severity_classification() -> None:
     assert res.severity == "breaking"
 
 
-def test_vocabulary_hierarchy() -> None:
-    """Vocabulary should support hierarchical category associations (DAG)."""
-    vocab = VocabularyConfig(
-        categories={
-            "standard": CategoryDefinition(label="std", conventional="feat"),
-            "custom": CategoryDefinition(label="cust", conventional="fix", parents=["standard"]),
-        }
-    )
-
-    assert get_root_categories("custom", vocab=vocab) == {"standard"}
-    assert get_root_categories("standard", vocab=vocab) == {"standard"}
-    assert get_root_categories("nonexistent", vocab=vocab) == {"nonexistent"}
-
-
-def test_vocabulary_dag_multi_parent() -> None:
-    """A category with multiple parents resolves to multiple roots."""
-    vocab = VocabularyConfig(
-        categories={
-            "root_a": CategoryDefinition(label="a", conventional="feat"),
-            "root_b": CategoryDefinition(label="b", conventional="docs"),
-            "child": CategoryDefinition(label="c", conventional="feat", parents=["root_a", "root_b"]),
-        }
-    )
-
-    assert get_root_categories("child", vocab=vocab) == {"root_a", "root_b"}
-
-
 def test_extra_categories_are_additive() -> None:
     """extra_categories merges with defaults rather than replacing them."""
     vocab = VocabularyConfig(
         extra_categories={
-            "hotfix": CategoryDefinition(label="hotfix", conventional="fix", parents=["remediate"]),
+            "hotfix": CategoryDefinition(label="hotfix", conventional="fix"),
         },
         extra_prefix_map={"hotfix": "hotfix"},
     )

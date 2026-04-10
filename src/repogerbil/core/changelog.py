@@ -30,7 +30,7 @@ def generate_draft(
 ) -> dict[str, Any]:
     """Generate a skeleton changelog with TODO placeholders."""
     groups, review = _group_commits(commits, settings)
-    changes = _build_changes(groups)
+    changes = _build_changes(groups, settings)
 
     result: dict[str, Any] = {
         "date": date_str,
@@ -56,13 +56,13 @@ def generate_analyzed(
     """Generate a complete changelog using heuristic analysis."""
     auto_bulk, commits = _apply_file_rules(commits, settings.file_rules)
     groups, review = _group_commits(commits, settings)
-    changes = _build_changes(groups)
+    changes = _build_changes(groups, settings)
 
     result: dict[str, Any] = {
         "date": date_str,
         "repo": repo,
         "title": _generate_title(commits, groups),
-        "summary": _generate_summary(stats, groups),
+        "summary": _generate_summary(stats, groups, settings),
         "stats": _stats_dict(stats, len(commits)),
     }
     if auto_bulk:
@@ -161,6 +161,7 @@ def _group_commits(
             commit.subject,
             body=commit.body,
             auto_breaking=settings.auto_breaking,
+            settings=settings,
         )
         key = result.category or "_unclassified"
         groups.setdefault(key, []).append(commit)
@@ -199,19 +200,6 @@ _CAT_VERB: dict[str, str] = {
     "deprecate": "Remove",
 }
 
-_CAT_LABEL: dict[str, str] = {
-    "instantiate": "new feature",
-    "interface": "integration",
-    "decouple": "refactoring",
-    "remediate": "bug fix",
-    "harden": "hardening",
-    "qualify": "test",
-    "streamline": "optimization",
-    "specify": "documentation",
-    "baseline": "infrastructure",
-    "deprecate": "removal",
-}
-
 _STRIP_PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s*")
 
 
@@ -220,10 +208,13 @@ def _strip_prefix(subject: str) -> str:
     return m.string[m.end() :] if m else subject
 
 
-def _build_changes(groups: dict[str, list[CommitInfo]]) -> list[dict[str, Any]]:
+def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> list[dict[str, Any]]:
     """Build the changes list from grouped commits."""
     changes: list[dict[str, Any]] = []
-    for cat in _CAT_ORDER:
+    # Use categories from config if available, otherwise fallback to default order
+    cat_order = list(settings.vocabulary.categories.keys()) + ["_unclassified"]
+
+    for cat in cat_order:
         group = groups.get(cat)
         if not group:
             continue
@@ -235,15 +226,21 @@ def _build_changes(groups: dict[str, list[CommitInfo]]) -> list[dict[str, Any]]:
         elif len(group) == 1:
             title = _strip_prefix(group[0].subject)
             section_cat = cat
-            section_sev = classify_commit(group[0].subject, body=group[0].body).severity
+            section_sev = classify_commit(
+                group[0].subject, body=group[0].body, settings=settings
+            ).severity
         else:
+            # Try to get verb from config (not yet supported in config but can be added later)
+            # For now use the default mapping but could be expanded
             verb = _CAT_VERB.get(cat, cat.title())
             top_dir = _top_directory(group)
             title = f"{verb} {top_dir}/ ({len(group)} commits)" if top_dir else f"{verb}: {len(group)} commits"
             section_cat = cat
-            section_sev = classify_commit(group[0].subject, body=group[0].body).severity
+            section_sev = classify_commit(
+                group[0].subject, body=group[0].body, settings=settings
+            ).severity
 
-        points = [_commit_to_point(c) for c in group]
+        points = [_commit_to_point(c, settings) for c in group]
 
         section_files = _collect_section_files(group)
 
@@ -260,8 +257,8 @@ def _build_changes(groups: dict[str, list[CommitInfo]]) -> list[dict[str, Any]]:
     return changes
 
 
-def _commit_to_point(commit: CommitInfo) -> dict[str, Any]:
-    result = classify_commit(commit.subject, body=commit.body)
+def _commit_to_point(commit: CommitInfo, settings: Settings) -> dict[str, Any]:
+    result = classify_commit(commit.subject, body=commit.body, settings=settings)
     point: dict[str, Any] = {
         "text": commit.subject,
         "category": result.category,
@@ -316,17 +313,20 @@ def _generate_title(commits: list[CommitInfo], groups: dict[str, list[CommitInfo
     return f"{len(commits)} changes across {len(set(f for c in commits for f in c.files))} files"
 
 
-def _generate_summary(stats: DiffStats, groups: dict[str, list[CommitInfo]]) -> str:
+def _generate_summary(stats: DiffStats, groups: dict[str, list[CommitInfo]], settings: Settings) -> str:
     """Generate a 1-3 sentence summary."""
     parts: list[str] = []
-    for cat in _CAT_ORDER:
+    # Use categories from config if available, otherwise fallback to default order
+    cat_order = list(settings.vocabulary.categories.keys())
+
+    for cat in cat_order:
         if cat == "_unclassified":
             continue
         group = groups.get(cat)
         if not group:
             continue
         n = len(group)
-        label = _CAT_LABEL.get(cat, cat)
+        label = settings.vocabulary.categories[cat].label
         if n > 1:
             plural = label + "es" if label.endswith("x") else label + "s"
             parts.append(f"{n} {plural}")

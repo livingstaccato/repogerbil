@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from repogerbil.core.state import StateStore
 from repogerbil.core.vectordb import VectorStore
 
 
@@ -18,6 +19,7 @@ def index_changelogs(
     changelog_dir: Path,
     include_diffs: bool = False,
     diff_source_repos: dict[str, str] | None = None,
+    incremental: bool = True,
 ) -> int:
     """Index all changelog YAML files into the vector store.
 
@@ -29,19 +31,28 @@ def index_changelogs(
         changelog_dir: Root directory with per-repo changelog subdirs.
         include_diffs: Whether to read and index git diffs.
         diff_source_repos: {repo_name: repo_path} for diff reading.
+        incremental: Whether to skip files already in the state.
 
     Returns:
         Number of changelogs indexed.
     """
     indexed = 0
+    state_store = StateStore(changelog_dir)
 
     for repo_dir in sorted(changelog_dir.iterdir()):
         if not repo_dir.is_dir() or repo_dir.name.startswith("."):
             continue
 
         for yaml_file in sorted(repo_dir.glob("*-changelog.yaml")):
+            if incremental and not state_store.is_changed(yaml_file):
+                continue
+
             if _index_single_changelog(store, yaml_file, repo_dir.name, include_diffs, diff_source_repos):
                 indexed += 1
+                state_store.update(yaml_file)
+
+    if indexed > 0:
+        state_store.save()
 
     return indexed
 

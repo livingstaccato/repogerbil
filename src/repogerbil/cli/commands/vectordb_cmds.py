@@ -35,12 +35,13 @@ def _get_store(db_path: str | None) -> object:
 @click.command()
 @click.argument("changelog_dir", type=click.Path(exists=True))
 @click.option("--db-path", default=None, help="Vector DB path (default: .repogerbil/vectordb)")
-def index(changelog_dir: str, db_path: str | None) -> None:
+@click.option("--force", is_flag=True, help="Re-index everything (bypass state)")
+def index(changelog_dir: str, db_path: str | None, force: bool) -> None:
     """Index all changelogs into the vector database."""
     from repogerbil.core.search import index_changelogs
 
     store = _get_store(db_path)
-    count = index_changelogs(store, Path(changelog_dir))  # type: ignore[arg-type]
+    count = index_changelogs(store, Path(changelog_dir), incremental=not force)  # type: ignore[arg-type]
     click.echo(f"Indexed {count} changelogs")
 
 

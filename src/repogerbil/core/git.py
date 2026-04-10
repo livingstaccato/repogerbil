@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from repogerbil.core.errors import GitCommandError, NotAGitRepositoryError
+
 _SHORTSTAT_FILE_RE = re.compile(r"(\d+)\s+file")
 _SHORTSTAT_INS_RE = re.compile(r"(\d+)\s+insertion")
 _SHORTSTAT_DEL_RE = re.compile(r"(\d+)\s+deletion")
@@ -40,7 +42,12 @@ class DiffStats:
 
 
 def _run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
-    """Run a git command and return stdout."""
+    """Run a git command and return stdout.
+
+    Raises:
+        NotAGitRepositoryError: If the path is not a git repository.
+        GitCommandError: If the git command fails.
+    """
     result = subprocess.run(  # noqa: S603 — git is a trusted binary
         ["git", *args],  # noqa: S607 — partial path is intentional
         cwd=str(repo_path),
@@ -48,6 +55,17 @@ def _run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
         text=True,
         timeout=timeout,
     )
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "not a git repository" in stderr.lower():
+            raise NotAGitRepositoryError(repo_path)
+        raise GitCommandError(
+            f"Git command failed: git {' '.join(args)}\n{stderr}",
+            returncode=result.returncode,
+            stderr=stderr,
+        )
+
     return result.stdout
 
 

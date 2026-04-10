@@ -9,8 +9,8 @@ from dataclasses import dataclass
 import fnmatch
 import re
 
-from repogerbil.core.config import FileRule
-from repogerbil.core.vocabulary import PREFIX_TO_CATEGORY
+from repogerbil.core.config import FileRule, Settings
+from repogerbil.core.vocabulary import PREFIX_TO_CATEGORY, SEVERITIES
 
 _PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?(!)?:\s*")
 
@@ -97,6 +97,7 @@ def classify_commit(
     subject: str,
     body: str = "",
     auto_breaking: bool = True,
+    settings: Settings | None = None,
 ) -> Classification:
     """Classify a commit by its subject line.
 
@@ -104,9 +105,13 @@ def classify_commit(
     Returns Classification with needs_review=True when unclassifiable.
     """
     if subject.lower().startswith("merge"):
-        return Classification(category="baseline", severity="errata", needs_review=False)
+        vocab = settings.vocabulary if settings else None
+        sev_map = vocab.severities if vocab else SEVERITIES
+        return Classification(category="baseline", severity=sev_map.get("errata"), needs_review=False)
 
-    result = _try_conventional_prefix(subject, body, auto_breaking)
+    vocab = settings.vocabulary if settings else None
+
+    result = _try_conventional_prefix(subject, body, auto_breaking, vocab)
     if result is not None:
         return result
 
@@ -121,6 +126,7 @@ def _try_conventional_prefix(
     subject: str,
     body: str,
     auto_breaking: bool,
+    vocab: VocabularyConfig | None = None,
 ) -> Classification | None:
     """Try to classify using conventional commit prefix."""
     m = _PREFIX_RE.match(subject)
@@ -129,7 +135,9 @@ def _try_conventional_prefix(
 
     prefix = m.group(1).lower()
     is_breaking = bool(m.group(2))
-    category = PREFIX_TO_CATEGORY.get(prefix)
+
+    prefix_map = vocab.prefix_to_category if vocab else PREFIX_TO_CATEGORY
+    category = prefix_map.get(prefix)
     if not category:
         return None
 
@@ -146,8 +154,12 @@ def _try_conventional_prefix(
     if prefix == "feat" and _INTERFACE_RE.search(subject):
         category = "interface"
 
-    if severity != "architectural" and prefix in _PREFIX_SEVERITY:
-        severity = _PREFIX_SEVERITY[prefix]
+    if severity != "architectural":
+        if prefix in _PREFIX_SEVERITY:
+            severity = _PREFIX_SEVERITY[prefix]
+
+    sev_map = vocab.severities if vocab else SEVERITIES
+    severity = sev_map.get(severity, severity)
 
     return Classification(category=category, severity=severity, needs_review=False)
 

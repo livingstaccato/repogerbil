@@ -7,10 +7,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 import click
+from rich.console import Console
 import yaml
+
+from repogerbil.core.errors import RepogerbilError
 
 from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.changelog import (
@@ -38,6 +42,27 @@ _PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s")
 @click.version_option()
 def cli() -> None:
     """gerbil — Git history documentation and consolidation."""
+
+
+def main() -> None:
+    """Entry point with error handling."""
+    try:
+        # Check for --debug flag anywhere in args
+        debug = "--debug" in sys.argv
+        if debug:
+            sys.argv.remove("--debug")
+
+        cli()
+    except RepogerbilError as e:
+        console = Console(stderr=True)
+        console.print(f"[bold red]Error:[/] {e}")
+        sys.exit(1)
+    except Exception as e:
+        if "--debug" in sys.argv:
+            raise
+        console = Console(stderr=True)
+        console.print(f"[bold red]Unexpected Error:[/] {str(e) or type(e).__name__}")
+        sys.exit(1)
 
 
 # Register optional vectordb commands

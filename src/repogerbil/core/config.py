@@ -12,6 +12,66 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
 
+class CategoryDefinition(BaseModel):
+    """Definition of a vocabulary category."""
+
+    label: str
+    conventional: str = "chore"
+    parent: str | None = None
+    description: str = ""
+
+
+class VocabularyConfig(BaseSettings):
+    """Configuration for custom vocabulary categories and mappings.
+
+    Enables a graph of terms where custom categories can be associated
+    with the standard taxonomy.
+    """
+
+    categories: dict[str, CategoryDefinition] = Field(
+        default_factory=lambda: {
+            "instantiate": CategoryDefinition(label="feat", conventional="feat"),
+            "remediate": CategoryDefinition(label="fix", conventional="fix"),
+            "decouple": CategoryDefinition(label="refactor", conventional="refactor"),
+            "deprecate": CategoryDefinition(label="remove", conventional="remove"),
+            "interface": CategoryDefinition(label="feat", conventional="feat", parent="instantiate"),
+            "specify": CategoryDefinition(label="docs", conventional="docs"),
+            "qualify": CategoryDefinition(label="test", conventional="test"),
+            "margin": CategoryDefinition(label="fix", conventional="fix", parent="remediate"),
+            "harden": CategoryDefinition(label="fix", conventional="fix", parent="remediate"),
+            "streamline": CategoryDefinition(label="perf", conventional="perf"),
+            "baseline": CategoryDefinition(label="chore", conventional="chore"),
+        }
+    )
+    severities: dict[str, str | None] = Field(
+        default_factory=lambda: {
+            "architectural": "major",
+            "behavioral": "minor",
+            "internal": "patch",
+            "errata": None,
+        }
+    )
+    prefix_to_category: dict[str, str] = Field(
+        default_factory=lambda: {
+            "feat": "instantiate",
+            "fix": "remediate",
+            "refactor": "decouple",
+            "test": "qualify",
+            "perf": "streamline",
+            "docs": "specify",
+            "spec": "specify",
+            "chore": "baseline",
+            "ci": "baseline",
+            "build": "baseline",
+            "style": "baseline",
+            "revert": "deprecate",
+            "rename": "decouple",
+            "config": "baseline",
+            "release": "baseline",
+        }
+    )
+
+
 class FileRule(BaseModel):
     """A rule for classifying files by glob pattern."""
 
@@ -84,6 +144,7 @@ class Settings(BaseSettings):
     repos: dict[str, RepoOverride] = Field(default_factory=dict)
     tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
     changelog_dir: str = ""  # root directory for changelog output
+    vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
 
     @classmethod
     def settings_customise_sources(

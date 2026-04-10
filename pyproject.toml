@@ -36,7 +36,7 @@ vectordb = [
 ]
 
 [project.scripts]
-gerbil = "repogerbil.cli.main:cli"
+gerbil = "repogerbil.cli.main:main"
 
 [project.urls]
 Repository = "https://github.com/livingstaccato/repogerbil"
@@ -175,16 +175,26 @@ paths_to_mutate = [
     "src/repogerbil/core/classify.py",
     "src/repogerbil/core/config.py",
     "src/repogerbil/core/embeddings.py",
+    "src/repogerbil/core/errors.py",
     "src/repogerbil/core/lint.py",
     "src/repogerbil/core/snapshot.py",
+    "src/repogerbil/core/state.py",
     "src/repogerbil/core/summary.py",
     "src/repogerbil/core/verify.py",
+    "src/repogerbil/core/vocabulary.py",
 ]
 tests_dir = ["tests/"]
 also_copy = [
     "src/repogerbil/assistant_plugins/",
     "src/repogerbil/core/",
     "src/repogerbil/cli/commands/",
+    "VERSION",
+    "LICENSE",
+    "REUSE.toml",
+    ".gitignore",
+    "pyproject.toml",
+    "Makefile",
+    ".github/",
 ]
 runner = "pytest"
 pytest_add_cli_args = ["-o", "addopts=", "--no-cov", "-q"]

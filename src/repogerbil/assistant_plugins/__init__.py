@@ -60,7 +60,7 @@ def install_bundled_plugin(target: str, root: Path | None = None) -> Path:
     if target == "codex":
         return _install_codex_plugin()
     if target == "claude":
-        return export_bundled_plugin(target, Path.home())
+        return export_bundled_plugin(target, Path.cwd())
 
     msg = f"Unsupported target: {target}"
     raise ValueError(msg)

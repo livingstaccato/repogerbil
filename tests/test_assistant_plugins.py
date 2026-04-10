@@ -204,8 +204,8 @@ def test_install_codex_defaults_to_codex_home(monkeypatch: pytest.MonkeyPatch, t
     assert data["plugins"][0]["source"]["path"] == str(plugin_dest)
 
 
-def test_install_claude_defaults_to_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+def test_install_claude_defaults_to_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: tmp_path))
 
     plugin_dest = assistant_plugins.install_bundled_plugin("claude")
 

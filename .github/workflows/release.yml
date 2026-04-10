@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    uses: provide-io/ci-tooling/workflows/python-release.yml@v0
+    with:
+      python-version: "3.11"
+      build-backend: "uv"
+      run-tests: true
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

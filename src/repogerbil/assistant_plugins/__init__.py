@@ -80,7 +80,11 @@ def _install_codex_plugin() -> Path:
     codex_root = _default_codex_root()
     plugin_dest = codex_root / "plugins" / PLUGIN_NAME
     _copy_tree(paths.plugin_dir, plugin_dest)
-    _merge_marketplace(paths.codex_marketplace, codex_root / "plugins" / "marketplace.json", plugin_dest)
+    _merge_marketplace(
+        paths.codex_marketplace,
+        Path.home() / ".agents" / "plugins" / "marketplace.json",
+        plugin_dest,
+    )
     return plugin_dest
 
 

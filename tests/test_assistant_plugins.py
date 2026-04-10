@@ -189,13 +189,14 @@ def test_sync_repo_plugin_tree_replaces_symlinks(tmp_path: Path) -> None:
 
 def test_install_codex_defaults_to_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(assistant_plugins, "_default_codex_root", lambda: tmp_path / ".codex")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
 
     plugin_dest = assistant_plugins.install_bundled_plugin("codex")
 
     assert plugin_dest == tmp_path / ".codex" / "plugins" / "repogerbil"
     assert (plugin_dest / ".codex-plugin" / "plugin.json").exists()
 
-    marketplace = tmp_path / ".codex" / "plugins" / "marketplace.json"
+    marketplace = tmp_path / ".agents" / "plugins" / "marketplace.json"
     assert marketplace.exists()
 
     data = json.loads(marketplace.read_text())

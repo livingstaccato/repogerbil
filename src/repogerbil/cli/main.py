@@ -477,7 +477,8 @@ def enrich(changelog_dir: str, repo_path: str, since: str | None, depth: str | N
 @click.argument("changelog_dir", type=click.Path(exists=True))
 @click.option("--config", "config_path", type=click.Path(), default=None)
 @click.option("--since", help="Only backfill dates >= this (YYYY-MM-DD)")
-def backfill(changelog_dir: str, config_path: str | None, since: str | None) -> None:
+@click.option("--prompt", "prompt_mode", is_flag=True, help="Write LLM prompt files instead of YAML changelogs")
+def backfill(changelog_dir: str, config_path: str | None, since: str | None, prompt_mode: bool) -> None:
     """Generate changelogs for all missing dates across tracked repos."""
     from repogerbil.core.audit import find_missing
 
@@ -496,7 +497,8 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None) -> 
         click.echo("Nothing to backfill.")
         return
 
-    click.echo(f"Backfilling {len(results)} missing changelogs...")
+    action = "prompts" if prompt_mode else "changelogs"
+    click.echo(f"Backfilling {len(results)} missing {action}...")
     generated = 0
     out = Path(changelog_dir)
 
@@ -508,9 +510,17 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None) -> 
             continue
 
         stats = get_diff_stats(repo_path, commits[0].hash, commits[-1].hash)
-        data = generate_analyzed(m.repo, m.date, commits, stats, repo_settings)
-        write_changelog(m.repo, m.date, data, out)
+
+        if prompt_mode:
+            prompt_text = generate_prompt(m.repo, m.date, commits, stats, {})
+            prompt_path = out / m.repo / f"{m.date}-{m.repo}-prompt.md"
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            prompt_path.write_text(prompt_text)
+        else:
+            data = generate_analyzed(m.repo, m.date, commits, stats, repo_settings)
+            write_changelog(m.repo, m.date, data, out)
+
         click.echo(f"  {m.repo}/{m.date}: {len(commits)} commits")
         generated += 1
 
-    click.echo(f"\n{generated} changelogs generated")
+    click.echo(f"\n{generated} {action} generated")

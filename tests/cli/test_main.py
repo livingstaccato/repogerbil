@@ -505,6 +505,20 @@ class TestBackfill:
         assert result.exit_code == 0
         assert "generated" in result.output
 
+    def test_prompt_writes_prompt_files_not_yaml(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        cl_dir = tmp_path / "cl"
+        cl_dir.mkdir()
+        config = tmp_path / "test.toml"
+        config.write_text(f'[tracked]\nrepo = "{repo}"\n')
+        result = CliRunner().invoke(cli, ["backfill", str(cl_dir), "--config", str(config), "--prompt"])
+        assert result.exit_code == 0
+        prompt_files = list((cl_dir / repo.name).glob("*-prompt.md"))
+        yaml_files = list((cl_dir / repo.name).glob("*-changelog.yaml"))
+        assert len(prompt_files) > 0
+        assert len(yaml_files) == 0
+        assert "prompts" in result.output
+
 
 class TestFixStats:
     def test_fix_stats(self, tmp_path: Path) -> None:

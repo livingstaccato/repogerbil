@@ -77,12 +77,14 @@ def create_multi_snapshot(
 
     # Create daily commits
     repo_first_dates = _get_first_commit_dates(source_repos)
+    per_repo_dates = _collect_per_repo_dates(source_repos)
     repos_included: set[str] = set()
     commits_created = _create_daily_commits(
         dest_path,
         source_repos,
         active_dates,
         repo_first_dates,
+        per_repo_dates,
         repos_included,
         changelog_messages,
         commit_time,
@@ -126,6 +128,7 @@ def _create_daily_commits(
     source_repos: dict[str, Path],
     active_dates: list[date],
     repo_first_dates: dict[str, date],
+    per_repo_dates: dict[str, set[date]],
     repos_included: set[str],
     changelog_messages: dict[str, dict[str, str]],
     commit_time: str,
@@ -144,8 +147,9 @@ def _create_daily_commits(
         if not repo_trees:  # pragma: no cover — dates come from repos that have commits
             continue
 
+        active_repos = {name for name, dates in per_repo_dates.items() if day in dates}
         combined_tree = _build_merged_tree(dest_path, repo_trees)
-        message = _build_message(day, repo_trees, changelog_messages)
+        message = _build_message(day, active_repos, changelog_messages)
         timestamp = _make_timestamp(day, commit_time, timezone)
         _commit_tree(dest_path, combined_tree, message, timestamp)
         commits_created += 1
@@ -216,6 +220,24 @@ def _collect_all_active_dates(source_repos: dict[str, Path]) -> list[date]:
             if line:  # pragma: no branch — git log %as produces no blank lines
                 all_dates.add(date.fromisoformat(line))
     return sorted(all_dates)
+
+
+def _collect_per_repo_dates(source_repos: dict[str, Path]) -> dict[str, set[date]]:
+    """Get the set of active commit dates per repo."""
+    result: dict[str, set[date]] = {}
+    for name, path in source_repos.items():
+        if not path.exists() or not (path / ".git").exists():
+            continue
+        try:
+            output = _run_git(path, "log", "--format=%as", timeout=30)
+        except GitCommandError:
+            continue
+        dates: set[date] = set()
+        for line in output.strip().split("\n"):
+            if line:  # pragma: no branch
+                dates.add(date.fromisoformat(line))
+        result[name] = dates
+    return result
 
 
 def _get_first_commit_dates(source_repos: dict[str, Path]) -> dict[str, date]:
@@ -307,15 +329,18 @@ def _make_timestamp(day: date, commit_time: str, tz_name: str) -> str:
 
 def _build_message(
     day: date,
-    repo_trees: dict[str, str],
+    active_repos: set[str],
     changelog_messages: dict[str, dict[str, str]],
 ) -> str:
-    """Build commit message from changelog YAMLs or fallback."""
+    """Build commit message from changelog YAMLs or fallback.
+
+    Only includes repos that had actual commits on this day (not carried-forward).
+    """
     date_str = day.isoformat()
     lines = [f"{date_str} pyvider ecosystem", ""]
 
     has_changelog = False
-    for name in sorted(repo_trees.keys()):
+    for name in sorted(active_repos):
         if name in changelog_messages and date_str in changelog_messages[name]:
             msg = changelog_messages[name][date_str]
             lines.append(f"{name}: {msg}")
@@ -323,8 +348,8 @@ def _build_message(
         else:
             lines.append(f"{name}: [activity, no changelog]")
 
-    if not has_changelog and len(repo_trees) == 1:
-        name = next(iter(repo_trees))
+    if not has_changelog and len(active_repos) == 1:
+        name = next(iter(active_repos))
         return f"{date_str} {name}"
 
     return "\n".join(lines)

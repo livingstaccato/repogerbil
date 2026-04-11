@@ -75,9 +75,15 @@ except ImportError:  # pragma: no cover
     pass
 
 # Register distill/snapshot commands
-from repogerbil.cli.commands.distill_cmds import export_cadence, preview, snapshot  # noqa: E402
+from repogerbil.cli.commands.distill_cmds import (  # noqa: E402
+    export_cadence,
+    multi_snapshot,
+    preview,
+    snapshot,
+)
 
 cli.add_command(snapshot)
+cli.add_command(multi_snapshot)
 cli.add_command(export_cadence)
 cli.add_command(preview)
 
@@ -477,7 +483,9 @@ def enrich(changelog_dir: str, repo_path: str, since: str | None, depth: str | N
 @click.argument("changelog_dir", type=click.Path(exists=True))
 @click.option("--config", "config_path", type=click.Path(), default=None)
 @click.option("--since", help="Only backfill dates >= this (YYYY-MM-DD)")
-@click.option("--prompt", "prompt_mode", is_flag=True, help="Write LLM prompt files instead of YAML changelogs")
+@click.option(
+    "--prompt", "prompt_mode", is_flag=True, help="Write LLM prompt files instead of YAML changelogs"
+)
 def backfill(changelog_dir: str, config_path: str | None, since: str | None, prompt_mode: bool) -> None:
     """Generate changelogs for all missing dates across tracked repos."""
     from repogerbil.core.audit import find_missing

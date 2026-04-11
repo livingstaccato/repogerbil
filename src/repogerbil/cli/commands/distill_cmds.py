@@ -63,6 +63,73 @@ def snapshot(
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits)")
 
 
+@click.command(name="multi-snapshot")
+@click.argument("dest_path", type=click.Path())
+@click.option("--repo", "repos", multiple=True, help="NAME:PATH pairs (repeatable)")
+@click.option("--commit-time", default="20:00", help="Time for daily commits (HH:MM)")
+@click.option("--timezone", default="America/Los_Angeles", help="IANA timezone for timestamps")
+@click.option("--since", help="Only include dates >= this (YYYY-MM-DD)")
+@click.option(
+    "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
+)
+@click.option("--dry-run", is_flag=True, help="Preview only, no git changes")
+def multi_snapshot(
+    dest_path: str,
+    repos: tuple[str, ...],
+    commit_time: str,
+    timezone: str,
+    since: str | None,
+    changelog_dir: str | None,
+    dry_run: bool,
+) -> None:
+    """Create a new repo merging multiple source repos into daily commits."""
+    from datetime import date as date_type
+
+    from repogerbil.core.multi_snapshot import create_multi_snapshot
+
+    # Parse repo arguments (NAME:PATH format)
+    source_repos: dict[str, Path] = {}
+    for repo_spec in repos:
+        if ":" not in repo_spec:
+            click.echo(f"Error: --repo must be NAME:PATH format, got: {repo_spec}", err=True)
+            raise SystemExit(1)
+        name, path_str = repo_spec.split(":", 1)
+        source_repos[name] = Path(path_str)
+
+    if not source_repos:
+        click.echo("Error: at least one --repo is required", err=True)
+        raise SystemExit(1)
+
+    since_date = date_type.fromisoformat(since) if since else None
+    cl_dir = Path(changelog_dir) if changelog_dir else None
+
+    if dry_run:
+        from repogerbil.core.multi_snapshot import _collect_all_active_dates
+
+        active_dates = _collect_all_active_dates(source_repos)
+        if since_date:
+            active_dates = [d for d in active_dates if d >= since_date]
+        click.echo(f"Would create {len(active_dates)} daily commits from {len(source_repos)} repos")
+        for d in active_dates[:10]:
+            click.echo(f"  {d.isoformat()}")
+        if len(active_dates) > 10:
+            click.echo(f"  ... and {len(active_dates) - 10} more")
+        return
+
+    result = create_multi_snapshot(
+        source_repos=source_repos,
+        dest_path=Path(dest_path),
+        since=since_date,
+        commit_time=commit_time,
+        timezone=timezone,
+        changelog_dir=cl_dir,
+    )
+    click.echo(
+        f"Multi-snapshot created at {result.dest_path} "
+        f"({result.commits_created} commits, {len(result.repos_included)} repos)"
+    )
+
+
 @click.command(name="export-cadence")
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)

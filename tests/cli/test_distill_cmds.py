@@ -43,6 +43,106 @@ def _init_test_repo(tmp_path: Path) -> Path:
     return repo
 
 
+class TestMultiSnapshot:
+    def test_basic_invocation(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}"])
+        assert result.exit_code == 0
+        assert "Multi-snapshot created" in result.output
+
+    def test_dry_run(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(
+            cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}", "--dry-run"]
+        )
+        assert result.exit_code == 0
+        assert "Would create" in result.output
+
+    def test_dry_run_with_since(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(
+            cli,
+            ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}", "--dry-run", "--since", "2026-04-07"],
+        )
+        assert result.exit_code == 0
+        assert "Would create" in result.output
+
+    def test_dry_run_many_dates(self, tmp_path: Path) -> None:
+        """Dry run with > 10 dates shows overflow message."""
+        repo = tmp_path / "many"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        for i in range(12):
+            (repo / f"f{i}.py").write_text(f"x{i}\n")
+            subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", f"feat: change {i}"],
+                cwd=repo,
+                capture_output=True,
+                check=True,
+                env={
+                    **env,
+                    "GIT_AUTHOR_DATE": f"2026-01-{10 + i:02d}T12:00:00",
+                    "GIT_COMMITTER_DATE": f"2026-01-{10 + i:02d}T12:00:00",
+                },
+            )
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(cli, ["multi-snapshot", str(dest), "--repo", f"many:{repo}", "--dry-run"])
+        assert result.exit_code == 0
+        assert "... and" in result.output
+
+    def test_no_repos_errors(self, tmp_path: Path) -> None:
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(cli, ["multi-snapshot", str(dest)])
+        assert result.exit_code == 1
+
+    def test_bad_repo_format_errors(self, tmp_path: Path) -> None:
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(cli, ["multi-snapshot", str(dest), "--repo", "nocolon"])
+        assert result.exit_code == 1
+
+    def test_with_since(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(
+            cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}", "--since", "2026-04-07"]
+        )
+        assert result.exit_code == 0
+        assert "Multi-snapshot created" in result.output
+
+    def test_with_changelog_dir(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        cl_dir = tmp_path / "cl" / "testrepo"
+        cl_dir.mkdir(parents=True)
+        changelog = {
+            "date": "2026-04-07",
+            "repo": "testrepo",
+            "title": "Daily update",
+            "summary": "Two changes.",
+        }
+        (cl_dir / "2026-04-07-testrepo-changelog.yaml").write_text(yaml.dump(changelog))
+        dest = tmp_path / "multi"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "multi-snapshot",
+                str(dest),
+                "--repo",
+                f"testrepo:{repo}",
+                "--changelog-dir",
+                str(tmp_path / "cl"),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Multi-snapshot created" in result.output
+
+
 class TestSnapshot:
     def test_basic_snapshot(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)

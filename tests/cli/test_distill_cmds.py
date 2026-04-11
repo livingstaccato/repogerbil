@@ -365,3 +365,66 @@ class TestPreview:
         result = CliRunner().invoke(cli, ["preview", str(repo), "--cadence", "weekly"])
         assert result.exit_code == 0
         assert "groups" in result.output
+
+
+class TestDeriveCommitType:
+    def test_known_categories_map_to_conventional_types(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+
+        cases = {
+            "instantiate": "feat",
+            "interface": "feat",
+            "remediate": "fix",
+            "margin": "fix",
+            "harden": "fix",
+            "decouple": "refactor",
+            "deprecate": "refactor",
+            "specify": "docs",
+            "qualify": "test",
+            "streamline": "perf",
+            "baseline": "chore",
+        }
+        for category, expected in cases.items():
+            data = {"changes": [{"category": category}]}
+            assert _derive_commit_type(data) == expected, f"{category} → {expected}"
+
+    def test_unknown_category_returns_empty(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+
+        assert _derive_commit_type({"changes": [{"category": "unknown-xyz"}]}) == ""
+
+    def test_empty_changes_returns_empty(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+
+        assert _derive_commit_type({"changes": []}) == ""
+        assert _derive_commit_type({}) == ""
+
+    def test_non_dict_change_skipped(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+
+        # Non-dict entries are skipped; falls through to next entry
+        data = {"changes": ["not-a-dict", {"category": "instantiate"}]}
+        assert _derive_commit_type(data) == "feat"
+
+    def test_changelog_to_message_adds_prefix(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _changelog_to_message
+
+        data = {
+            "title": "Add widget factory",
+            "summary": "New factory pattern.",
+            "changes": [{"category": "instantiate", "points": ["Create factory"]}],
+        }
+        msg = _changelog_to_message(data)
+        assert msg.startswith("feat: Add widget factory")
+
+    def test_changelog_to_message_no_double_prefix(self) -> None:
+        from repogerbil.cli.commands.distill_cmds import _changelog_to_message
+
+        data = {
+            "title": "feat: Add widget factory",
+            "summary": "New factory.",
+            "changes": [{"category": "instantiate", "points": ["Create factory"]}],
+        }
+        msg = _changelog_to_message(data)
+        assert msg.startswith("feat: Add widget factory")
+        assert not msg.startswith("feat: feat:")

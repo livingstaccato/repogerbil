@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 import click
 import yaml
 
 from repogerbil.core.cadence import group_by_cadence, groups_to_json
-from repogerbil.core.config import load_settings
+from repogerbil.core.config import VocabularyConfig, load_settings
 from repogerbil.core.consolidate import generate_consolidation_preview
 from repogerbil.core.git import get_active_dates, get_commits_for_date
 
@@ -272,23 +273,60 @@ def _load_changelog_messages(changelog_dir: str, repo_name: str) -> dict[str, st
     return messages
 
 
+def _derive_commit_type(data: dict[str, Any]) -> str:
+    """Derive conventional commit type from changelog category vocabulary.
+
+    Looks at the first change section's category and maps it to a conventional
+    commit type (feat, fix, docs, etc.) using the default settings vocabulary.
+    Returns empty string if no category found.
+    """
+    vocab = VocabularyConfig()
+    changes = data.get("changes", [])
+    if not changes:
+        return ""
+
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        category = change.get("category", "")
+        if category in vocab.categories:
+            return vocab.categories[category].conventional
+
+    return ""
+
+
+def _collect_change_points(changes: list[Any]) -> list[str]:
+    """Collect all point text values from changelog change sections."""
+    points: list[str] = []
+    for section in changes:
+        if not isinstance(section, dict) or not section.get("points"):
+            continue  # pragma: no cover — changelogs always have points
+        for point in section["points"]:
+            if isinstance(point, dict) and point.get("text"):
+                points.append(point["text"])
+            elif isinstance(point, str):  # pragma: no branch
+                points.append(point)
+    return points
+
+
 def _changelog_to_message(data: dict[str, Any]) -> str:
     """Build a commit message from full changelog YAML data."""
-    lines = [data["title"]]
+    commit_type = _derive_commit_type(data)
+    title = data["title"]
+
+    # Don't double-prefix if title already starts with a conventional type
+    if commit_type and not re.match(r"^(feat|fix|refactor|chore|docs|test|perf|ci|build|style)\b", title):
+        subject = f"{commit_type}: {title}"
+    else:
+        subject = title
+
+    lines = [subject]
 
     if data.get("summary"):  # pragma: no branch — changelogs always have summaries
         lines += ["", data["summary"]]
 
-    # Include change points from all sections
     if data.get("changes"):  # pragma: no branch — changelogs always have changes
-        points = []
-        for section in data["changes"]:
-            if isinstance(section, dict) and section.get("points"):  # pragma: no branch
-                for point in section["points"]:
-                    if isinstance(point, dict) and point.get("text"):
-                        points.append(point["text"])
-                    elif isinstance(point, str):  # pragma: no branch
-                        points.append(point)
+        points = _collect_change_points(data["changes"])
         if points:  # pragma: no branch
             lines.append("")
             for p in points:

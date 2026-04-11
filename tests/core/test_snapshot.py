@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 
 from repogerbil.core.cadence import TimeGroup
-from repogerbil.core.git import get_commits_for_date
+from repogerbil.core.git import CommitInfo, get_commits_for_date
 from repogerbil.core.snapshot import SnapshotResult, create_snapshot
 
 
@@ -152,5 +152,44 @@ class TestCreateSnapshot:
             text=True,
             check=True,
         ).stdout.strip()
-        assert "Daily distill" in log
+        assert "2 commits" in log
         assert "feat: add a" in log
+
+    def test_no_conventional_commits_message(self, tmp_path: Path) -> None:
+        """Non-conventional commits get a count-only message."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "noconv"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Override subjects to be garbage
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=c.hash, date=c.date, subject="random garbage") for c in apr7[:1]],
+            )
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert "1 commits" in log
+
+    def test_single_conventional_commit_message(self, tmp_path: Path) -> None:
+        """A single conventional commit uses its subject directly."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "single"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="feat: single thing")],
+            )
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert log == "feat: single thing"

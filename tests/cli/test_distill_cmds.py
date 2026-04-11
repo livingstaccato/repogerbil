@@ -151,6 +151,59 @@ class TestSnapshot:
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
+    def test_snapshot_with_extra_source(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        extra = tmp_path / "extra"
+        extra.mkdir()
+        subprocess.run(["git", "init"], cwd=extra, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=extra, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=extra, capture_output=True, check=True)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (extra / "old.py").write_text("old\n")
+        subprocess.run(["git", "add", "."], cwd=extra, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: old era"],
+            cwd=extra,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-01-01T10:00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:00:00"},
+        )
+        dest = tmp_path / "snap"
+        result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--extra-source", str(extra)])
+        assert result.exit_code == 0
+        assert "Snapshot created" in result.output
+
+    def test_snapshot_with_changelog_full_content(self, tmp_path: Path) -> None:
+        """Changelog with changes/points produces rich commit messages."""
+        repo = _init_test_repo(tmp_path)
+        cl_dir = tmp_path / "cl" / "repo"
+        cl_dir.mkdir(parents=True)
+        changelog = {
+            "date": "2026-04-07",
+            "repo": "repo",
+            "title": "Widget system overhaul",
+            "summary": "Refactored the widget pipeline.",
+            "changes": [
+                {
+                    "title": "Core",
+                    "points": [
+                        {"text": "feat: add widget factory", "category": "instantiate"},
+                        "fix: resolve widget leak",
+                    ],
+                }
+            ],
+        }
+        (cl_dir / "2026-04-07-repo-changelog.yaml").write_text(yaml.dump(changelog))
+        dest = tmp_path / "snap"
+        result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--changelog-dir", str(cl_dir)])
+        assert result.exit_code == 0
+        log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout
+        assert "Widget system overhaul" in log
+        assert "feat: add widget factory" in log
+        assert "fix: resolve widget leak" in log
+
     def test_snapshot_with_commit_time(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
         dest = tmp_path / "snap"

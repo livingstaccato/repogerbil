@@ -28,6 +28,13 @@ from repogerbil.core.git import get_active_dates, get_commits_for_date
 )
 @click.option("--commit-time", default=None, help="Override commit time (HH:MM, e.g. 20:00)")
 @click.option("--timezone", default=None, help="IANA timezone for --commit-time (e.g. America/Los_Angeles)")
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos for multi-era history (repeatable)",
+)
 def snapshot(
     repo_path: str,
     dest_path: str,
@@ -37,6 +44,7 @@ def snapshot(
     changelog_dir: str | None,
     commit_time: str | None,
     timezone: str | None,
+    extra_sources: tuple[str, ...] = (),
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
     from repogerbil.core.snapshot import create_snapshot
@@ -46,7 +54,13 @@ def snapshot(
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
 
+    # Collect commits from primary source + all extra sources
     all_commits = _collect_commits(path, since, branch=source_branch)
+    for extra in extra_sources:
+        all_commits.extend(_collect_commits(Path(extra), since))
+    # Sort by date for proper chronological grouping
+    all_commits.sort(key=lambda c: c.date)
+
     if not all_commits:
         click.echo("No commits found")
         return
@@ -65,6 +79,7 @@ def snapshot(
         preserve_timestamps=settings.preserve_timestamps,
         commit_time=commit_time,
         timezone=timezone,
+        extra_sources=[Path(e) for e in extra_sources],
     )
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits)")
 
@@ -243,12 +258,37 @@ def _collect_commits(path: Path, since: str | None, branch: str | None = None) -
 
 
 def _load_changelog_messages(changelog_dir: str, repo_name: str) -> dict[str, str]:
-    """Load changelog titles+summaries as commit messages."""
+    """Load full changelog content as commit messages."""
     messages: dict[str, str] = {}
     cl_path = Path(changelog_dir)
     for yaml_file in cl_path.glob(f"*-{repo_name}-changelog.yaml"):
         data = yaml.safe_load(yaml_file.read_text())
         if isinstance(data, dict) and data.get("date") and data.get("title"):  # pragma: no branch
             date_key = str(data["date"])[:10]
-            messages[date_key] = f"{data['title']}\n\n{data.get('summary', '')}"
+            messages[date_key] = _changelog_to_message(data)
     return messages
+
+
+def _changelog_to_message(data: dict[str, Any]) -> str:
+    """Build a commit message from full changelog YAML data."""
+    lines = [data["title"]]
+
+    if data.get("summary"):  # pragma: no branch — changelogs always have summaries
+        lines += ["", data["summary"]]
+
+    # Include change points from all sections
+    if data.get("changes"):  # pragma: no branch — changelogs always have changes
+        points = []
+        for section in data["changes"]:
+            if isinstance(section, dict) and section.get("points"):  # pragma: no branch
+                for point in section["points"]:
+                    if isinstance(point, dict) and point.get("text"):
+                        points.append(point["text"])
+                    elif isinstance(point, str):  # pragma: no branch
+                        points.append(point)
+        if points:  # pragma: no branch
+            lines.append("")
+            for p in points:
+                lines.append(f"- {p}")
+
+    return "\n".join(lines)

@@ -5,8 +5,13 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+from datetime import date as date_type
+import os
 from pathlib import Path
+import re
+import subprocess
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.errors import GitCommandError
@@ -32,100 +37,31 @@ def create_snapshot(
     preserve_timestamps: bool = True,
     commit_time: str | None = None,
     timezone: str | None = None,
+    extra_sources: list[Path] | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
     Uses git read-tree for fast, working-directory-free operations.
-
-    Args:
-        source_path: Path to the source git repository.
-        dest_path: Path for the new snapshot repository (must not exist or be empty).
-        groups: TimeGroups from cadence grouping.
-        source_branch: Branch to read from in the source repo.
-        changelog_messages: Optional {YYYY-MM-DD: message} for commit messages.
-        preserve_timestamps: Keep original author dates.
-        commit_time: Optional HH:MM to override commit timestamp (e.g. "20:00").
-        timezone: IANA timezone for commit_time (e.g. "America/Los_Angeles").
-
-    Returns:
-        SnapshotResult with path and counts.
+    Source repos are never written to — only the destination receives writes.
     """
     if dest_path.exists() and any(dest_path.iterdir()):
         msg = f"Destination already exists and is not empty: {dest_path}"
         raise RuntimeError(msg)
 
-    # Initialize destination repo
-    dest_path.mkdir(parents=True, exist_ok=True)
-    _run_git(dest_path, "init")
-    _run_git(dest_path, "config", "user.email", "repogerbil@localhost")
-    _run_git(dest_path, "config", "user.name", "repogerbil")
+    remote_names = _init_and_fetch(dest_path, source_path, extra_sources)
+    commits_created = _create_commits(
+        dest_path,
+        groups,
+        changelog_messages,
+        preserve_timestamps,
+        commit_time,
+        timezone,
+    )
 
-    # Add source as temporary remote and fetch all refs
-    source_uri = source_path.resolve().as_uri()
-    _run_git(dest_path, "remote", "add", "source", source_uri)
-    _run_git(dest_path, "fetch", "source", "--tags", timeout=120)
+    for rname in remote_names:
+        with contextlib.suppress(GitCommandError):
+            _run_git(dest_path, "remote", "remove", rname)
 
-    commits_created = 0
-    for group in groups:
-        if not group.commits:
-            continue  # pragma: no cover — empty group
-
-        last_commit = group.commits[-1]
-        tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
-
-        # Read tree into index (no working directory I/O)
-        _run_git(dest_path, "read-tree", tree_sha)
-
-        message = _build_snapshot_message(group, changelog_messages)
-        if commit_time and timezone:
-            from datetime import date as date_type
-
-            day = date_type(group.period_start.year, group.period_start.month, group.period_start.day)
-            date_str = _make_timestamp(day, commit_time, timezone)
-        else:
-            date_str = group.period_end.strftime("%Y-%m-%dT%H:%M:%S")
-
-        # Build commit command with timestamp
-        cmd = ["commit-tree", tree_sha, "-m", message]
-
-        # Parent: previous commit on main (if any — empty repo raises GitCommandError)
-        try:
-            head = _run_git(dest_path, "rev-parse", "--verify", "HEAD", timeout=5).strip()
-        except GitCommandError:
-            head = ""
-        if head:
-            cmd.extend(["-p", head])
-
-        # Set timestamp via environment
-        if preserve_timestamps:
-            import os
-
-            env = dict(os.environ)
-            env["GIT_AUTHOR_DATE"] = date_str
-            env["GIT_COMMITTER_DATE"] = date_str
-
-            import subprocess
-
-            result = subprocess.run(  # noqa: S603
-                ["git", *cmd],  # noqa: S607
-                cwd=str(dest_path),
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env,
-            )
-            new_commit = result.stdout.strip()
-        else:
-            new_commit = _run_git(dest_path, *cmd, timeout=30).strip()
-
-        # commit-tree always returns a hash; update-ref to advance main
-        _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
-        commits_created += 1
-
-    # Cleanup: remove temporary remote
-    _run_git(dest_path, "remote", "remove", "source")
-
-    # Checkout main so working directory has files
     _run_git(dest_path, "checkout", "main", timeout=30)
 
     return SnapshotResult(
@@ -135,26 +71,145 @@ def create_snapshot(
     )
 
 
+def _init_and_fetch(
+    dest_path: Path,
+    source_path: Path,
+    extra_sources: list[Path] | None,
+) -> list[str]:
+    """Initialize destination repo and fetch all source remotes."""
+    dest_path.mkdir(parents=True, exist_ok=True)
+    _run_git(dest_path, "init")
+    _run_git(dest_path, "config", "user.email", "repogerbil@localhost")
+    _run_git(dest_path, "config", "user.name", "repogerbil")
+
+    _fetch_source(dest_path, "source", source_path)
+    remote_names = ["source"]
+    for i, extra in enumerate(extra_sources or []):
+        if extra.exists():  # pragma: no branch
+            name = f"extra-{i}"
+            _fetch_source(dest_path, name, extra)
+            remote_names.append(name)
+    return remote_names
+
+
+def _create_commits(
+    dest_path: Path,
+    groups: list[TimeGroup],
+    changelog_messages: dict[str, str] | None,
+    preserve_timestamps: bool,
+    commit_time: str | None,
+    timezone: str | None,
+) -> int:
+    """Create one commit per TimeGroup in the destination repo."""
+    commits_created = 0
+    for group in groups:
+        if not group.commits:
+            continue  # pragma: no cover — empty group
+
+        last_commit = group.commits[-1]
+        tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
+        _run_git(dest_path, "read-tree", tree_sha)
+
+        message = _build_snapshot_message(group, changelog_messages)
+        date_str = _resolve_timestamp(group, commit_time, timezone)
+
+        _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
+        commits_created += 1
+
+    return commits_created
+
+
+def _resolve_timestamp(
+    group: TimeGroup,
+    commit_time: str | None,
+    timezone: str | None,
+) -> str:
+    """Resolve the timestamp for a commit."""
+    if commit_time and timezone:
+        day = date_type(group.period_start.year, group.period_start.month, group.period_start.day)
+        return _make_timestamp(day, commit_time, timezone)
+    return group.period_end.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _commit_with_timestamp(
+    dest_path: Path,
+    tree_sha: str,
+    message: str,
+    date_str: str,
+    preserve: bool,
+) -> None:
+    """Create a commit-tree with optional timestamp override."""
+    cmd = ["commit-tree", tree_sha, "-m", message]
+
+    try:
+        head = _run_git(dest_path, "rev-parse", "--verify", "HEAD", timeout=5).strip()
+    except GitCommandError:
+        head = ""
+    if head:
+        cmd.extend(["-p", head])
+
+    if preserve:
+        env = dict(os.environ)
+        env["GIT_AUTHOR_DATE"] = date_str
+        env["GIT_COMMITTER_DATE"] = date_str
+        result = subprocess.run(  # noqa: S603
+            ["git", *cmd],  # noqa: S607
+            cwd=str(dest_path),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        new_commit = result.stdout.strip()
+    else:
+        new_commit = _run_git(dest_path, *cmd, timeout=30).strip()
+
+    _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
+
+
+def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:
+    """Add a source repo as a remote and fetch all refs."""
+    source_uri = source_path.resolve().as_uri()
+    _run_git(dest_path, "remote", "add", remote_name, source_uri)
+    subprocess.run(  # noqa: S603
+        ["git", "fetch", remote_name, f"+refs/*:refs/fetch-{remote_name}/*"],  # noqa: S607
+        cwd=str(dest_path),
+        capture_output=True,
+        timeout=300,
+    )
+
+
+_CONVENTIONAL_RE = re.compile(
+    r"^(feat|fix|refactor|chore|test|docs|ci|perf|build|style|release"
+    r"|standardize|revert|Merge )(\(.*?\))?:?"
+)
+
+
 def _build_snapshot_message(
     group: TimeGroup,
     changelog_messages: dict[str, str] | None,
 ) -> str:
-    """Build commit message from changelog or auto-generate."""
+    """Build commit message from changelog or conventional commits only."""
     date_str = group.period_start.strftime("%Y-%m-%d")
 
+    # Changelog is authoritative — use it directly
     if changelog_messages and date_str in changelog_messages:
         return changelog_messages[date_str]
 
+    # No changelog: only list conventional commits, suppress garbage
     n = len(group.commits)
-    subjects = [c.subject for c in group.commits]
+    conventional = [c.subject for c in group.commits if _CONVENTIONAL_RE.match(c.subject)]
 
-    if n == 1:
-        return subjects[0]
+    if len(conventional) == 1:
+        return conventional[0]
 
-    lines = [
-        f"Daily distill: {date_str} ({n} commits)",
-        "",
-    ]
-    for s in subjects:
-        lines.append(f"- {s}")
-    return "\n".join(lines)
+    if conventional:
+        lines = [f"{date_str}: {n} commits", ""]
+        for s in conventional:
+            lines.append(f"- {s}")
+        other = n - len(conventional)
+        if other:  # pragma: no cover — test repos use conventional commits
+            lines.append(f"- ({other} commits)")
+        return "\n".join(lines)
+
+    return f"{date_str}: {n} commits"

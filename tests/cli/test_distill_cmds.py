@@ -175,7 +175,31 @@ class TestSnapshot:
         assert "No commits" in result.output
 
     def test_snapshot_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+        """Since filters early commits on the branch path."""
+        repo = tmp_path / "multi"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (repo / "a.py").write_text("a\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: early"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-01-01T10:00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:00:00"},
+        )
+        (repo / "b.py").write_text("b\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: later"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        )
         dest = tmp_path / "snap"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--since", "2026-04-07"])
         assert result.exit_code == 0

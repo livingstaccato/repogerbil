@@ -60,10 +60,10 @@ def create_snapshot(
     _run_git(dest_path, "config", "user.email", "repogerbil@localhost")
     _run_git(dest_path, "config", "user.name", "repogerbil")
 
-    # Add source as temporary remote
+    # Add source as temporary remote and fetch all refs
     source_uri = source_path.resolve().as_uri()
     _run_git(dest_path, "remote", "add", "source", source_uri)
-    _run_git(dest_path, "fetch", "source", source_branch, timeout=120)
+    _run_git(dest_path, "fetch", "source", "--tags", timeout=120)
 
     commits_created = 0
     for group in groups:

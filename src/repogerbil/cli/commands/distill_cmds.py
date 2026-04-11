@@ -46,7 +46,7 @@ def snapshot(
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
 
-    all_commits = _collect_commits(path, since)
+    all_commits = _collect_commits(path, since, branch=source_branch)
     if not all_commits:
         click.echo("No commits found")
         return
@@ -206,15 +206,40 @@ def preview(
     click.echo(f"\n  Total: {total_commits} commits → {len(previews)} daily commits")
 
 
-def _collect_commits(path: Path, since: str | None) -> list[Any]:
-    """Collect all commits, optionally filtered by date."""
+def _collect_commits(path: Path, since: str | None, branch: str | None = None) -> list[Any]:
+    """Collect all commits, optionally filtered by date and branch."""
+    from repogerbil.core.git import CommitInfo, _run_git
+
+    if branch:
+        # Get commits only from this branch (not --all)
+        try:
+            output = _run_git(path, "log", branch, "--format=%H\t%as\t%s")
+        except Exception:
+            return []
+        all_commits: list[Any] = []
+        for line in output.strip().splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) >= 3:  # pragma: no branch — format is fixed
+                date_str = parts[1]
+                if since and date_str < since:
+                    continue
+                all_commits.append(CommitInfo(hash=parts[0], date=date_str, subject=parts[2]))
+        # Reverse to chronological order
+        all_commits.reverse()
+        # Attach file lists
+        if all_commits:  # pragma: no branch — branch implies commits exist
+            from repogerbil.core.git import _attach_file_lists
+
+            all_commits = _attach_file_lists(path, all_commits)
+        return all_commits
+
     dates = sorted(get_active_dates(path))
     if since:
         dates = [d for d in dates if d >= since]
-    all_commits: list[Any] = []
+    all_commits_list: list[Any] = []
     for date_str in dates:
-        all_commits.extend(get_commits_for_date(path, date_str, include_files=True))
-    return all_commits
+        all_commits_list.extend(get_commits_for_date(path, date_str, include_files=True))
+    return all_commits_list
 
 
 def _load_changelog_messages(changelog_dir: str, repo_name: str) -> dict[str, str]:

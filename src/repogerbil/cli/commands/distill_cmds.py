@@ -35,6 +35,7 @@ from repogerbil.core.git import get_active_dates, get_commits_for_date
     type=click.Path(),
     help="Additional source repos for multi-era history (repeatable)",
 )
+@click.option("--all-branches", is_flag=True, help="Include commits from all branches, not just source-branch")
 def snapshot(
     repo_path: str,
     dest_path: str,
@@ -45,6 +46,7 @@ def snapshot(
     commit_time: str | None,
     timezone: str | None,
     extra_sources: tuple[str, ...] = (),
+    all_branches: bool = False,
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
     from repogerbil.core.snapshot import create_snapshot
@@ -55,7 +57,8 @@ def snapshot(
     cad = cadence or settings.cadence
 
     # Collect commits from primary source + all extra sources
-    all_commits = _collect_commits(path, since, branch=source_branch)
+    branch = None if all_branches else source_branch
+    all_commits = _collect_commits(path, since, branch=branch)
     for extra in extra_sources:
         all_commits.extend(_collect_commits(Path(extra), since))
     # Sort by date for proper chronological grouping

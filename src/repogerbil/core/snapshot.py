@@ -11,6 +11,7 @@ from pathlib import Path
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
+from repogerbil.core.multi_snapshot import _make_timestamp
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,8 @@ def create_snapshot(
     source_branch: str = "main",
     changelog_messages: dict[str, str] | None = None,
     preserve_timestamps: bool = True,
+    commit_time: str | None = None,
+    timezone: str | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
@@ -41,6 +44,8 @@ def create_snapshot(
         source_branch: Branch to read from in the source repo.
         changelog_messages: Optional {YYYY-MM-DD: message} for commit messages.
         preserve_timestamps: Keep original author dates.
+        commit_time: Optional HH:MM to override commit timestamp (e.g. "20:00").
+        timezone: IANA timezone for commit_time (e.g. "America/Los_Angeles").
 
     Returns:
         SnapshotResult with path and counts.
@@ -72,7 +77,13 @@ def create_snapshot(
         _run_git(dest_path, "read-tree", tree_sha)
 
         message = _build_snapshot_message(group, changelog_messages)
-        date_str = group.period_end.strftime("%Y-%m-%dT%H:%M:%S")
+        if commit_time and timezone:
+            from datetime import date as date_type
+
+            day = date_type(group.period_start.year, group.period_start.month, group.period_start.day)
+            date_str = _make_timestamp(day, commit_time, timezone)
+        else:
+            date_str = group.period_end.strftime("%Y-%m-%dT%H:%M:%S")
 
         # Build commit command with timestamp
         cmd = ["commit-tree", tree_sha, "-m", message]

@@ -26,6 +26,8 @@ from repogerbil.core.git import get_active_dates, get_commits_for_date
 @click.option(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
+@click.option("--commit-time", default=None, help="Override commit time (HH:MM, e.g. 20:00)")
+@click.option("--timezone", default=None, help="IANA timezone for --commit-time (e.g. America/Los_Angeles)")
 def snapshot(
     repo_path: str,
     dest_path: str,
@@ -33,6 +35,8 @@ def snapshot(
     since: str | None,
     source_branch: str,
     changelog_dir: str | None,
+    commit_time: str | None,
+    timezone: str | None,
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
     from repogerbil.core.snapshot import create_snapshot
@@ -59,6 +63,8 @@ def snapshot(
         source_branch=source_branch,
         changelog_messages=changelog_messages,
         preserve_timestamps=settings.preserve_timestamps,
+        commit_time=commit_time,
+        timezone=timezone,
     )
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits)")
 

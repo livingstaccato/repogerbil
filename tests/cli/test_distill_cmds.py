@@ -151,6 +151,21 @@ class TestSnapshot:
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
+    def test_snapshot_with_commit_time(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap"
+        result = CliRunner().invoke(
+            cli,
+            ["snapshot", str(repo), str(dest), "--commit-time", "20:00", "--timezone", "America/Los_Angeles"],
+        )
+        assert result.exit_code == 0
+        assert "Snapshot created" in result.output
+        # Verify timestamp
+        log = subprocess.run(
+            ["git", "log", "--format=%ai"], cwd=dest, capture_output=True, text=True, check=True
+        )
+        assert "20:00:00" in log.stdout
+
     def test_snapshot_no_commits(self, tmp_path: Path) -> None:
         repo = tmp_path / "empty"
         repo.mkdir()

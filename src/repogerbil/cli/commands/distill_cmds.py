@@ -24,7 +24,11 @@ if TYPE_CHECKING:
 @click.command()
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.argument("dest_path", type=click.Path())
-@click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
+@click.option(
+    "--cadence",
+    default=None,
+    help="Grouping cadence: hourly, daily, weekly, or gap:NNm/gap:NNh (e.g., gap:30m)",
+)
 @click.option("--since", help="Only include dates >= this (YYYY-MM-DD)")
 @click.option("--source-branch", default="main", help="Source branch to read from")
 @click.option(
@@ -40,6 +44,11 @@ if TYPE_CHECKING:
     help="Additional source repos for multi-era history (repeatable)",
 )
 @click.option("--all-branches", is_flag=True, help="Include commits from all branches, not just source-branch")
+@click.option(
+    "--source-subdir",
+    default=None,
+    help="For monorepo sources: subdirectory to extract and use its tree state",
+)
 def snapshot(
     repo_path: str,
     dest_path: str,
@@ -51,8 +60,10 @@ def snapshot(
     timezone: str | None,
     extra_sources: tuple[str, ...] = (),
     all_branches: bool = False,
+    source_subdir: str | None = None,
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
+    from repogerbil.core.git import get_commits_for_path
     from repogerbil.core.snapshot import create_snapshot
 
     path = Path(repo_path)
@@ -61,8 +72,17 @@ def snapshot(
     cad = cadence or settings.cadence
 
     # Collect commits from primary source + all extra sources
-    branch = None if all_branches else source_branch
-    all_commits = _collect_commits(path, since, branch=branch)
+    if source_subdir:
+        # Path-scoped commit collection for monorepo sources
+        all_commits = (
+            get_commits_for_path(  # pragma: no cover — integration test needed for monorepo extraction
+                path, source_subdir, all_branches=all_branches
+            )
+        )
+    else:
+        branch = None if all_branches else source_branch
+        all_commits = _collect_commits(path, since, branch=branch)
+
     for extra in extra_sources:
         all_commits.extend(_collect_commits(Path(extra), since))
     # Sort by date for proper chronological grouping
@@ -87,6 +107,7 @@ def snapshot(
         commit_time=commit_time,
         timezone=timezone,
         extra_sources=[Path(e) for e in extra_sources],
+        source_subdir=source_subdir,
     )
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits)")
 

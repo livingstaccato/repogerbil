@@ -67,6 +67,20 @@ class TestGroupByDay:
         groups = group_by_cadence(commits, "daily", timestamps=ts)
         assert len(groups) == 1
 
+    def test_with_commit_timestamp_field(self) -> None:
+        """Test that CommitInfo.timestamp field is used when set and no timestamps dict provided."""
+        from repogerbil.core.git import CommitInfo
+
+        ts1 = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts2 = int(datetime(2026, 4, 7, 14, 0, tzinfo=UTC).timestamp())
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="first", timestamp=ts1),
+            CommitInfo(hash="a2", date="2026-04-07", subject="second", timestamp=ts2),
+        ]
+        groups = group_by_cadence(commits, "daily")
+        assert len(groups) == 1
+        assert len(groups[0].commits) == 2
+
 
 class TestGroupByHour:
     def test_two_hours(self) -> None:
@@ -179,3 +193,139 @@ class TestGroupsToJson:
                 }
             ],
         }
+
+
+class TestGroupByGap:
+    def test_gap_splits_on_threshold(self) -> None:
+        """Three commits: t=0, t=30m, t=2h → two groups (0+30m together, 2h separate)."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+            _make_commit("a3", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 1800,  # +30 minutes
+            "a3": base_time + 7200,  # +2 hours
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 2
+        assert len(groups[0].commits) == 2
+        assert groups[0].commits[0].hash == "a1"
+        assert groups[0].commits[1].hash == "a2"
+        assert len(groups[1].commits) == 1
+        assert groups[1].commits[0].hash == "a3"
+
+    def test_gap_single_commit_per_group(self) -> None:
+        """All commits > threshold apart → one group each."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+            _make_commit("a3", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 3600,  # +1 hour
+            "a3": base_time + 7200,  # +2 hours
+        }
+        groups = group_by_cadence(commits, "gap:30m", timestamps=ts)
+        assert len(groups) == 3
+        assert all(len(group.commits) == 1 for group in groups)
+
+    def test_gap_all_in_one_group(self) -> None:
+        """All commits within threshold → one group."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+            _make_commit("a3", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 600,  # +10 minutes
+            "a3": base_time + 1200,  # +20 minutes
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 1
+        assert len(groups[0].commits) == 3
+
+    def test_gap_parses_minutes(self) -> None:
+        """Parsing 'gap:30m' format."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 1800,  # +30 minutes
+        }
+        groups = group_by_cadence(commits, "gap:30m", timestamps=ts)
+        assert len(groups) == 1  # Within threshold
+
+    def test_gap_parses_hours(self) -> None:
+        """Parsing 'gap:2h' format."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 3600,  # +1 hour
+        }
+        groups = group_by_cadence(commits, "gap:2h", timestamps=ts)
+        assert len(groups) == 1  # Within threshold
+
+    def test_gap_invalid_format(self) -> None:
+        """Invalid gap formats raise ValueError."""
+        commits = [_make_commit("a1", "2026-04-07")]
+        with pytest.raises(ValueError, match="Invalid gap format"):
+            group_by_cadence(commits, "gap:invalid", timestamps={})
+
+    def test_gap_invalid_unit(self) -> None:
+        """Invalid gap units raise ValueError."""
+        commits = [_make_commit("a1", "2026-04-07")]
+        with pytest.raises(ValueError, match="Invalid gap format"):
+            group_by_cadence(commits, "gap:30s", timestamps={})
+
+    def test_gap_preserves_chronological_order(self) -> None:
+        """Groups remain chronologically sorted even with gaps."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+            _make_commit("a3", "2026-04-07"),
+            _make_commit("a4", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 1800,  # +30m (together with a1)
+            "a3": base_time + 7260,  # +121m (separate from a1-a2, together with a4)
+            "a4": base_time + 9000,  # +150m (together with a3)
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 2
+        assert [c.hash for c in groups[0].commits] == ["a1", "a2"]
+        assert [c.hash for c in groups[1].commits] == ["a3", "a4"]
+
+    def test_gap_collects_files(self) -> None:
+        """Files from all commits in gap group are collected."""
+        commits = [
+            _make_commit("a1", "2026-04-07", files=["src/a.py"]),
+            _make_commit("a2", "2026-04-07", files=["src/b.py"]),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 1800,
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert set(groups[0].files_affected) == {"src/a.py", "src/b.py"}
+
+    def test_gap_empty_commits(self) -> None:
+        """Empty commits list returns empty groups."""
+        groups = group_by_cadence([], "gap:1h")
+        assert groups == []

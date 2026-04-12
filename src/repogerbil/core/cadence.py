@@ -36,7 +36,8 @@ def group_by_cadence(
 
     Args:
         commits: List of commits to group (must have date field as YYYY-MM-DD).
-        cadence: "hourly", "daily", or "weekly".
+        cadence: "hourly", "daily", "weekly", or "gap:NNm"/"gap:NNh"
+                 (e.g. "gap:30m" = group commits within 30 minute gaps).
         timestamps: Optional {hash: unix_timestamp} for sub-day precision.
                     If not provided, uses midnight of the commit date.
 
@@ -49,14 +50,24 @@ def group_by_cadence(
         return _group_by_hour(commits, timestamps)
     if cadence == "weekly":
         return _group_by_week(commits, timestamps)
+    if cadence.startswith("gap:"):
+        return _group_by_gap(commits, cadence[4:], timestamps)
     msg = f"Unsupported cadence: {cadence}"
     raise ValueError(msg)
 
 
 def _get_timestamp(commit: CommitInfo, timestamps: dict[str, int] | None) -> int:
-    """Get unix timestamp for a commit."""
+    """Get unix timestamp for a commit.
+
+    Uses (in order of preference):
+    1. Provided timestamps dict
+    2. CommitInfo.timestamp field (if non-zero)
+    3. Midnight UTC of commit date field
+    """
     if timestamps and commit.hash in timestamps:
         return timestamps[commit.hash]
+    if commit.timestamp != 0:
+        return commit.timestamp
     # Fall back to parsing the date field (midnight UTC)
     dt = datetime.strptime(commit.date, "%Y-%m-%d").replace(tzinfo=UTC)
     return int(dt.timestamp())
@@ -150,6 +161,76 @@ def _group_by_week(
                 files_affected=_collect_files(bucket_commits),
             )
         )
+    return groups
+
+
+def _group_by_gap(
+    commits: list[CommitInfo],
+    gap_spec: str,
+    timestamps: dict[str, int] | None,
+) -> list[TimeGroup]:
+    """Group commits by time gap between consecutive commits.
+
+    Args:
+        commits: List of commits (will be sorted by timestamp).
+        gap_spec: Time threshold like "30m" or "2h".
+        timestamps: Optional {hash: unix_timestamp} for sub-day precision.
+
+    Returns:
+        Chronologically sorted list of TimeGroups, each containing commits
+        within the gap threshold of each other.
+    """
+    import re
+
+    # Parse gap specification
+    match = re.match(r"^(\d+)([mh])$", gap_spec)
+    if not match:
+        msg = f"Invalid gap format: {gap_spec} (use '30m' or '2h')"
+        raise ValueError(msg)
+
+    value, unit = int(match.group(1)), match.group(2)
+    threshold_seconds = value * (60 if unit == "m" else 3600)
+
+    # Sort commits by timestamp
+    sorted_commits = sorted(commits, key=lambda c: _get_timestamp(c, timestamps))
+
+    # Group by gap
+    groups: list[TimeGroup] = []
+    current_group: list[CommitInfo] = []
+    last_ts = -threshold_seconds - 1  # Ensure first commit starts a group
+
+    for commit in sorted_commits:
+        ts = _get_timestamp(commit, timestamps)
+        if ts - last_ts > threshold_seconds and current_group:
+            # Start a new group
+            group_start = datetime.fromtimestamp(_get_timestamp(current_group[0], timestamps), tz=UTC)
+            group_end = datetime.fromtimestamp(_get_timestamp(current_group[-1], timestamps), tz=UTC)
+            groups.append(
+                TimeGroup(
+                    period_start=group_start,
+                    period_end=group_end,
+                    commits=current_group,
+                    files_affected=_collect_files(current_group),
+                )
+            )
+            current_group = []
+
+        current_group.append(commit)
+        last_ts = ts
+
+    # Add final group
+    if current_group:
+        group_start = datetime.fromtimestamp(_get_timestamp(current_group[0], timestamps), tz=UTC)
+        group_end = datetime.fromtimestamp(_get_timestamp(current_group[-1], timestamps), tz=UTC)
+        groups.append(
+            TimeGroup(
+                period_start=group_start,
+                period_end=group_end,
+                commits=current_group,
+                files_affected=_collect_files(current_group),
+            )
+        )
+
     return groups
 
 

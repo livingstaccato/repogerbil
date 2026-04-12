@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
 
@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     # Class-level override for config file path (set before instantiation)
     _toml_path: ClassVar[str | Path | None] = None
 
-    cadence: Literal["hourly", "daily", "weekly"] = "daily"
+    cadence: str = "daily"
     message_depth: Literal["subject", "refs", "full"] = "subject"
     auto_breaking: bool = True
     backfill_depth: Literal["heuristic", "thorough"] = "heuristic"
@@ -196,6 +196,19 @@ class Settings(BaseSettings):
     repos: dict[str, RepoOverride] = Field(default_factory=dict)
     tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
+
+    @field_validator("cadence")
+    @classmethod
+    def _validate_cadence(cls, v: str) -> str:
+        """Validate cadence value: hourly, daily, weekly, or gap:NNm/gap:NNh."""
+        import re
+
+        if v in ("hourly", "daily", "weekly"):
+            return v
+        if re.match(r"^gap:\d+[mh]$", v):
+            return v
+        msg = f"Invalid cadence: {v}. Use 'hourly', 'daily', 'weekly', or 'gap:Nm'/'gap:Nh' (e.g., 'gap:30m')"
+        raise ValueError(msg)
 
     @classmethod
     def settings_customise_sources(

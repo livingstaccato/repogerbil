@@ -18,6 +18,7 @@ from repogerbil.core.git import (
     get_commit_for_hash,
     get_commits_for_date,
     get_commits_for_hashes,
+    get_commits_for_path,
     get_diff_stats,
     get_hidden_ref_dates,
     get_hidden_ref_hashes,
@@ -264,7 +265,7 @@ class TestCommitLookup:
         h = "a" * 40
         with patch("repogerbil.core.git._run_git") as mock_run:
             mock_run.side_effect = [
-                f"{h}\x002026-04-07\x00feat: test\x00body\n",
+                f"{h}\x002026-04-07\x001234567890\x00feat: test\x00body\n",
                 "\n",
             ]
             commit = get_commit_for_hash(".", h, include_files=True)
@@ -275,8 +276,8 @@ class TestGetCommitsMocked:
     def test_full_message_with_body(self) -> None:
         h1, h2 = "a" * 40, "b" * 40
         output = (
-            f"{h1}\x002026-04-10\x00feat: test\x00Body text\nFixes #123\x00END"
-            f"{h2}\x002026-04-10\x00fix: other\x00\x00END"
+            f"{h1}\x002026-04-10\x001234567890\x00feat: test\x00Body text\nFixes #123\x00END"
+            f"{h2}\x002026-04-10\x001234567891\x00fix: other\x00\x00END"
         )
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=output)
@@ -287,7 +288,7 @@ class TestGetCommitsMocked:
 
     def test_subject_only_filters_by_date(self) -> None:
         h1, h2 = "a" * 40, "b" * 40
-        output = f"{h1}\t2026-04-10\tfeat: test\n{h2}\t2026-04-11\tfix: other\n"
+        output = f"{h1}\t2026-04-10\t1234567890\tfeat: test\n{h2}\t2026-04-11\t1234567891\tfix: other\n"
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=output)
             commits = get_commits_for_date(".", "2026-04-10", message_depth="subject")
@@ -310,7 +311,7 @@ class TestAttachFileLists:
         h1 = "a" * 40
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout=f"{h1}\t2026-04-10\tfeat: test\n"),
+                MagicMock(returncode=0, stdout=f"{h1}\t2026-04-10\t1234567890\tfeat: test\n"),
                 MagicMock(returncode=0, stdout=f"{h1}\nfile1.py\nfile2.py\n"),
             ]
             commits = get_commits_for_date(".", "2026-04-10", include_files=True)
@@ -323,3 +324,143 @@ class TestAttachFileLists:
             commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test")]
             res = _attach_file_lists(".", commits)
             assert res[0].files == ["file1.py"]
+
+
+class TestCommitTimestamps:
+    def test_timestamp_populated_from_git_log(self, git_repo: Path) -> None:
+        """CommitInfo.timestamp is populated from git log %at field."""
+        commits = get_commits_for_date(git_repo, "2026-04-07")
+        assert len(commits) == 2
+        # Both commits should have non-zero timestamp
+        assert commits[0].timestamp != 0
+        assert commits[1].timestamp != 0
+        # Second commit (11:00) should have later timestamp than first (10:00)
+        assert commits[1].timestamp > commits[0].timestamp
+
+    def test_timestamp_with_message_depth_full(self, git_repo: Path) -> None:
+        """Timestamp is populated with message_depth='full'."""
+        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="full")
+        assert all(c.timestamp != 0 for c in commits)
+
+    def test_timestamp_with_message_depth_refs(self, git_repo: Path) -> None:
+        """Timestamp is populated with message_depth='refs'."""
+        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="refs")
+        assert all(c.timestamp != 0 for c in commits)
+
+    def test_get_commit_for_hash_includes_timestamp(self, git_repo: Path) -> None:
+        """get_commit_for_hash includes timestamp."""
+        commits = get_commits_for_date(git_repo, "2026-04-07")
+        commit = get_commit_for_hash(git_repo, commits[0].hash)
+        assert commit.timestamp != 0
+        assert commit.timestamp == commits[0].timestamp
+
+
+@pytest.fixture()
+def monorepo(tmp_path: Path) -> Path:
+    """Create a temporary monorepo with nested package structure."""
+    repo = tmp_path / "mono"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+    }
+
+    # Commit 1: add pyvider-cty files
+    (repo / "pyvider-cty").mkdir()
+    (repo / "pyvider-cty" / "file1.py").write_text("cty code\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add pyvider-cty"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+    )
+
+    # Commit 2: add pyvider-rpcplugin files
+    (repo / "pyvider-rpcplugin").mkdir()
+    (repo / "pyvider-rpcplugin" / "file2.py").write_text("rpc code\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add pyvider-rpcplugin"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+    )
+
+    # Commit 3: modify pyvider-cty only
+    (repo / "pyvider-cty" / "file1.py").write_text("cty code v2\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "fix: update pyvider-cty"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2026-04-08T10:00:00", "GIT_COMMITTER_DATE": "2026-04-08T10:00:00"},
+    )
+
+    return repo
+
+
+class TestGetCommitsForPath:
+    def test_filters_commits_by_subdir(self, monorepo: Path) -> None:
+        """Returns only commits that touched the specified subdirectory."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        # Should get commits 1 and 3 (added cty, then modified cty)
+        assert len(commits) == 2
+        assert "pyvider-cty" in commits[0].subject
+        assert "pyvider-cty" in commits[1].subject
+
+    def test_excludes_unrelated_subdir(self, monorepo: Path) -> None:
+        """Excludes commits that didn't touch this subdirectory."""
+        commits = get_commits_for_path(monorepo, "pyvider-rpcplugin")
+        # Should get only commit 2 (added rpc)
+        assert len(commits) == 1
+        assert "rpcplugin" in commits[0].subject
+
+    def test_chronological_order(self, monorepo: Path) -> None:
+        """Results are in chronological order (oldest first)."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        assert commits[0].date == "2026-04-07"
+        assert commits[1].date == "2026-04-08"
+
+    def test_includes_timestamp(self, monorepo: Path) -> None:
+        """Commits include timestamp field."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        assert all(c.timestamp != 0 for c in commits)
+
+    def test_with_message_depth_full(self, monorepo: Path) -> None:
+        """get_commits_for_path supports message_depth parameter."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty", message_depth="full")
+        assert len(commits) == 2
+        # With full depth, body should be populated (even if empty)
+        assert all(isinstance(c.body, str) for c in commits)
+
+    def test_with_message_depth_refs(self, monorepo: Path) -> None:
+        """get_commits_for_path with message_depth='refs' extracts issue refs."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty", message_depth="refs")
+        assert len(commits) == 2
+        # Refs depth should have empty body
+        assert all(c.body == "" for c in commits)
+        # Should have refs list (even if empty for these test commits)
+        assert all(isinstance(c.refs, list) for c in commits)
+
+    def test_all_branches_false(self, monorepo: Path) -> None:
+        """get_commits_for_path respects all_branches=False."""
+        # On main branch, should still get both commits (both are on main)
+        commits = get_commits_for_path(monorepo, "pyvider-cty", all_branches=False)
+        assert len(commits) == 2
+
+    def test_with_include_files(self, monorepo: Path) -> None:
+        """get_commits_for_path attaches per-commit file lists when requested."""
+        commits = get_commits_for_path(monorepo, "pyvider-cty", include_files=True)
+        assert len(commits) == 2
+        # Files should be attached
+        assert commits[0].files is not None
+        assert len(commits[0].files) > 0  # pyvider-cty/ was created/modified

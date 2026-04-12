@@ -52,6 +52,26 @@ class TestSettings:
         assert settings.file_rules == []
         assert settings.repos == {}
 
+    def test_valid_cadence_gap_format(self) -> None:
+        """Test that gap-format cadence is accepted."""
+        settings = Settings(cadence="gap:30m")
+        assert settings.cadence == "gap:30m"
+
+    def test_valid_cadence_gap_hours(self) -> None:
+        """Test that gap-format with hours is accepted."""
+        settings = Settings(cadence="gap:2h")
+        assert settings.cadence == "gap:2h"
+
+    def test_invalid_cadence_raises(self) -> None:
+        """Test that invalid cadence values raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid cadence"):
+            Settings(cadence="monthly")
+
+    def test_invalid_cadence_gap_format_raises(self) -> None:
+        """Test that invalid gap format raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid cadence"):
+            Settings(cadence="gap:invalid")
+
 
 class TestLoadSettings:
     def test_default_settings(self) -> None:

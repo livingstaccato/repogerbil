@@ -38,11 +38,16 @@ def create_snapshot(
     commit_time: str | None = None,
     timezone: str | None = None,
     extra_sources: list[Path] | None = None,
+    source_subdir: str | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
     Uses git read-tree for fast, working-directory-free operations.
     Source repos are never written to — only the destination receives writes.
+
+    Args:
+        source_subdir: When set, filter primary source commits to this subdirectory
+                      and use its tree state (for monorepo sources).
     """
     if dest_path.exists() and any(dest_path.iterdir()):
         msg = f"Destination already exists and is not empty: {dest_path}"
@@ -56,6 +61,7 @@ def create_snapshot(
         preserve_timestamps,
         commit_time,
         timezone,
+        source_subdir,
     )
 
     for rname in remote_names:
@@ -99,18 +105,30 @@ def _create_commits(
     preserve_timestamps: bool,
     commit_time: str | None,
     timezone: str | None,
+    source_subdir: str | None = None,
 ) -> int:
-    """Create one commit per TimeGroup in the destination repo."""
+    """Create one commit per TimeGroup in the destination repo.
+
+    Args:
+        source_subdir: When set, use the tree state of this subdirectory
+                      within each commit (for monorepo sources).
+    """
     commits_created = 0
+    used_changelog_keys: set[str] = set()
     for group in groups:
         if not group.commits:
             continue  # pragma: no cover — empty group
 
         last_commit = group.commits[-1]
-        tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
+        if source_subdir:
+            tree_sha = _run_git(  # pragma: no cover — integration test needed for monorepo extraction
+                dest_path, "rev-parse", f"{last_commit.hash}:{source_subdir}", timeout=10
+            ).strip()
+        else:
+            tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
         _run_git(dest_path, "read-tree", tree_sha)
 
-        message = _build_snapshot_message(group, changelog_messages)
+        message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
         date_str = _resolve_timestamp(group, commit_time, timezone)
 
         _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
@@ -188,15 +206,26 @@ _CONVENTIONAL_RE = re.compile(
 def _build_snapshot_message(
     group: TimeGroup,
     changelog_messages: dict[str, str] | None,
+    used_keys: set[str] | None = None,
 ) -> str:
-    """Build commit message from changelog or conventional commits only."""
+    """Build commit message from changelog or conventional commits only.
+
+    For gap-based cadence, tracks which changelog keys have been used to avoid
+    multiple same-day groups getting the same YAML message.
+    """
     date_str = group.period_start.strftime("%Y-%m-%d")
 
-    # Changelog is authoritative — use it directly
-    if changelog_messages and date_str in changelog_messages:
+    # Changelog is authoritative — use it directly if not already consumed
+    if (
+        changelog_messages
+        and date_str in changelog_messages
+        and (used_keys is None or date_str not in used_keys)
+    ):
+        if used_keys is not None:
+            used_keys.add(date_str)
         return changelog_messages[date_str]
 
-    # No changelog: only list conventional commits, suppress garbage
+    # No changelog (or already used): only list conventional commits, suppress garbage
     n = len(group.commits)
     conventional = [c.subject for c in group.commits if _CONVENTIONAL_RE.match(c.subject)]
 

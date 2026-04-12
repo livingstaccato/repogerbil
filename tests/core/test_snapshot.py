@@ -194,3 +194,62 @@ class TestCreateSnapshot:
             ["git", "log", "--format=%B", "-1"], cwd=dest, capture_output=True, text=True, check=True
         ).stdout.strip()
         assert log == "feat: single thing"
+
+    def test_same_day_gap_groups_distinct_messages(self, tmp_path: Path) -> None:
+        """With gap cadence, two same-day groups get distinct messages.
+
+        First group (session 1) uses changelog if available.
+        Subsequent groups (session 2+) use the fallback format.
+        """
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        # Two groups on the same day (group2 has multiple commits to trigger date+count format)
+        group1 = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: feature 1")],
+        )
+        group2 = TimeGroup(
+            period_start=datetime(2026, 4, 7, 14, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 14, 30, tzinfo=UTC),
+            commits=[
+                CommitInfo(hash="b" * 40, date="2026-04-07", subject="fix: fix 1"),
+                CommitInfo(hash="c" * 40, date="2026-04-07", subject="chore: update"),
+            ],
+        )
+
+        changelog = {"2026-04-07": "feat(changelog): changelog message for 2026-04-07"}
+        used_keys: set[str] = set()
+
+        # First group gets the changelog
+        msg1 = _build_snapshot_message(group1, changelog, used_keys)
+        assert msg1 == "feat(changelog): changelog message for 2026-04-07"
+        assert "2026-04-07" in used_keys
+
+        # Second group falls back to date+count format (different message)
+        msg2 = _build_snapshot_message(group2, changelog, used_keys)
+        assert msg2 != msg1
+        assert "2026-04-07: 2 commits" in msg2
+        assert "fix: fix 1" in msg2
+
+    def test_used_keys_none_backward_compat(self, tmp_path: Path) -> None:
+        """When used_keys=None, both groups get the same changelog (backward compat)."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group1 = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: feature 1")],
+        )
+        group2 = TimeGroup(
+            period_start=datetime(2026, 4, 7, 14, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 14, 30, tzinfo=UTC),
+            commits=[CommitInfo(hash="b" * 40, date="2026-04-07", subject="fix: feature 2")],
+        )
+
+        changelog = {"2026-04-07": "feat(changelog): changelog message for 2026-04-07"}
+
+        # Without tracking, both get the same message (old behavior)
+        msg1 = _build_snapshot_message(group1, changelog, used_keys=None)
+        msg2 = _build_snapshot_message(group2, changelog, used_keys=None)
+        assert msg1 == msg2 == "feat(changelog): changelog message for 2026-04-07"

@@ -29,6 +29,7 @@ class CommitInfo:
     files: list[str] = field(default_factory=list)
     body: str = ""
     refs: list[str] = field(default_factory=list)
+    timestamp: int = 0  # unix epoch; 0 means only date available
 
 
 @dataclass(frozen=True)
@@ -133,24 +134,25 @@ def get_commit_for_hash(
     include_files: bool = False,
 ) -> CommitInfo:
     """Return commit info for a specific hash."""
-    fmt = "%H%x00%as%x00%s%x00%b"
+    fmt = "%H%x00%as%x00%at%x00%s%x00%b"
     output = _run_git(repo_path, "show", "--no-patch", f"--format={fmt}", commit_hash, timeout=20)
-    parts = output.strip().split("\x00", 3)
-    if len(parts) < 4:
+    parts = output.strip().split("\x00", 4)
+    if len(parts) < 5:
         raise GitCommandError(
             f"Git command failed: git show --no-patch --format={fmt} {commit_hash}",
             returncode=1,
             stderr="unexpected commit output",
         )
 
-    body = parts[3].strip()
+    body = parts[4].strip()
     refs = [f"#{r}" for r in _REF_RE.findall(body)]
     commit = CommitInfo(
         hash=parts[0].strip(),
         date=parts[1].strip(),
-        subject=parts[2].strip(),
+        subject=parts[3].strip(),
         body=body if message_depth == "full" else "",
         refs=refs if message_depth in ("refs", "full") else [],
+        timestamp=int(parts[2].strip()),
     )
 
     if not include_files:
@@ -207,21 +209,22 @@ def get_commits_for_hashes(
 
 def _parse_commits_with_body(repo_path: str | Path, date_str: str, message_depth: str) -> list[CommitInfo]:
     """Parse commits using full message format (body + refs)."""
-    fmt = "%H%x00%as%x00%s%x00%b%x00END"
+    fmt = "%H%x00%as%x00%at%x00%s%x00%b%x00END"
     output = _run_git(repo_path, "log", f"--format={fmt}", "--all")
     commits: list[CommitInfo] = []
     for block in output.split("\x00END"):
-        parts = block.strip().split("\x00", 3)
+        parts = block.strip().split("\x00", 4)
         if len(parts) >= 3 and parts[1].strip() == date_str:
-            body = parts[3].strip() if len(parts) > 3 else ""
+            body = parts[4].strip() if len(parts) > 4 else ""
             refs = [f"#{r}" for r in _REF_RE.findall(body)]
             commits.append(
                 CommitInfo(
                     hash=parts[0].strip(),
                     date=parts[1].strip(),
-                    subject=parts[2].strip(),
+                    subject=parts[3].strip(),
                     body=body if message_depth == "full" else "",
                     refs=refs,
+                    timestamp=int(parts[2].strip()),
                 )
             )
     return commits
@@ -229,12 +232,19 @@ def _parse_commits_with_body(repo_path: str | Path, date_str: str, message_depth
 
 def _parse_commits_subject_only(repo_path: str | Path, date_str: str) -> list[CommitInfo]:
     """Parse commits using subject-only format."""
-    output = _run_git(repo_path, "log", "--format=%H\t%as\t%s", "--all")
+    output = _run_git(repo_path, "log", "--format=%H\t%as\t%at\t%s", "--all")
     commits: list[CommitInfo] = []
     for line in output.strip().splitlines():
-        parts = line.split("\t", 2)
-        if len(parts) == 3 and parts[1] == date_str:
-            commits.append(CommitInfo(hash=parts[0], date=parts[1], subject=parts[2]))
+        parts = line.split("\t", 3)
+        if len(parts) >= 3 and parts[1] == date_str:
+            commits.append(
+                CommitInfo(
+                    hash=parts[0],
+                    date=parts[1],
+                    subject=parts[3] if len(parts) > 3 else "",
+                    timestamp=int(parts[2]),
+                )
+            )
     return commits
 
 
@@ -286,6 +296,76 @@ def get_commits_for_date(
         commits = _parse_commits_subject_only(repo_path, date_str)
 
     commits.reverse()
+
+    if include_files and commits:
+        commits = _attach_file_lists(repo_path, commits)
+
+    return commits
+
+
+def get_commits_for_path(
+    repo_path: str | Path,
+    subpath: str,
+    all_branches: bool = True,
+    include_files: bool = False,
+    message_depth: str = "subject",
+) -> list[CommitInfo]:
+    """Get commits that touched a subdirectory (path-scoped commit collection).
+
+    Args:
+        repo_path: Path to the git repository.
+        subpath: Subdirectory path to filter by (e.g., "pyvider-cty").
+        all_branches: If True, use --all to search all branches.
+        include_files: Attach per-commit file lists.
+        message_depth: "subject", "refs" (extract issue refs), or "full" (include body).
+
+    Returns:
+        List of CommitInfo for commits that touched the subpath, sorted oldest first.
+    """
+    fmt = (
+        "%H%x00%as%x00%at%x00%s%x00%b%x00END"
+        if message_depth in ("refs", "full")
+        else "%H%x00%as%x00%at%x00%s"
+    )
+
+    cmd = ["log", f"--format={fmt}"]
+    if all_branches:
+        cmd.append("--all")
+    cmd.extend(["--", f"{subpath}/"])
+
+    output = _run_git(repo_path, *cmd)
+    commits: list[CommitInfo] = []
+
+    if message_depth in ("refs", "full"):
+        for block in output.split("\x00END"):
+            parts = block.strip().split("\x00", 4)
+            if len(parts) >= 3:
+                body = parts[4].strip() if len(parts) > 4 else ""
+                refs = [f"#{r}" for r in _REF_RE.findall(body)]
+                commits.append(
+                    CommitInfo(
+                        hash=parts[0].strip(),
+                        date=parts[1].strip(),
+                        subject=parts[3].strip() if len(parts) > 3 else "",
+                        body=body if message_depth == "full" else "",
+                        refs=refs,
+                        timestamp=int(parts[2].strip()),
+                    )
+                )
+    else:
+        for line in output.strip().splitlines():
+            parts = line.split("\x00", 3)
+            if len(parts) >= 3:  # pragma: no cover — false branch unreachable with valid git output
+                commits.append(
+                    CommitInfo(
+                        hash=parts[0],
+                        date=parts[1],
+                        subject=parts[3] if len(parts) > 3 else "",
+                        timestamp=int(parts[2]),
+                    )
+                )
+
+    commits.sort(key=lambda c: c.timestamp)
 
     if include_files and commits:
         commits = _attach_file_lists(repo_path, commits)

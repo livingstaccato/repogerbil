@@ -26,6 +26,7 @@ class SnapshotResult:
     dest_path: str
     groups_created: int
     commits_created: int
+    groups_skipped: int = 0  # Duplicates removed during deduplication
 
 
 def create_snapshot(
@@ -54,9 +55,13 @@ def create_snapshot(
         raise RuntimeError(msg)
 
     remote_names = _init_and_fetch(dest_path, source_path, extra_sources)
+
+    # Deduplicate groups by tree state BEFORE creating commits
+    dedup_groups, groups_skipped = _deduplicate_groups(dest_path, groups, source_subdir)
+
     commits_created = _create_commits(
         dest_path,
-        groups,
+        dedup_groups,
         changelog_messages,
         preserve_timestamps,
         commit_time,
@@ -74,6 +79,7 @@ def create_snapshot(
         dest_path=str(dest_path),
         groups_created=len(groups),
         commits_created=commits_created,
+        groups_skipped=groups_skipped,
     )
 
 
@@ -98,6 +104,53 @@ def _init_and_fetch(
     return remote_names
 
 
+def _deduplicate_groups(
+    dest_path: Path,
+    groups: list[TimeGroup],
+    source_subdir: str | None = None,
+) -> tuple[list[TimeGroup], int]:
+    """Deduplicate groups by their tree state, keeping only unique code states.
+
+    Returns tuple of (deduplicated_groups, number_skipped).
+
+    Args:
+        dest_path: Path to destination repo with all sources fetched.
+        groups: Groups to deduplicate.
+        source_subdir: Optional subdirectory for monorepo filtering.
+    """
+    seen_trees: set[str] = set()
+    unique_groups: list[TimeGroup] = []
+    skipped = 0
+
+    for group in groups:
+        if not group.commits:
+            continue  # pragma: no cover — empty group
+
+        last_commit = group.commits[-1]
+        try:
+            if source_subdir:
+                # Try subdir first (for monorepo sources)
+                tree_sha = _run_git(
+                    dest_path, "rev-parse", f"{last_commit.hash}:{source_subdir}", timeout=10
+                ).strip()
+            else:
+                # Full tree (for standalone repos)
+                tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
+        except GitCommandError:
+            # Fall back to full tree if subdir doesn't exist
+            tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
+
+        # Skip if we've already seen this tree state
+        if tree_sha in seen_trees:
+            skipped += 1
+            continue
+
+        seen_trees.add(tree_sha)
+        unique_groups.append(group)
+
+    return unique_groups, skipped
+
+
 def _create_commits(
     dest_path: Path,
     groups: list[TimeGroup],
@@ -109,40 +162,31 @@ def _create_commits(
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
-    Deduplicates by tree state: skips groups with tree SHAs already committed.
-
     Args:
         source_subdir: When set, use the tree state of this subdirectory
                       within each commit (for monorepo sources).
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
-    seen_trees: set[str] = set()
-    skipped_duplicates = 0
 
     for group in groups:
         if not group.commits:
             continue  # pragma: no cover — empty group
 
         last_commit = group.commits[-1]
-        if source_subdir:
-            try:
+        try:
+            if source_subdir:
                 # Try subdir first (for monorepo sources)
                 tree_sha = _run_git(
                     dest_path, "rev-parse", f"{last_commit.hash}:{source_subdir}", timeout=10
                 ).strip()
-            except GitCommandError:
-                # Fall back to full tree (for standalone repos that don't have subdir)
+            else:
+                # Full tree (for standalone repos)
                 tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
-        else:
+        except GitCommandError:
+            # Fall back to full tree if subdir doesn't exist
             tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
 
-        # Skip if we've already seen this tree state
-        if tree_sha in seen_trees:
-            skipped_duplicates += 1
-            continue
-
-        seen_trees.add(tree_sha)
         _run_git(dest_path, "read-tree", tree_sha)
 
         message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)

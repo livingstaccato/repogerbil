@@ -93,7 +93,7 @@ def snapshot(
         return
 
     groups = group_by_cadence(all_commits, cad)
-    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups (deduplicating by tree state...)")
+    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
 
     changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
 
@@ -109,7 +109,8 @@ def snapshot(
         extra_sources=[Path(e) for e in extra_sources],
         source_subdir=source_subdir,
     )
-    click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits)")
+    dedup_msg = f" ({result.groups_skipped} duplicate tree states removed)" if result.groups_skipped else ""
+    click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits){dedup_msg}")
 
 
 @click.command(name="multi-snapshot")

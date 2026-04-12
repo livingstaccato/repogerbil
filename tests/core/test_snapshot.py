@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
 from repogerbil.core.snapshot import SnapshotResult, create_snapshot
@@ -253,3 +255,42 @@ class TestCreateSnapshot:
         msg1 = _build_snapshot_message(group1, changelog, used_keys=None)
         msg2 = _build_snapshot_message(group2, changelog, used_keys=None)
         assert msg1 == msg2 == "feat(changelog): changelog message for 2026-04-07"
+
+    def test_source_subdir_fallback_to_full_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """snapshot falls back to full tree when subdir doesn't exist in commit."""
+        from repogerbil.core.errors import GitCommandError
+        from repogerbil.core.git import _run_git
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snapshot"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+
+        # Mock _run_git to fail on subdir lookup, then fall back to full tree
+        original_run_git = _run_git
+        call_count: list[int] = [0]
+
+        def mock_run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
+            call_count[0] += 1
+            # Fail on first rev-parse with subdir (HASH:subdir)
+            if len(args) >= 2 and ":" in str(args[1]):
+                raise GitCommandError(
+                    "Git command failed: git rev-parse HASH:nonexistent",
+                    returncode=128,
+                    stderr="path 'nonexistent' does not exist",
+                )
+            return original_run_git(repo_path, *args, timeout=timeout)
+
+        monkeypatch.setattr("repogerbil.core.snapshot._run_git", mock_run_git)
+        result = create_snapshot(source, dest, groups, source_subdir="nonexistent")
+        assert result.commits_created == 1
+        # Verify snapshot was created successfully
+        assert dest.exists()

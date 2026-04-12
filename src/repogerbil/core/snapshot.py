@@ -121,9 +121,14 @@ def _create_commits(
 
         last_commit = group.commits[-1]
         if source_subdir:
-            tree_sha = _run_git(  # pragma: no cover — integration test needed for monorepo extraction
-                dest_path, "rev-parse", f"{last_commit.hash}:{source_subdir}", timeout=10
-            ).strip()
+            try:
+                # Try subdir first (for monorepo sources)
+                tree_sha = _run_git(
+                    dest_path, "rev-parse", f"{last_commit.hash}:{source_subdir}", timeout=10
+                ).strip()
+            except GitCommandError:
+                # Fall back to full tree (for standalone repos that don't have subdir)
+                tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
         else:
             tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
         _run_git(dest_path, "read-tree", tree_sha)

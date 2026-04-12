@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 
 class Embedder(Protocol):  # pragma: no cover — Protocol class, no runtime code
@@ -28,11 +28,11 @@ class SentenceTransformerEmbedder:  # pragma: no cover — requires sentence-tra
 
     def embed(self, text: str) -> list[float]:
         """Embed a single text string."""
-        return self._model.encode(text).tolist()
+        return cast(list[float], self._model.encode(text).tolist())
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of text strings."""
-        return self._model.encode(texts).tolist()  # type: ignore[no-any-return]
+        return cast(list[list[float]], self._model.encode(texts).tolist())
 
 
 class SimpleHashEmbedder:

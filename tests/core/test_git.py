@@ -9,13 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import (
     CommitInfo,
     DiffStats,
     _attach_file_lists,
     get_active_dates,
+    get_commit_for_hash,
     get_commits_for_date,
+    get_commits_for_hashes,
     get_diff_stats,
+    get_hidden_ref_dates,
+    get_hidden_ref_hashes,
     parse_shortstat,
 )
 
@@ -28,6 +33,7 @@ def git_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
 
     # Commit 1
     (repo / "file1.py").write_text("print('hello')\n")
@@ -183,6 +189,7 @@ class TestGetDiffStats:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
         (repo / "f.txt").write_text("x")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
         subprocess.run(
@@ -213,6 +220,55 @@ class TestGetDiffStatsMocked:
             mock_run.return_value = MagicMock(returncode=0, stdout="\n")
             res = get_diff_stats(".", "h1", "h2")
             assert res.files_changed == 0
+
+
+class TestHiddenRefs:
+    def test_hidden_ref_hashes_git_failure(self) -> None:
+        with patch(
+            "repogerbil.core.git._run_git",
+            side_effect=GitCommandError("boom", returncode=1, stderr="boom"),
+        ):
+            assert get_hidden_ref_hashes(".") == []
+
+    def test_hidden_ref_dates_git_failure(self) -> None:
+        with (
+            patch("repogerbil.core.git.get_hidden_ref_hashes", return_value=["a" * 40]),
+            patch(
+                "repogerbil.core.git._run_git",
+                side_effect=GitCommandError("boom", returncode=1, stderr="boom"),
+            ),
+        ):
+            assert get_hidden_ref_dates(".") == set()
+
+    def test_hidden_ref_dates_ignores_empty_date(self) -> None:
+        with (
+            patch("repogerbil.core.git.get_hidden_ref_hashes", return_value=["a" * 40]),
+            patch("repogerbil.core.git._run_git", return_value=" \n"),
+        ):
+            assert get_hidden_ref_dates(".") == set()
+
+
+class TestCommitLookup:
+    def test_get_commit_for_hash_invalid_output(self) -> None:
+        with patch("repogerbil.core.git._run_git", return_value="bad-output"), pytest.raises(GitCommandError):
+            get_commit_for_hash(".", "a" * 40)
+
+    def test_get_commits_for_hashes(self, git_repo: Path) -> None:
+        commits = get_commits_for_date(git_repo, "2026-04-07")
+        hashes = [c.hash for c in commits]
+        resolved = get_commits_for_hashes(git_repo, hashes, include_files=True)
+        assert len(resolved) == len(hashes)
+        assert all(c.files for c in resolved)
+
+    def test_get_commit_for_hash_empty_files_output(self) -> None:
+        h = "a" * 40
+        with patch("repogerbil.core.git._run_git") as mock_run:
+            mock_run.side_effect = [
+                f"{h}\x002026-04-07\x00feat: test\x00body\n",
+                "\n",
+            ]
+            commit = get_commit_for_hash(".", h, include_files=True)
+            assert commit.files == []
 
 
 class TestGetCommitsMocked:

@@ -90,6 +90,121 @@ def get_active_dates(repo_path: str | Path) -> set[str]:
     return set(output.strip().splitlines()) if output.strip() else set()
 
 
+def get_hidden_ref_hashes(repo_path: str | Path) -> list[str]:
+    """Return commit hashes for unreachable objects in the repository."""
+    try:
+        output = _run_git(
+            repo_path,
+            "fsck",
+            "--full",
+            "--no-reflogs",
+            "--unreachable",
+            "--no-progress",
+        )
+    except GitCommandError:
+        return []
+
+    hashes: list[str] = []
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3 and parts[0] == "unreachable" and parts[1] == "commit":
+            hashes.append(parts[2])
+    return hashes
+
+
+def get_hidden_ref_dates(repo_path: str | Path) -> set[str]:
+    """Return author dates for unreachable commits in the repository."""
+    dates: set[str] = set()
+    for commit_hash in get_hidden_ref_hashes(repo_path):
+        try:
+            output = _run_git(repo_path, "show", "--no-patch", "--format=%as", commit_hash, timeout=10)
+        except GitCommandError:
+            continue
+        date_str = output.strip()
+        if date_str:
+            dates.add(date_str)
+    return dates
+
+
+def get_commit_for_hash(
+    repo_path: str | Path,
+    commit_hash: str,
+    message_depth: str = "subject",
+    include_files: bool = False,
+) -> CommitInfo:
+    """Return commit info for a specific hash."""
+    fmt = "%H%x00%as%x00%s%x00%b"
+    output = _run_git(repo_path, "show", "--no-patch", f"--format={fmt}", commit_hash, timeout=20)
+    parts = output.strip().split("\x00", 3)
+    if len(parts) < 4:
+        raise GitCommandError(
+            f"Git command failed: git show --no-patch --format={fmt} {commit_hash}",
+            returncode=1,
+            stderr="unexpected commit output",
+        )
+
+    body = parts[3].strip()
+    refs = [f"#{r}" for r in _REF_RE.findall(body)]
+    commit = CommitInfo(
+        hash=parts[0].strip(),
+        date=parts[1].strip(),
+        subject=parts[2].strip(),
+        body=body if message_depth == "full" else "",
+        refs=refs if message_depth in ("refs", "full") else [],
+    )
+
+    if not include_files:
+        return commit
+
+    files_output = _run_git(
+        repo_path,
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "--no-renames",
+        "--no-ext-diff",
+        commit_hash,
+        timeout=20,
+    )
+    files: list[str] = []
+    for line in files_output.splitlines():
+        stripped = line.strip()
+        if stripped:
+            files.append(stripped)
+
+    return CommitInfo(
+        hash=commit.hash,
+        date=commit.date,
+        subject=commit.subject,
+        files=files,
+        body=commit.body,
+        refs=commit.refs,
+    )
+
+
+def get_commits_for_hashes(
+    repo_path: str | Path,
+    hashes: list[str],
+    message_depth: str = "subject",
+    include_files: bool = False,
+) -> list[CommitInfo]:
+    """Return commit info objects for an explicit list of hashes."""
+    commits: list[CommitInfo] = []
+    for commit_hash in hashes:
+        commits.append(
+            get_commit_for_hash(
+                repo_path,
+                commit_hash,
+                message_depth=message_depth,
+                include_files=include_files,
+            )
+        )
+    commits.sort(key=lambda c: c.date)
+    return commits
+
+
 def _parse_commits_with_body(repo_path: str | Path, date_str: str, message_depth: str) -> list[CommitInfo]:
     """Parse commits using full message format (body + refs)."""
     fmt = "%H%x00%as%x00%s%x00%b%x00END"

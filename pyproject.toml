@@ -176,6 +176,7 @@ paths_to_mutate = [
     "src/repogerbil/core/embeddings.py",
     "src/repogerbil/core/errors.py",
     "src/repogerbil/core/lint.py",
+    "src/repogerbil/core/provenance.py",
     "src/repogerbil/core/snapshot.py",
     "src/repogerbil/core/state.py",
     "src/repogerbil/core/summary.py",

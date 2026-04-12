@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from repogerbil.core.config import RepoOverride
-from repogerbil.core.git import get_active_dates
+from repogerbil.core.provenance import collect_effective_dates
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ def find_missing(
     tracked: dict[str, str],
     changelog_dir: Path,
     repo_overrides: dict[str, RepoOverride] | None = None,
+    extra_sources: list[Path] | None = None,
 ) -> list[MissingDate]:
     """Find dates with commits but no changelog file.
 
@@ -46,7 +47,7 @@ def find_missing(
 
         if path and path.is_dir():
             # Active repo: compare git dates against changelogs
-            commit_dates = get_active_dates(path)
+            commit_dates = collect_effective_dates(path, extra_sources=extra_sources)
             existing = _get_changelog_dates(changelog_dir / repo_name, repo_name)
             expected = {d for d in commit_dates if d <= today}
 

@@ -21,6 +21,7 @@ def _create_test_repo(tmp_path: Path) -> Path:
         ["git", "config", "user.email", "dev@example.com"], cwd=repo, capture_output=True, check=True
     )
     subprocess.run(["git", "config", "user.name", "Developer"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
 
     # Day 1: two commits

@@ -68,6 +68,7 @@ class TestGetDiffContent:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
         env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
         (repo / "a.py").write_text("x\n")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)

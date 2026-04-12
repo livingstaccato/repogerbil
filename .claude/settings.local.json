@@ -3,7 +3,8 @@
     "allow": [
       "Bash(gerbil status:*)",
       "Bash(gerbil audit:*)",
-      "Bash([ ! -d src/repogerbil/plugin ])"
+      "Bash([ ! -d src/repogerbil/plugin ])",
+      "Bash(gerbil distill-ecosystem:*)"
     ]
   }
 }

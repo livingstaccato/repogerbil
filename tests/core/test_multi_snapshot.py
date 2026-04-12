@@ -32,6 +32,7 @@ def _make_repo(tmp_path: Path, name: str, commits: list[tuple[str, str, str]]) -
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
 
     for date_str, filename, message in commits:

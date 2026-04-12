@@ -18,6 +18,7 @@ def _init_repo(tmp_path: Path, name: str, dates: list[str]) -> Path:
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
     for d in dates:
         (repo / f"{d}.txt").write_text(d)

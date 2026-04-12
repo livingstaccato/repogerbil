@@ -32,7 +32,8 @@ from repogerbil.core.git import (
     get_commits_for_date,
     get_diff_stats,
 )
-from repogerbil.core.verify import count_accounted_files, verify_changelog
+from repogerbil.core.provenance import describe_resolution, resolve_provenance
+from repogerbil.core.verify import count_accounted_files
 
 _PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s")
 
@@ -76,6 +77,7 @@ except ImportError:  # pragma: no cover
 
 # Register distill/snapshot commands
 from repogerbil.cli.commands.distill_cmds import (  # noqa: E402
+    distill_ecosystem,
     export_cadence,
     multi_snapshot,
     preview,
@@ -85,6 +87,7 @@ from repogerbil.cli.commands.distill_cmds import (  # noqa: E402
 cli.add_command(snapshot)
 cli.add_command(multi_snapshot)
 cli.add_command(export_cadence)
+cli.add_command(distill_ecosystem)
 cli.add_command(preview)
 
 # Register lint command
@@ -118,6 +121,13 @@ def status(repo_path: str) -> None:
 @click.option("--prompt", "prompt_mode", is_flag=True, help="Output LLM prompt instead of YAML")
 @click.option("--force", is_flag=True, help="Overwrite existing files")
 @click.option("--message-depth", type=click.Choice(["subject", "refs", "full"]), default=None)
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
 def changelog(
     repo_path: str,
     date: str,
@@ -126,6 +136,7 @@ def changelog(
     prompt_mode: bool,
     force: bool,
     message_depth: str | None,
+    extra_sources: tuple[str, ...],
 ) -> None:
     """Generate a changelog for a repository date."""
     path = Path(repo_path)
@@ -133,13 +144,22 @@ def changelog(
     repo_name = path.name
     settings = load_settings(repo=repo_name)
     depth = message_depth or settings.message_depth
+    extra_paths = [Path(p) for p in extra_sources]
 
-    commits = get_commits_for_date(path, date, message_depth=depth, include_files=True)
-    if not commits:
+    resolution = resolve_provenance(
+        repo_name,
+        date,
+        path,
+        extra_sources=extra_paths,
+        message_depth=depth,
+        include_files=True,
+    )
+    if not resolution.commits:
         click.echo(f"No commits found for {repo_name} on {date}")
         return
 
-    stats = get_diff_stats(path, commits[0].hash, commits[-1].hash)
+    commits = resolution.commits
+    stats = resolution.stats or get_diff_stats(path, commits[0].hash, commits[-1].hash)
     click.echo(f"{repo_name}/{date}: {len(commits)} commits, {stats.files_changed} files")
 
     if prompt_mode:
@@ -185,21 +205,36 @@ def _handle_prompt_mode(
 @click.argument("changelog_dir", type=click.Path(exists=True))
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--since", help="Only fix dates >= this (YYYY-MM-DD)")
-def fix_stats(changelog_dir: str, repo_path: str, since: str | None) -> None:
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
+def fix_stats(changelog_dir: str, repo_path: str, since: str | None, extra_sources: tuple[str, ...]) -> None:
     """Fix stats in existing changelogs to match git truth."""
     cl_dir = Path(changelog_dir)
     rp = Path(repo_path)
     repo_name = rp.name
+    extra_paths = [Path(p) for p in extra_sources]
     fixed = 0
 
     for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
         date_str = "-".join(yaml_file.name.split("-")[:3])
         if since and date_str < since:
             continue
-        commits = get_commits_for_date(rp, date_str)
+        resolution = resolve_provenance(
+            repo_name,
+            date_str,
+            rp,
+            extra_sources=extra_paths,
+            include_files=False,
+        )
+        commits = resolution.commits
         if not commits:  # pragma: no cover — changelog date with no git commits
             continue
-        stats = get_diff_stats(rp, commits[0].hash, commits[-1].hash)
+        stats = resolution.stats or get_diff_stats(rp, commits[0].hash, commits[-1].hash)
         if update_stats(yaml_file, stats, len(commits)):
             click.echo(f"Fixed {repo_name}/{date_str}: {len(commits)} commits, {stats.files_changed} files")
             fixed += 1
@@ -212,15 +247,29 @@ def fix_stats(changelog_dir: str, repo_path: str, since: str | None) -> None:
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--since", help="Only verify dates >= this (YYYY-MM-DD)")
 @click.option("--tolerance", type=int, default=None, help="% tolerance (default: from config)")
-def verify(changelog_dir: str, repo_path: str, since: str | None, tolerance: int | None) -> None:
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
+def verify(
+    changelog_dir: str,
+    repo_path: str,
+    since: str | None,
+    tolerance: int | None,
+    extra_sources: tuple[str, ...],
+) -> None:
     """Verify changelog stats against git truth."""
     cl_dir = Path(changelog_dir)
     rp = Path(repo_path)
     repo_name = rp.name
     settings = load_settings(repo=repo_name)
     tol = tolerance if tolerance is not None else settings.tolerance
+    extra_paths = [Path(p) for p in extra_sources]
 
-    stat_issues, coverage_issues, checked = _run_verification(cl_dir, rp, repo_name, since, tol)
+    stat_issues, coverage_issues, checked = _run_verification(cl_dir, rp, repo_name, since, tol, extra_paths)
     _report_verification(stat_issues, coverage_issues, checked)
 
 
@@ -230,6 +279,7 @@ def _run_verification(
     repo_name: str,
     since: str | None,
     tol: int,
+    extra_sources: list[Path] | None = None,
 ) -> tuple[list[str], list[str], int]:
     """Run verification across all changelog files."""
     stat_issues: list[str] = []
@@ -240,21 +290,32 @@ def _run_verification(
         date_str = "-".join(yaml_file.name.split("-")[:3])
         if since and date_str < since:
             continue
-        result = verify_changelog(yaml_file, rp, tolerance=tol)
-        if result is None:
+        resolution = resolve_provenance(
+            repo_name,
+            date_str,
+            rp,
+            extra_sources=extra_sources or [],
+            include_files=True,
+        )
+        if not resolution.commits:
             continue
         checked += 1
-        if not result.stats_match:
-            stat_issues.append(
-                f"  {repo_name}/{result.date}: {result.reported_files} reported vs {result.actual_files} actual"
-            )
+        stats = resolution.stats
+        if stats is None:
+            continue
         data = yaml.safe_load(yaml_file.read_text())
-        if data and result.actual_files > 0:
+        if data is None:
+            continue
+        actual_files = stats.files_changed
+        reported_files = int((data.get("stats") or {}).get("files_changed", 0))
+        if abs(reported_files - actual_files) > tol:
+            stat_issues.append(f"  {repo_name}/{date_str}: {reported_files} reported vs {actual_files} actual")
+        if data and actual_files > 0:
             accounted = count_accounted_files(data)
-            coverage = accounted / result.actual_files * 100
+            coverage = accounted / actual_files * 100
             if coverage < (100 - tol):
                 coverage_issues.append(
-                    f"  {repo_name}/{result.date}: {result.actual_files} files, {accounted} accounted ({coverage:.0f}%)"
+                    f"  {repo_name}/{date_str}: {actual_files} files, {accounted} accounted ({coverage:.0f}%)"
                 )
 
     return stat_issues, coverage_issues, checked
@@ -432,7 +493,14 @@ def summary(
 @cli.command()
 @click.argument("changelog_dir", type=click.Path(exists=True))
 @click.option("--config", "config_path", type=click.Path(), default=None, help="Path to .repogerbil.toml")
-def missing(changelog_dir: str, config_path: str | None) -> None:
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
+def missing(changelog_dir: str, config_path: str | None, extra_sources: tuple[str, ...]) -> None:
     """Show missing changelog dates across all tracked repos."""
     from repogerbil.core.audit import find_missing
 
@@ -443,7 +511,12 @@ def missing(changelog_dir: str, config_path: str | None) -> None:
         click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
         return
 
-    results = find_missing(settings.tracked, Path(changelog_dir), repo_overrides=settings.repos)
+    results = find_missing(
+        settings.tracked,
+        Path(changelog_dir),
+        repo_overrides=settings.repos,
+        extra_sources=[Path(p) for p in extra_sources],
+    )
     if not results:  # pragma: no cover
         click.echo("All reports up to date.")
     else:
@@ -486,7 +559,20 @@ def enrich(changelog_dir: str, repo_path: str, since: str | None, depth: str | N
 @click.option(
     "--prompt", "prompt_mode", is_flag=True, help="Write LLM prompt files instead of YAML changelogs"
 )
-def backfill(changelog_dir: str, config_path: str | None, since: str | None, prompt_mode: bool) -> None:
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
+def backfill(
+    changelog_dir: str,
+    config_path: str | None,
+    since: str | None,
+    prompt_mode: bool,
+    extra_sources: tuple[str, ...],
+) -> None:
     """Generate changelogs for all missing dates across tracked repos."""
     from repogerbil.core.audit import find_missing
 
@@ -497,7 +583,13 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None, pro
         click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
         return
 
-    results = find_missing(settings.tracked, Path(changelog_dir), repo_overrides=settings.repos)
+    extra_paths = [Path(p) for p in extra_sources]
+    results = find_missing(
+        settings.tracked,
+        Path(changelog_dir),
+        repo_overrides=settings.repos,
+        extra_sources=extra_paths,
+    )
     if since:  # pragma: no cover
         results = [m for m in results if m.date >= since]
 
@@ -513,11 +605,19 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None, pro
     for m in results:
         repo_path = Path(settings.tracked[m.repo])
         repo_settings = load_settings(repo=m.repo, config_path=cfg_path)
-        commits = get_commits_for_date(repo_path, m.date, include_files=True)
+        resolution = resolve_provenance(
+            m.repo,
+            m.date,
+            repo_path,
+            extra_sources=extra_paths,
+            message_depth=repo_settings.message_depth,
+            include_files=True,
+        )
+        commits = resolution.commits
         if not commits:  # pragma: no cover — date from find_missing always has commits
             continue
 
-        stats = get_diff_stats(repo_path, commits[0].hash, commits[-1].hash)
+        stats = resolution.stats or get_diff_stats(repo_path, commits[0].hash, commits[-1].hash)
 
         if prompt_mode:
             prompt_text = generate_prompt(m.repo, m.date, commits, stats, {})
@@ -532,3 +632,39 @@ def backfill(changelog_dir: str, config_path: str | None, since: str | None, pro
         generated += 1
 
     click.echo(f"\n{generated} {action} generated")
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--date", required=True, help="Date (YYYY-MM-DD)")
+@click.option(
+    "--extra-source",
+    "extra_sources",
+    multiple=True,
+    type=click.Path(),
+    help="Additional source repos or worktrees to probe",
+)
+@click.option("--message-depth", type=click.Choice(["subject", "refs", "full"]), default=None)
+@click.option("--files/--no-files", default=False, help="Include file lists when probing")
+def probe(
+    repo_path: str,
+    date: str,
+    extra_sources: tuple[str, ...],
+    message_depth: str | None,
+    files: bool,
+) -> None:
+    """Probe candidate sources for a repo/date pair."""
+    path = Path(repo_path)
+    settings = load_settings(repo=path.name)
+    depth = message_depth or settings.message_depth
+    resolution = resolve_provenance(
+        path.name,
+        date,
+        path,
+        extra_sources=[Path(p) for p in extra_sources],
+        message_depth=depth,
+        include_files=files,
+    )
+
+    for line in describe_resolution(resolution):
+        click.echo(line)

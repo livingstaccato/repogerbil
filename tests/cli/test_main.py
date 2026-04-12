@@ -11,7 +11,7 @@ from click.testing import CliRunner
 import pytest
 import yaml
 
-from repogerbil.cli.main import _handle_prompt_mode, cli
+from repogerbil.cli.main import _handle_prompt_mode, _report_verification, cli
 
 
 def _init_test_repo(tmp_path: Path) -> Path:
@@ -21,6 +21,7 @@ def _init_test_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
     (repo / "f.py").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -46,6 +47,38 @@ def _init_test_repo(tmp_path: Path) -> Path:
 def _generate_changelog(runner: CliRunner, repo: Path, out: Path) -> None:
     """Helper to generate a changelog for testing other commands."""
     runner.invoke(cli, ["changelog", str(repo), "--date", "2026-04-07", "--output-dir", str(out), "--analyze"])
+
+
+def _repo_with_hidden_commit(tmp_path: Path) -> Path:
+    repo = tmp_path / "hidden"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    (repo / "visible.py").write_text("visible\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: visible"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2025-07-23T10:00:00", "GIT_COMMITTER_DATE": "2025-07-23T10:00:00"},
+    )
+    subprocess.run(["git", "checkout", "-b", "hidden"], cwd=repo, capture_output=True, check=True)
+    (repo / "hidden.py").write_text("hidden\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: hidden"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2025-07-28T10:00:00", "GIT_COMMITTER_DATE": "2025-07-28T10:00:00"},
+    )
+    subprocess.run(["git", "checkout", "-"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "branch", "-D", "hidden"], cwd=repo, capture_output=True, check=True)
+    return repo
 
 
 class TestHelp:
@@ -173,6 +206,54 @@ class TestChangelog:
         )
         assert result.exit_code == 0
 
+    def test_extra_source_flag(self, tmp_path: Path) -> None:
+        primary = tmp_path / "primary"
+        primary.mkdir()
+        subprocess.run(["git", "init"], cwd=primary, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"], cwd=primary, capture_output=True, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "T"], cwd=primary, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=primary, capture_output=True, check=True
+        )
+        backup = tmp_path / "backup"
+        backup.mkdir()
+        subprocess.run(["git", "init"], cwd=backup, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=backup, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=backup, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=backup, capture_output=True, check=True
+        )
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (backup / "old.py").write_text("x\n")
+        subprocess.run(["git", "add", "."], cwd=backup, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: old era"],
+            cwd=backup,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2025-02-03T10:00:00", "GIT_COMMITTER_DATE": "2025-02-03T10:00:00"},
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        result = CliRunner().invoke(
+            cli,
+            [
+                "changelog",
+                str(primary),
+                "--date",
+                "2025-02-03",
+                "--output-dir",
+                str(out),
+                "--analyze",
+                "--extra-source",
+                str(backup),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Wrote" in result.output
+
 
 class TestHandlePromptMode:
     def test_uses_empty_diff_content_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,6 +285,23 @@ class TestHandlePromptMode:
         assert seen["stats"] == stats
         assert seen["diff_content"] == {}
         assert (out / repo.name / "2026-04-07-repo-prompt.md").read_text() == "prompt-body"
+
+
+class TestProbe:
+    def test_hidden_ref_probe(self, tmp_path: Path) -> None:
+        repo = _repo_with_hidden_commit(tmp_path)
+        result = CliRunner().invoke(cli, ["probe", str(repo), "--date", "2025-07-28"])
+        assert result.exit_code == 0
+        assert "hidden_ref" in result.output
+
+
+class TestReportVerification:
+    def test_outputs_issue_lines(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _report_verification(["  repo/2026-04-07: 1 reported vs 2 actual"], ["  repo/2026-04-07: gap"], 1)
+        out = capsys.readouterr().out
+        assert "Stats mismatches:" in out
+        assert "Coverage gaps:" in out
+        assert "repo/2026-04-07" in out
 
 
 class TestVerify:

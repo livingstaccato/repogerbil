@@ -464,3 +464,84 @@ class TestGetCommitsForPath:
         # Files should be attached
         assert commits[0].files is not None
         assert len(commits[0].files) > 0  # pyvider-cty/ was created/modified
+
+
+class TestDeduplication:
+    def test_resolve_commit_trees(self, monorepo: Path) -> None:
+        """resolve_commit_trees maps commit hashes to tree SHAs."""
+        from repogerbil.core.git import resolve_commit_trees
+
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        tree_map = resolve_commit_trees(monorepo, commits)
+
+        assert len(tree_map) == len(commits)
+        # Each commit should map to a valid SHA
+        for commit in commits:
+            assert commit.hash in tree_map
+            assert len(tree_map[commit.hash]) == 40  # SHA1 length
+
+    def test_deduplicate_by_tree_removes_duplicates(self, monorepo: Path) -> None:
+        """deduplicate_by_tree keeps only unique tree states."""
+        from repogerbil.core.git import deduplicate_by_tree, resolve_commit_trees
+
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        # Create artificial duplicates by repeating commits
+        duplicated = commits + commits
+        tree_map = resolve_commit_trees(monorepo, duplicated)
+        unique = deduplicate_by_tree(duplicated, tree_map)
+
+        # Should deduplicate back to original count
+        assert len(unique) == len(commits)
+        # Should maintain chronological order
+        assert unique[0].date <= unique[1].date
+
+    def test_deduplicate_by_tree_empty(self) -> None:
+        """deduplicate_by_tree handles empty input."""
+        from repogerbil.core.git import deduplicate_by_tree
+
+        unique = deduplicate_by_tree([], {})
+        assert len(unique) == 0
+
+    def test_resolve_commit_trees_with_subdir(self, monorepo: Path) -> None:
+        """resolve_commit_trees resolves subdir trees when path exists."""
+        from repogerbil.core.git import resolve_commit_trees
+
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        tree_map = resolve_commit_trees(monorepo, commits, source_subdir="pyvider-cty")
+
+        # Should still get valid tree SHAs for all commits
+        assert len(tree_map) == len(commits)
+        for commit in commits:
+            assert commit.hash in tree_map
+            assert len(tree_map[commit.hash]) == 40
+
+    def test_resolve_commit_trees_subdir_fallback(
+        self, monorepo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """resolve_commit_trees falls back to full tree if subdir doesn't exist."""
+        from repogerbil.core.errors import GitCommandError
+        from repogerbil.core.git import _run_git, resolve_commit_trees
+
+        original_run_git = _run_git
+        call_count: list[int] = [0]
+
+        def mock_run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
+            call_count[0] += 1
+            # Fail on first rev-parse with subdir (HASH:subdir)
+            if len(args) >= 2 and ":" in str(args[1]):
+                raise GitCommandError(
+                    "Git command failed: git rev-parse HASH:nonexistent",
+                    returncode=128,
+                    stderr="path 'nonexistent' does not exist",
+                )
+            return original_run_git(repo_path, *args, timeout=timeout)
+
+        monkeypatch.setattr("repogerbil.core.git._run_git", mock_run_git)
+        commits = get_commits_for_path(monorepo, "pyvider-cty")
+        tree_map = resolve_commit_trees(monorepo, commits, source_subdir="nonexistent")
+
+        # Should still succeed by falling back to full tree
+        assert len(tree_map) == len(commits)
+        for commit in commits:
+            assert commit.hash in tree_map
+            assert len(tree_map[commit.hash]) == 40

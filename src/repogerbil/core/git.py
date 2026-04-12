@@ -399,3 +399,61 @@ def get_diff_stats(repo_path: str | Path, first_hash: str, last_hash: str) -> Di
         return DiffStats(commits=0, files_changed=0, insertions=0, deletions=0)
     parsed = parse_shortstat(stat_line)
     return DiffStats(commits=0, **parsed)
+
+
+def resolve_commit_trees(
+    repo_path: str | Path,
+    commits: list[CommitInfo],
+    source_subdir: str | None = None,
+) -> dict[str, str]:
+    """Resolve tree SHA for each commit (monorepo subdir or full tree).
+
+    Returns dict mapping commit hash → tree SHA.
+    Falls back to full tree if subdir doesn't exist in commit.
+
+    Args:
+        repo_path: Path to git repository with all commits fetched.
+        commits: List of commits to resolve trees for.
+        source_subdir: Optional subdirectory for monorepo filtering.
+    """
+    tree_map: dict[str, str] = {}
+    for commit in commits:
+        try:
+            if source_subdir:
+                # Try subdir first (monorepo)
+                tree_sha = _run_git(
+                    repo_path, "rev-parse", f"{commit.hash}:{source_subdir}", timeout=10
+                ).strip()
+            else:
+                # Full tree (standalone)
+                tree_sha = _run_git(repo_path, "rev-parse", f"{commit.hash}^{{tree}}", timeout=10).strip()
+        except GitCommandError:
+            # Fall back to full tree if subdir doesn't exist
+            tree_sha = _run_git(repo_path, "rev-parse", f"{commit.hash}^{{tree}}", timeout=10).strip()
+        tree_map[commit.hash] = tree_sha
+    return tree_map
+
+
+def deduplicate_by_tree(
+    commits: list[CommitInfo],
+    tree_map: dict[str, str],
+) -> list[CommitInfo]:
+    """Deduplicate commits by tree SHA, keeping earliest of each unique state.
+
+    Returns commits in chronological order with unique tree states only.
+
+    Args:
+        commits: List of commits (should be sorted chronologically).
+        tree_map: Dict mapping commit hash → tree SHA.
+    """
+    # Map tree SHA → earliest commit with that state
+    tree_to_commit: dict[str, CommitInfo] = {}
+    for commit in commits:
+        tree_sha = tree_map.get(commit.hash)
+        if tree_sha and tree_sha not in tree_to_commit:
+            tree_to_commit[tree_sha] = commit
+
+    # Return unique commits in chronological order
+    unique_commits = list(tree_to_commit.values())
+    unique_commits.sort(key=lambda c: c.timestamp if c.timestamp else 0)
+    return unique_commits

@@ -294,3 +294,28 @@ class TestCreateSnapshot:
         assert result.commits_created == 1
         # Verify snapshot was created successfully
         assert dest.exists()
+
+    def test_snapshot_deduplicates_tree_states(self, tmp_path: Path) -> None:
+        """snapshot skips groups with duplicate tree states."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snapshot"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+
+        # Create two groups pointing to the same commit (same tree)
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 14, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 14, 30, tzinfo=UTC),
+                commits=apr7,  # Same commits = same tree state
+            ),
+        ]
+
+        result = create_snapshot(source, dest, groups)
+        # Should deduplicate: only 1 commit created instead of 2
+        assert result.commits_created == 1
+        assert result.groups_created == 2  # But we grouped 2 groups

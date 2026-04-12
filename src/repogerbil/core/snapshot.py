@@ -109,12 +109,17 @@ def _create_commits(
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
+    Deduplicates by tree state: skips groups with tree SHAs already committed.
+
     Args:
         source_subdir: When set, use the tree state of this subdirectory
                       within each commit (for monorepo sources).
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
+    seen_trees: set[str] = set()
+    skipped_duplicates = 0
+
     for group in groups:
         if not group.commits:
             continue  # pragma: no cover — empty group
@@ -131,6 +136,13 @@ def _create_commits(
                 tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
         else:
             tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
+
+        # Skip if we've already seen this tree state
+        if tree_sha in seen_trees:
+            skipped_duplicates += 1
+            continue
+
+        seen_trees.add(tree_sha)
         _run_git(dest_path, "read-tree", tree_sha)
 
         message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)

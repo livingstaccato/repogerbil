@@ -93,7 +93,7 @@ def snapshot(
         return
 
     groups = group_by_cadence(all_commits, cad)
-    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
+    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups (deduplicating by tree state...)")
 
     changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
 

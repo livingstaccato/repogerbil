@@ -83,3 +83,16 @@ def conventional_to_category(prefix: str, vocab: VocabularyConfig | None = None)
     """Map a conventional commit prefix to a vocabulary category."""
     p = vocab.prefix_to_category if vocab else PREFIX_TO_CATEGORY
     return p.get(prefix.lower())
+
+
+VOCAB_VERSION: str = "1.0.0"
+
+
+def allowed_verbs() -> list[str]:
+    """Return semantic vocabulary verbs valid for LLM structured output.
+
+    Returns only the entries that have a non-empty ``verb`` field —
+    these are the semantic categories (instantiate, interface, etc.)
+    rather than the conventional-commit prefix aliases (feat, fix, etc.).
+    """
+    return sorted(k for k, v in CATEGORIES.items() if v.verb)

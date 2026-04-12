@@ -8,6 +8,8 @@ from repogerbil.core.vocabulary import (
     CATEGORIES,
     PREFIX_TO_CATEGORY,
     SEVERITIES,
+    VOCAB_VERSION,
+    allowed_verbs,
     category_to_conventional,
     conventional_to_category,
 )
@@ -100,3 +102,39 @@ class TestConventionalToCategory:
 
     def test_unknown_returns_none(self) -> None:
         assert conventional_to_category("nonexistent") is None
+
+
+class TestVocabVersion:
+    def test_vocab_version_is_string(self) -> None:
+        assert isinstance(VOCAB_VERSION, str)
+        assert len(VOCAB_VERSION) > 0
+
+
+class TestAllowedVerbs:
+    def test_allowed_verbs_returns_semantic_verbs(self) -> None:
+        verbs = allowed_verbs()
+        assert "instantiate" in verbs
+        assert "interface" in verbs
+        assert "remediate" in verbs
+        assert "harden" in verbs
+        assert "margin" in verbs
+        assert "decouple" in verbs
+        assert "qualify" in verbs
+        assert "streamline" in verbs
+        assert "specify" in verbs
+        assert "baseline" in verbs
+        assert "deprecate" in verbs
+
+    def test_allowed_verbs_excludes_conventional_prefixes(self) -> None:
+        verbs = allowed_verbs()
+        assert "feat" not in verbs
+        assert "fix" not in verbs
+        assert "refactor" not in verbs
+        assert "test" not in verbs
+        assert "perf" not in verbs
+        assert "docs" not in verbs
+        assert "chore" not in verbs
+
+    def test_allowed_verbs_is_sorted(self) -> None:
+        verbs = allowed_verbs()
+        assert verbs == sorted(verbs)

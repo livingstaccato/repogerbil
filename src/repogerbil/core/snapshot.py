@@ -12,11 +12,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from typing import TYPE_CHECKING
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 from repogerbil.core.multi_snapshot import _make_timestamp
+
+if TYPE_CHECKING:
+    from repogerbil.llm.generator import MessageGenerator
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,7 @@ def create_snapshot(
     timezone: str | None = None,
     extra_sources: list[Path] | None = None,
     source_subdir: str | None = None,
+    llm_generator: MessageGenerator | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
@@ -67,6 +72,7 @@ def create_snapshot(
         commit_time,
         timezone,
         source_subdir,
+        llm_generator,
     )
 
     for rname in remote_names:
@@ -159,6 +165,7 @@ def _create_commits(
     commit_time: str | None,
     timezone: str | None,
     source_subdir: str | None = None,
+    llm_generator: MessageGenerator | None = None,
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
@@ -189,7 +196,18 @@ def _create_commits(
 
         _run_git(dest_path, "read-tree", tree_sha)
 
-        message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
+        if llm_generator is not None:
+            all_files: set[str] = set()
+            for commit in group.commits:
+                all_files.update(_get_files_for_commit(dest_path, commit.hash))
+            message = llm_generator.generate(
+                date_str=group.period_start.strftime("%Y-%m-%d"),
+                files=sorted(all_files),
+                commit_count=len(group.commits),
+                original_subjects=[c.subject for c in group.commits],
+            )
+        else:
+            message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
         date_str = _resolve_timestamp(group, commit_time, timezone)
 
         _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
@@ -244,6 +262,35 @@ def _commit_with_timestamp(
         new_commit = _run_git(dest_path, *cmd, timeout=30).strip()
 
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
+
+
+def _get_files_for_commit(dest_path: Path, commit_hash: str) -> list[str]:
+    """Return the list of files changed in a commit, resolved from the fetched repo.
+
+    Args:
+        dest_path: Destination repo with all sources already fetched.
+        commit_hash: The commit hash to inspect.
+
+    Returns:
+        Sorted list of file paths changed in that commit.
+        Returns an empty list if the commit cannot be inspected (e.g. initial commit).
+    """
+    try:
+        output = _run_git(
+            dest_path,
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            "--no-renames",
+            "--no-ext-diff",
+            commit_hash,
+            timeout=20,
+        )
+        return sorted(line.strip() for line in output.splitlines() if line.strip())
+    except GitCommandError:
+        return []
 
 
 def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:

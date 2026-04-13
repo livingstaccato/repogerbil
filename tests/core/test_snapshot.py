@@ -11,7 +11,7 @@ import pytest
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
-from repogerbil.core.snapshot import SnapshotResult, create_snapshot
+from repogerbil.core.snapshot import SnapshotResult, _get_files_for_commit, create_snapshot
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -319,3 +319,50 @@ class TestCreateSnapshot:
         # Should deduplicate: only 1 commit created instead of 2
         assert result.commits_created == 1
         assert result.groups_created == 2  # But we grouped 2 groups
+
+    def test_llm_refine_uses_generator_message(self, tmp_path: Path) -> None:
+        """When llm_generator is provided, snapshot uses its output as commit messages."""
+        import json
+        from pathlib import Path as _Path
+
+        from repogerbil.llm.client import FakeOllamaClient
+        from repogerbil.llm.generator import MessageGenerator
+
+        fixtures = _Path(__file__).parent.parent / "fixtures" / "ollama_responses"
+        response = json.loads((fixtures / "valid_single.json").read_text())
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snapshot-llm"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+
+        client = FakeOllamaClient([response])
+        generator = MessageGenerator(client=client, model="gemma4")
+
+        result = create_snapshot(source, dest, groups, llm_generator=generator)
+        assert result.commits_created == 1
+
+        log = subprocess.run(
+            ["git", "log", "--format=%s", "-1"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert log == "instantiate(core): base type definitions introduced"
+
+
+class TestGetFilesForCommit:
+    def test_returns_empty_list_on_bad_hash(self, tmp_path: Path) -> None:
+        """_get_files_for_commit returns [] for an invalid commit hash."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        result = _get_files_for_commit(repo, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        assert result == []

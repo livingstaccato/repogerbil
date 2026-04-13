@@ -73,7 +73,9 @@ The commit represents {commit_count} source commit(s) from {date_str}.
 ## Instructions
 - Choose 1-4 header lines: each must be `verb(scope): description`
 - Only use multiple lines when files span genuinely distinct concerns
-- scope: short kebab-case label derived from file paths (e.g. core, cli, tests, types)
+- scope: noun naming a top-level section of the codebase — use the top-level directory
+  or module name (e.g. core, cli, tests, types, cty, schema). Do NOT use sub-path
+  descriptors like "cty-values" or "core-registry"; prefer the parent name ("cty", "core")
 - description: precise phrase describing what changed (not what the file is named)
 - summary: 2-5 sentences. Write as a technical note about what the code does or what
   capability now exists — NOT a narration of what was done. DO NOT start with "This

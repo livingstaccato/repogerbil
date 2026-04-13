@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-PROMPT_VERSION: str = "1.1.0"
+PROMPT_VERSION: str = "1.2.0"
 
 _VERB_HINTS: dict[str, str] = {
     # conventional prefixes
@@ -75,7 +75,11 @@ The commit represents {commit_count} source commit(s) from {date_str}.
 - Only use multiple lines when files span genuinely distinct concerns
 - scope: short kebab-case label derived from file paths (e.g. core, cli, tests, types)
 - description: precise phrase describing what changed (not what the file is named)
-- summary: 2-5 sentences describing what happened and its significance
+- summary: 2-5 sentences. Write as a technical note about what the code does or what
+  capability now exists — NOT a narration of what was done. DO NOT start with "This
+  commit", "This PR", "This change", "This massive commit", or any similar phrase.
+  Write in present tense as if describing the system state. Focus on WHY it matters
+  or what problem it solves, not the mechanical act of committing.
 - Use only allowed verbs — any other word in the verb position is invalid
 - Respond only with valid JSON matching the provided schema
 """

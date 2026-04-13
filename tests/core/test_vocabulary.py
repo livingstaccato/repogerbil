@@ -130,15 +130,16 @@ class TestAllowedVerbs:
         assert "baseline" in verbs
         assert "deprecate" in verbs
 
-    def test_allowed_verbs_excludes_conventional_prefixes(self) -> None:
+    def test_allowed_verbs_includes_conventional_prefixes(self) -> None:
+        """Full verb suite includes both conventional and semantic verbs."""
         verbs = allowed_verbs()
-        assert "feat" not in verbs
-        assert "fix" not in verbs
-        assert "refactor" not in verbs
-        assert "test" not in verbs
-        assert "perf" not in verbs
-        assert "docs" not in verbs
-        assert "chore" not in verbs
+        assert "feat" in verbs
+        assert "fix" in verbs
+        assert "refactor" in verbs
+        assert "test" in verbs
+        assert "perf" in verbs
+        assert "docs" in verbs
+        assert "chore" in verbs
 
     def test_allowed_verbs_is_sorted(self) -> None:
         verbs = allowed_verbs()

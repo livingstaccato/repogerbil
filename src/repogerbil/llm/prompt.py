@@ -5,19 +5,28 @@
 
 from __future__ import annotations
 
-PROMPT_VERSION: str = "1.0.0"
+PROMPT_VERSION: str = "1.1.0"
 
 _VERB_HINTS: dict[str, str] = {
-    "instantiate": "introducing new code, types, or modules",
-    "interface": "wiring two subsystems together",
-    "remediate": "fixing a bug or incorrect behaviour",
+    # conventional prefixes
+    "feat": "new user-visible feature or capability",
+    "fix": "bug fix or incorrect-behaviour correction",
+    "refactor": "code restructuring without behaviour change",
+    "test": "adding or updating tests",
+    "perf": "performance improvement",
+    "docs": "documentation only",
+    "chore": "maintenance, config, build, or dependency update",
+    # semantic aliases (prefer these when more precise)
+    "instantiate": "introducing new code, types, or modules for the first time",
+    "interface": "wiring two subsystems together or defining a contract",
+    "remediate": "fixing a bug or incorrect behaviour (more specific than fix)",
     "harden": "adding defensive handling, error hierarchy, or boundary checks",
     "margin": "adding buffer, tolerances, or safety margins",
-    "decouple": "restructuring without behaviour change (refactor)",
-    "qualify": "adding or extending test coverage",
-    "streamline": "improving performance or reducing overhead",
-    "specify": "adding documentation, comments, or reference material",
-    "baseline": "maintenance, config, dependency, or build changes",
+    "decouple": "restructuring without behaviour change (more specific than refactor)",
+    "qualify": "adding or extending test coverage (more specific than test)",
+    "streamline": "improving performance or reducing overhead (more specific than perf)",
+    "specify": "adding documentation, comments, or reference material (more specific than docs)",
+    "baseline": "maintenance, config, dependency, or build changes (more specific than chore)",
     "deprecate": "removing or marking functionality for removal",
 }
 

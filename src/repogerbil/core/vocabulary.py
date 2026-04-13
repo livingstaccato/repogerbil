@@ -85,14 +85,14 @@ def conventional_to_category(prefix: str, vocab: VocabularyConfig | None = None)
     return p.get(prefix.lower())
 
 
-VOCAB_VERSION: str = "1.0.0"
+VOCAB_VERSION: str = "1.1.0"
 
 
 def allowed_verbs() -> list[str]:
-    """Return semantic vocabulary verbs valid for LLM structured output.
+    """Return all verbs valid for LLM structured output.
 
-    Returns only the entries that have a non-empty ``verb`` field —
-    these are the semantic categories (instantiate, interface, etc.)
-    rather than the conventional-commit prefix aliases (feat, fix, etc.).
+    Returns every category key — both conventional prefixes (feat, fix,
+    refactor, …) and semantic aliases (instantiate, remediate, …) — so
+    the LLM can choose whichever term best describes the change.
     """
-    return sorted(k for k, v in CATEGORIES.items() if v.verb)
+    return sorted(CATEGORIES.keys())

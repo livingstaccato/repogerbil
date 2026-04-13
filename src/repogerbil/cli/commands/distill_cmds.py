@@ -117,6 +117,7 @@ def snapshot(
         dest_path=dest,
         groups=groups,
         source_branch=source_branch,
+        progress=True,
         changelog_messages=changelog_messages,
         preserve_timestamps=settings.preserve_timestamps,
         commit_time=commit_time,

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 from repogerbil.core.cadence import TimeGroup
@@ -45,6 +46,7 @@ def create_snapshot(
     extra_sources: list[Path] | None = None,
     source_subdir: str | None = None,
     llm_generator: MessageGenerator | None = None,
+    progress: bool = False,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
@@ -73,6 +75,7 @@ def create_snapshot(
         timezone,
         source_subdir,
         llm_generator,
+        progress,
     )
 
     for rname in remote_names:
@@ -166,6 +169,7 @@ def _create_commits(
     timezone: str | None,
     source_subdir: str | None = None,
     llm_generator: MessageGenerator | None = None,
+    progress: bool = False,
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
@@ -175,8 +179,10 @@ def _create_commits(
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
+    total = len(groups)
+    width = len(str(total))
 
-    for group in groups:
+    for idx, group in enumerate(groups, 1):
         if not group.commits:
             continue  # pragma: no cover — empty group
 
@@ -209,6 +215,11 @@ def _create_commits(
         else:
             message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
         date_str = _resolve_timestamp(group, commit_time, timezone)
+
+        if progress:
+            first_line = message.splitlines()[0][:72]
+            ts = group.period_start.strftime("%Y-%m-%d %H:%M")
+            print(f"[{idx:{width}}/{total}] {ts}  {first_line}", file=sys.stderr, flush=True)
 
         _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
         commits_created += 1

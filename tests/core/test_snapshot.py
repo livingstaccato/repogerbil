@@ -131,6 +131,34 @@ class TestCreateSnapshot:
         result = create_snapshot(source, dest, groups, preserve_timestamps=False)
         assert result.commits_created == 1
 
+    def test_progress_output(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """progress=True prints one stderr line per commit created."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "progress"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups, progress=True)
+        assert result.commits_created == 2
+        err = capsys.readouterr().err
+        lines = [line for line in err.splitlines() if line.strip()]
+        assert len(lines) == 2
+        assert "[1/2]" in lines[0]
+        assert "[2/2]" in lines[1]
+        assert "2026-04-07" in lines[0]
+        assert "2026-04-08" in lines[1]
+
     def test_multi_commit_group_message(self, tmp_path: Path) -> None:
         """Test auto-generated message for group with multiple commits."""
         source = _init_repo(tmp_path)

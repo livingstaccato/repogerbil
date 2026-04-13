@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from repogerbil.core.embeddings import Embedder
 
@@ -62,7 +62,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._changelogs.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=[embedding],  # type: ignore[arg-type]
             documents=[text],
             metadatas=[meta],
         )
@@ -88,7 +88,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._changes.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=[embedding],  # type: ignore[arg-type]
             documents=[text],
             metadatas=[meta],
         )
@@ -103,11 +103,11 @@ class VectorStore:
         embedding = self._embedder.embed(query)
         where = {"repo": repo} if repo else None
         results = self._changelogs.query(
-            query_embeddings=[embedding],
+            query_embeddings=[embedding],  # type: ignore[arg-type]
             n_results=n,
-            where=where,
+            where=where,  # type: ignore[arg-type]
         )
-        return _format_results(results)
+        return _format_results(results)  # type: ignore[arg-type]
 
     def search_changes(
         self,
@@ -118,10 +118,10 @@ class VectorStore:
         """Search change sections by semantic similarity."""
         embedding = self._embedder.embed(query)
         results = self._changes.query(
-            query_embeddings=[embedding],
+            query_embeddings=[embedding],  # type: ignore[arg-type]
             n_results=n * 3 if repo else n,
         )
-        formatted = _format_results(results)
+        formatted = _format_results(results)  # type: ignore[arg-type]
         if repo:
             formatted = [r for r in formatted if r.get("metadata", {}).get("repo") == repo][:n]
         return formatted
@@ -138,10 +138,10 @@ class VectorStore:
             return []
         embedding = embeddings[0]
         results = self._changelogs.query(
-            query_embeddings=[embedding],
+            query_embeddings=[embedding],  # type: ignore[arg-type]
             n_results=n + 1,  # +1 to exclude self
         )
-        formatted = _format_results(results)
+        formatted = _format_results(results)  # type: ignore[arg-type]
         return [r for r in formatted if r["id"] != changelog_id][:n]
 
     def upsert_filepaths(
@@ -160,7 +160,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._filepaths.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=[embedding],  # type: ignore[arg-type]
             documents=[text],
             metadatas=[meta],
         )
@@ -183,7 +183,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._diffs.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=[embedding],  # type: ignore[arg-type]
             documents=[diff_text[:5000]],  # cap stored text
             metadatas=[meta],
         )
@@ -196,10 +196,10 @@ class VectorStore:
         """Search by file path similarity."""
         embedding = self._embedder.embed(query)
         results = self._filepaths.query(
-            query_embeddings=[embedding],
+            query_embeddings=[embedding],  # type: ignore[arg-type]
             n_results=n,
         )
-        return _format_results(results)
+        return _format_results(results)  # type: ignore[arg-type]
 
     def search_diffs(
         self,
@@ -209,30 +209,30 @@ class VectorStore:
         """Search diff content by semantic similarity."""
         embedding = self._embedder.embed(query)
         results = self._diffs.query(
-            query_embeddings=[embedding],
+            query_embeddings=[embedding],  # type: ignore[arg-type]
             n_results=n,
         )
-        return _format_results(results)
+        return _format_results(results)  # type: ignore[arg-type]
 
     @property
     def changelog_count(self) -> int:
         """Number of indexed changelogs."""
-        return cast(int, self._changelogs.count())
+        return self._changelogs.count()
 
     @property
     def change_count(self) -> int:
         """Number of indexed change sections."""
-        return cast(int, self._changes.count())
+        return self._changes.count()
 
     @property
     def filepath_count(self) -> int:
         """Number of indexed filepath documents."""
-        return cast(int, self._filepaths.count())
+        return self._filepaths.count()
 
     @property
     def diff_count(self) -> int:
         """Number of indexed diff chunks."""
-        return cast(int, self._diffs.count())
+        return self._diffs.count()
 
 
 def _format_results(results: dict[str, Any]) -> list[dict[str, Any]]:

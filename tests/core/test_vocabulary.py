@@ -109,6 +109,11 @@ class TestVocabVersion:
         assert isinstance(VOCAB_VERSION, str)
         assert len(VOCAB_VERSION) > 0
 
+    def test_vocab_version_matches_semver(self) -> None:
+        import re
+
+        assert re.fullmatch(r"\d+\.\d+\.\d+", VOCAB_VERSION), f"Not semver: {VOCAB_VERSION!r}"
+
 
 class TestAllowedVerbs:
     def test_allowed_verbs_returns_semantic_verbs(self) -> None:

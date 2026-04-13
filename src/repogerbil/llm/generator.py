@@ -5,16 +5,32 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from repogerbil.core.vocabulary import allowed_verbs as _allowed_verbs
 from repogerbil.llm.client import OllamaClient
 from repogerbil.llm.prompt import PROMPT_VERSION, build_prompt
-from repogerbil.llm.schema import build_schema, compose_message
+from repogerbil.llm.schema import build_schema, compose_message, extract_summary
 
 
 class RefinementError(Exception):
     """Raised when the LLM returns invalid or unrecoverable output."""
+
+
+@dataclass(frozen=True)
+class GeneratedMessage:
+    """Result of a single LLM refinement call.
+
+    Attributes:
+        message: Commit message headers only — one ``verb(scope): description``
+                 line per entry. Suitable for use as a git commit message.
+        summary: Narrative summary describing what changed and why. Stored in
+                 a sidecar file rather than in the commit message itself.
+    """
+
+    message: str
+    summary: str
 
 
 class MessageGenerator:
@@ -49,7 +65,7 @@ class MessageGenerator:
         files: list[str],
         commit_count: int,
         original_subjects: list[str],
-    ) -> str:
+    ) -> GeneratedMessage:
         """Generate a refined commit message for a group of source commits.
 
         Args:
@@ -59,8 +75,8 @@ class MessageGenerator:
             original_subjects: Raw source commit subjects (may be empty or noisy).
 
         Returns:
-            Multi-line commit message: one ``verb(scope): description`` line per
-            entry, blank line, then the narrative summary.
+            ``GeneratedMessage`` with ``.message`` (header lines only, suitable
+            for git commit) and ``.summary`` (narrative, for sidecar storage).
 
         Raises:
             RefinementError: If the LLM response fails validation.
@@ -80,7 +96,10 @@ class MessageGenerator:
             timeout=self._timeout,
         )
         self._validate(response)
-        return compose_message(response)
+        return GeneratedMessage(
+            message=compose_message(response),
+            summary=extract_summary(response),
+        )
 
     def _validate(self, response: dict[str, Any]) -> None:
         """Validate LLM response structure and verb choices.

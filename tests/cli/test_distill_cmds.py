@@ -437,9 +437,14 @@ class TestSnapshotLLMRefine:
 
         repo = _init_test_repo(tmp_path)
         dest = tmp_path / "snap-llm"
+        from repogerbil.llm.generator import GeneratedMessage
+
         with patch(
             "repogerbil.llm.generator.MessageGenerator.generate",
-            return_value="instantiate(core): base type definitions introduced",
+            return_value=GeneratedMessage(
+                message="instantiate(core): base type definitions introduced",
+                summary="The core module now has base type definitions.",
+            ),
         ):
             result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])
         assert result.exit_code == 0, result.output

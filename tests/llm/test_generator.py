@@ -22,32 +22,42 @@ def _make_generator(responses: list[dict[str, Any]]) -> MessageGenerator:
     return MessageGenerator(client=client, model="gemma4")
 
 
-def test_generate_returns_string() -> None:
+def test_generate_returns_generated_message() -> None:
+    from repogerbil.llm.generator import GeneratedMessage
+
     gen = _make_generator([_load("valid_single.json")])
-    msg = gen.generate(
+    result = gen.generate(
         date_str="2026-04-07",
         files=["src/core/api.py"],
         commit_count=1,
         original_subjects=["feat: add api"],
     )
-    assert isinstance(msg, str)
-    assert len(msg) > 10
+    assert isinstance(result, GeneratedMessage)
+    assert len(result.message) > 10
+    assert len(result.summary) > 10
 
 
 def test_generate_single_entry_format() -> None:
     gen = _make_generator([_load("valid_single.json")])
-    msg = gen.generate("2026-04-07", ["src/core/api.py"], 1, [])
-    first_line = msg.splitlines()[0]
+    result = gen.generate("2026-04-07", ["src/core/api.py"], 1, [])
+    first_line = result.message.splitlines()[0]
     assert first_line == "instantiate(core): base type definitions introduced"
+
+
+def test_generate_single_entry_summary_not_in_message() -> None:
+    gen = _make_generator([_load("valid_single.json")])
+    result = gen.generate("2026-04-07", ["src/core/api.py"], 1, [])
+    assert result.summary != ""
+    assert result.summary not in result.message
 
 
 def test_generate_multi_entry_format() -> None:
     gen = _make_generator([_load("valid_multi.json")])
-    msg = gen.generate("2026-04-08", ["src/core/api.py", "tests/test_api.py"], 2, [])
-    lines = msg.splitlines()
+    result = gen.generate("2026-04-08", ["src/core/api.py", "tests/test_api.py"], 2, [])
+    lines = result.message.splitlines()
     assert lines[0] == "instantiate(core-api): primary api module built over the type layer"
     assert lines[1] == "qualify(primitives): first unit tests for conversions and equality"
-    assert lines[2] == ""
+    assert len(lines) == 2
 
 
 def test_generate_raises_on_invalid_verb() -> None:

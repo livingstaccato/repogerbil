@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from datetime import date as date_type
+import json
 import os
 from pathlib import Path
 import re
@@ -32,6 +33,7 @@ class SnapshotResult:
     groups_created: int
     commits_created: int
     groups_skipped: int = 0  # Duplicates removed during deduplication
+    summaries_path: str | None = None  # Path to sidecar JSONL if LLM was used
 
 
 def create_snapshot(
@@ -66,6 +68,9 @@ def create_snapshot(
     # Deduplicate groups by tree state BEFORE creating commits
     dedup_groups, groups_skipped = _deduplicate_groups(dest_path, groups, source_subdir)
 
+    # Sidecar JSONL path — only used when LLM is active
+    summaries_path = dest_path.parent / f"{dest_path.name}.summaries.jsonl" if llm_generator else None
+
     commits_created = _create_commits(
         dest_path,
         dedup_groups,
@@ -76,6 +81,7 @@ def create_snapshot(
         source_subdir,
         llm_generator,
         progress,
+        summaries_path,
     )
 
     for rname in remote_names:
@@ -89,6 +95,7 @@ def create_snapshot(
         groups_created=len(groups),
         commits_created=commits_created,
         groups_skipped=groups_skipped,
+        summaries_path=str(summaries_path) if summaries_path else None,
     )
 
 
@@ -168,12 +175,14 @@ def _create_commits(
     source_subdir: str | None = None,
     llm_generator: MessageGenerator | None = None,
     progress: bool = False,
+    summaries_path: Path | None = None,
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
     Args:
         source_subdir: When set, use the tree state of this subdirectory
                       within each commit (for monorepo sources).
+        summaries_path: When set, append LLM summaries as JSONL records here.
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
@@ -200,16 +209,19 @@ def _create_commits(
 
         _run_git(dest_path, "read-tree", tree_sha)
 
+        summary: str | None = None
         if llm_generator is not None:
             all_files: set[str] = set()
             for commit in group.commits:
                 all_files.update(_get_files_for_commit(dest_path, commit.hash))
-            message = llm_generator.generate(
+            generated = llm_generator.generate(
                 date_str=group.period_start.strftime("%Y-%m-%d"),
                 files=sorted(all_files),
                 commit_count=len(group.commits),
                 original_subjects=[c.subject for c in group.commits],
             )
+            message = generated.message
+            summary = generated.summary
         else:
             message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
         date_str = _resolve_timestamp(group, commit_time, timezone)
@@ -219,7 +231,17 @@ def _create_commits(
             ts = group.period_start.strftime("%Y-%m-%d %H:%M")
             print(f"[{idx:{width}}/{total}] {ts}  {first_line}", file=sys.stderr, flush=True)
 
-        _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
+        commit_hash = _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
+
+        if summary is not None and summaries_path is not None:
+            record = {
+                "hash": commit_hash,
+                "date": group.period_start.strftime("%Y-%m-%d"),
+                "subject": message.splitlines()[0],
+                "summary": summary,
+            }
+            with summaries_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
         commits_created += 1
 
     return commits_created
@@ -243,8 +265,12 @@ def _commit_with_timestamp(
     message: str,
     date_str: str,
     preserve: bool,
-) -> None:
-    """Create a commit-tree with optional timestamp override."""
+) -> str:
+    """Create a commit-tree with optional timestamp override.
+
+    Returns:
+        The new commit hash.
+    """
     cmd = ["commit-tree", tree_sha, "-m", message]
 
     try:
@@ -271,6 +297,7 @@ def _commit_with_timestamp(
         new_commit = _run_git(dest_path, *cmd, timeout=30).strip()
 
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
+    return new_commit
 
 
 def _get_files_for_commit(dest_path: Path, commit_hash: str) -> list[str]:

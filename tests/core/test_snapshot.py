@@ -385,6 +385,27 @@ class TestCreateSnapshot:
         ).stdout.strip()
         assert log == "instantiate(core): base type definitions introduced"
 
+        # Verify summary NOT in commit message
+        full_log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert "base type definitions" in full_log
+        assert "Introduced the base type" not in full_log  # summary stays in sidecar
+
+        # Verify sidecar JSONL was created
+        assert result.summaries_path is not None
+        sidecar = Path(result.summaries_path)
+        assert sidecar.exists()
+        record = json.loads(sidecar.read_text().strip())
+        assert record["date"] == "2026-04-07"
+        assert record["subject"] == "instantiate(core): base type definitions introduced"
+        assert "Introduced the base type" in record["summary"]
+        assert len(record["hash"]) == 40
+
 
 class TestGetFilesForCommit:
     def test_returns_empty_list_on_bad_hash(self, tmp_path: Path) -> None:

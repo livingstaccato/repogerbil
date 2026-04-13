@@ -61,17 +61,29 @@ def build_schema(allowed_verbs: list[str]) -> dict[str, Any]:
 
 
 def compose_message(response: dict[str, Any]) -> str:
-    """Compose a multi-line commit message from a validated LLM response dict.
+    """Compose a commit message (headers only) from a validated LLM response dict.
 
     Args:
         response: Dict with ``entries`` list and ``summary`` string,
                   as returned by the Ollama structured-output call.
 
     Returns:
-        Commit message string: one ``verb(scope): description`` line per entry,
-        blank line, then the summary paragraph.
+        Commit message string: one ``verb(scope): description`` line per entry.
+        The summary is intentionally excluded — callers retrieve it via
+        ``extract_summary()`` and store it in a sidecar file.
     """
     entries: list[dict[str, str]] = response["entries"]
-    summary: str = response["summary"]
     header_lines = [f"{e['verb']}({e['scope']}): {e['description']}" for e in entries]
-    return "\n".join(header_lines) + "\n\n" + summary.strip()
+    return "\n".join(header_lines)
+
+
+def extract_summary(response: dict[str, Any]) -> str:
+    """Extract the narrative summary from a validated LLM response dict.
+
+    Args:
+        response: Dict with ``entries`` list and ``summary`` string.
+
+    Returns:
+        The summary string, stripped of leading/trailing whitespace.
+    """
+    return str(response["summary"]).strip()

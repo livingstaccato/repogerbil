@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-from repogerbil.llm.schema import build_schema, compose_message
+from repogerbil.llm.schema import build_schema, compose_message, extract_summary
 
 
 def test_build_schema_populates_verb_enum() -> None:
@@ -31,8 +31,7 @@ def test_compose_message_single_entry() -> None:
         "summary": "Added the foundational type layer.",
     }
     msg = compose_message(response)
-    assert msg.startswith("instantiate(core): base type definitions introduced")
-    assert "\n\nAdded the foundational type layer." in msg
+    assert msg == "instantiate(core): base type definitions introduced"
 
 
 def test_compose_message_multi_entry() -> None:
@@ -47,14 +46,32 @@ def test_compose_message_multi_entry() -> None:
     lines = msg.splitlines()
     assert lines[0] == "instantiate(core): primary api built"
     assert lines[1] == "qualify(primitives): first unit tests"
-    assert lines[2] == ""
-    assert "Expanded the api surface" in msg
+    assert len(lines) == 2
+    assert "Expanded the api surface" not in msg
 
 
-def test_compose_message_strips_summary_whitespace() -> None:
+def test_compose_message_excludes_summary() -> None:
     response = {
         "entries": [{"verb": "baseline", "scope": "deps", "description": "bump ruff"}],
         "summary": "  Updated ruff.  ",
     }
     msg = compose_message(response)
-    assert msg.endswith("Updated ruff.")
+    assert msg == "baseline(deps): bump ruff"
+    assert "Updated ruff" not in msg
+
+
+def test_extract_summary_strips_whitespace() -> None:
+    response = {
+        "entries": [{"verb": "baseline", "scope": "deps", "description": "bump ruff"}],
+        "summary": "  Updated ruff.  ",
+    }
+    summary = extract_summary(response)
+    assert summary == "Updated ruff."
+
+
+def test_extract_summary_returns_content() -> None:
+    response = {
+        "entries": [{"verb": "instantiate", "scope": "core", "description": "init"}],
+        "summary": "The core module now initialises all type definitions.",
+    }
+    assert extract_summary(response) == "The core module now initialises all type definitions."

@@ -82,7 +82,7 @@ def create_snapshot(
         with contextlib.suppress(GitCommandError):
             _run_git(dest_path, "remote", "remove", rname)
 
-    _run_git(dest_path, "checkout", "main", timeout=30)
+    _run_git(dest_path, "checkout", "--force", "main", timeout=30)
 
     return SnapshotResult(
         dest_path=str(dest_path),

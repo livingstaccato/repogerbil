@@ -223,3 +223,20 @@ class TestFindConfigFileMocked:
         child.mkdir(parents=True)
         with patch("pathlib.Path.cwd", return_value=child):
             assert find_config_file() == config_file
+
+
+def test_settings_has_llm_defaults() -> None:
+    s = Settings()
+    assert s.llm_ollama_url == "http://localhost:11434"
+    assert s.llm_model == "gemma4"
+    assert s.llm_temperature == 0.0
+    assert s.llm_timeout_seconds == 120.0
+    assert s.llm_concurrency == 1
+
+
+def test_settings_llm_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOGERBIL_LLM_MODEL", "gemma4:27b")
+    monkeypatch.setenv("REPOGERBIL_LLM_CONCURRENCY", "4")
+    s = Settings()
+    assert s.llm_model == "gemma4:27b"
+    assert s.llm_concurrency == 4

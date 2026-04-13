@@ -197,6 +197,13 @@ class Settings(BaseSettings):
     tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
 
+    # ── LLM / Ollama ─────────────────────────────────────────────────────────
+    llm_ollama_url: str = "http://localhost:11434"
+    llm_model: str = "gemma4"
+    llm_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    llm_timeout_seconds: float = Field(default=120.0, gt=0.0)
+    llm_concurrency: int = Field(default=1, ge=1)
+
     @field_validator("cadence")
     @classmethod
     def _validate_cadence(cls, v: str) -> str:

@@ -46,7 +46,8 @@ def test_fake_client_accepts_kwargs() -> None:
 def test_fixture_valid_single_parses() -> None:
     r = _load("valid_single.json")
     assert "entries" in r
-    assert "summary" in r
+    assert "body" in r
+    assert "changes" in r
     entries = r["entries"]
     assert isinstance(entries, list)
     assert len(entries) == 1

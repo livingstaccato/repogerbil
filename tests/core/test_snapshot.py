@@ -11,7 +11,7 @@ import pytest
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
-from repogerbil.core.snapshot import SnapshotResult, _get_files_for_commit, create_snapshot
+from repogerbil.core.snapshot import SnapshotResult, _get_commit_body, _get_files_for_commit, create_snapshot
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -385,7 +385,7 @@ class TestCreateSnapshot:
         ).stdout.strip()
         assert log == "instantiate(core): base type definitions introduced"
 
-        # Verify summary NOT in commit message
+        # Verify body NOT in commit message
         full_log = subprocess.run(
             ["git", "log", "--format=%B", "-1"],
             cwd=dest,
@@ -394,16 +394,20 @@ class TestCreateSnapshot:
             check=True,
         ).stdout.strip()
         assert "base type definitions" in full_log
-        assert "Introduced the base type" not in full_log  # summary stays in sidecar
+        assert "primitive value layer" not in full_log  # body stays in sidecar
 
-        # Verify sidecar JSONL was created
+        # Verify sidecar JSONL was created with structured format
         assert result.summaries_path is not None
         sidecar = Path(result.summaries_path)
         assert sidecar.exists()
         record = json.loads(sidecar.read_text().strip())
         assert record["date"] == "2026-04-07"
-        assert record["subject"] == "instantiate(core): base type definitions introduced"
-        assert "Introduced the base type" in record["summary"]
+        assert record["subjects"] == ["instantiate(core): base type definitions introduced"]
+        assert "primitive value layer" in record["body"]
+        assert isinstance(record["changes"], list)
+        assert len(record["changes"]) >= 1
+        assert "file" in record["changes"][0]
+        assert "description" in record["changes"][0]
         assert len(record["hash"]) == 40
 
 
@@ -415,3 +419,38 @@ class TestGetFilesForCommit:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         result = _get_files_for_commit(repo, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
         assert result == []
+
+
+class TestGetCommitBody:
+    def test_returns_full_message_for_valid_commit(self, tmp_path: Path) -> None:
+        """_get_commit_body returns subject + body for a valid commit."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        # Add source as remote and fetch
+        subprocess.run(
+            ["git", "remote", "add", "src", str(source)],
+            cwd=dest,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "fetch", "src"],
+            cwd=dest,
+            capture_output=True,
+            check=True,
+        )
+        from repogerbil.core.git import get_commits_for_date
+
+        commits = get_commits_for_date(source, "2026-04-07")
+        body = _get_commit_body(dest, commits[0].hash)
+        assert "feat: add a" in body
+
+    def test_returns_empty_string_on_bad_hash(self, tmp_path: Path) -> None:
+        """_get_commit_body returns '' for an invalid commit hash."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        result = _get_commit_body(repo, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        assert result == ""

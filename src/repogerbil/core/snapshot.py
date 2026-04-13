@@ -209,19 +209,20 @@ def _create_commits(
 
         _run_git(dest_path, "read-tree", tree_sha)
 
-        summary: str | None = None
+        generated = None
         if llm_generator is not None:
             all_files: set[str] = set()
             for commit in group.commits:
                 all_files.update(_get_files_for_commit(dest_path, commit.hash))
+            original_bodies = [_get_commit_body(dest_path, c.hash) for c in group.commits]
             generated = llm_generator.generate(
                 date_str=group.period_start.strftime("%Y-%m-%d"),
                 files=sorted(all_files),
                 commit_count=len(group.commits),
                 original_subjects=[c.subject for c in group.commits],
+                original_bodies=original_bodies,
             )
             message = generated.message
-            summary = generated.summary
         else:
             message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
         date_str = _resolve_timestamp(group, commit_time, timezone)
@@ -233,12 +234,13 @@ def _create_commits(
 
         commit_hash = _commit_with_timestamp(dest_path, tree_sha, message, date_str, preserve_timestamps)
 
-        if summary is not None and summaries_path is not None:
+        if generated is not None and summaries_path is not None:
             record = {
                 "hash": commit_hash,
                 "date": group.period_start.strftime("%Y-%m-%d"),
-                "subject": message.splitlines()[0],
-                "summary": summary,
+                "subjects": message.splitlines(),
+                "body": generated.body,
+                "changes": generated.changes,
             }
             with summaries_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record) + "\n")
@@ -298,6 +300,22 @@ def _commit_with_timestamp(
 
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
     return new_commit
+
+
+def _get_commit_body(dest_path: Path, commit_hash: str) -> str:
+    """Return the full commit message (subject + body) for a source commit.
+
+    Args:
+        dest_path: Destination repo with all sources already fetched.
+        commit_hash: The commit hash to inspect.
+
+    Returns:
+        Full commit message, stripped. Returns ``""`` if the commit cannot be read.
+    """
+    try:
+        return _run_git(dest_path, "log", "-1", "--format=%B", commit_hash, timeout=10).strip()
+    except GitCommandError:
+        return ""
 
 
 def _get_files_for_commit(dest_path: Path, commit_hash: str) -> list[str]:

@@ -11,5 +11,9 @@
       "description": "first unit tests for conversions and equality"
     }
   ],
-  "summary": "Added the primary api module that operates over the type definitions. Simultaneously brought in the first round of unit tests covering primitive conversions and the equality surface."
+  "body": "The primary api module and its first unit tests establish the public interface over the type layer.",
+  "changes": [
+    {"file": "src/core/api.py", "description": "build primary api module operating over type definitions"},
+    {"file": "tests/test_api.py", "description": "add first unit tests covering primitive conversions and equality surface"}
+  ]
 }

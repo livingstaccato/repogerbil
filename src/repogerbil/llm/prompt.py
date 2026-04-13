@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-PROMPT_VERSION: str = "1.3.0"
+PROMPT_VERSION: str = "1.4.0"
 
 _VERB_HINTS: dict[str, str] = {
     # conventional prefixes
@@ -38,8 +38,9 @@ def build_prompt(
     commit_count: int,
     original_subjects: list[str],
     allowed_verbs: list[str],
+    original_bodies: list[str] | None = None,
 ) -> str:
-    """Build a refinement prompt for a commit group (no retrieval context).
+    """Build a refinement prompt for a commit group.
 
     Args:
         date_str: YYYY-MM-DD string for the group's period start.
@@ -47,6 +48,8 @@ def build_prompt(
         commit_count: Total number of source commits in this group.
         original_subjects: Raw commit subjects from source (may be empty or inaccurate).
         allowed_verbs: Vocabulary verbs the LLM must choose from.
+        original_bodies: Full commit message bodies from source commits. When provided,
+                         the LLM uses them as source material to extract intent.
 
     Returns:
         Prompt string to send to the LLM.
@@ -57,6 +60,17 @@ def build_prompt(
         subject_block = "\n".join(f"  - {s}" for s in original_subjects)
     else:
         subject_block = "  (none available)"
+
+    bodies_section = ""
+    if original_bodies:
+        non_empty = [b.strip() for b in original_bodies if b.strip()]
+        if non_empty:
+            separator = "\n  ---\n"
+            bodies_block = separator.join(f"  {b}" for b in non_empty)
+            bodies_section = f"""
+## Original commit messages (full text — use as source material)
+{bodies_block}
+"""
 
     return f"""You are writing a commit message for a reconstructed git history.
 The commit represents {commit_count} source commit(s) from {date_str}.
@@ -69,7 +83,7 @@ The commit represents {commit_count} source commit(s) from {date_str}.
 
 ## Original commit subjects (may be absent, inaccurate, or terse)
 {subject_block}
-
+{bodies_section}
 ## Instructions
 - Choose 1-4 header lines: each must be `verb(scope): description`
 - Only use multiple lines when files span genuinely distinct concerns
@@ -79,11 +93,13 @@ The commit represents {commit_count} source commit(s) from {date_str}.
   wrong; use docs:, test:, chore: instead. Use the top-level directory or module name;
   never sub-path descriptors like "cty-values" — prefer "cty"
 - description: precise phrase describing what changed (not what the file is named)
-- summary: 2-5 sentences. Write as a technical note about what the code does or what
-  capability now exists — NOT a narration of what was done. DO NOT start with "This
-  commit", "This PR", "This change", "This massive commit", or any similar phrase.
-  Write in present tense as if describing the system state. Focus on WHY it matters
-  or what problem it solves, not the mechanical act of committing.
+- body: 2-4 sentences explaining WHY this change exists — what problem it solves or what
+  capability it establishes. Write in present tense. Do NOT start with "This commit",
+  "This change", "This PR", or any similar phrase. If original commit messages are
+  provided above, extract and synthesize their intent rather than inventing from scratch.
+- changes: one entry per file from "Files changed" above. Use the exact file path.
+  description: one line — what changed in that file and why. If an original commit
+  message explains this file, use that explanation (normalized to one line).
 - Use only allowed verbs — any other word in the verb position is invalid
 - Respond only with valid JSON matching the provided schema
 """

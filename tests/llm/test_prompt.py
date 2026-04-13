@@ -66,3 +66,28 @@ def test_build_prompt_contains_original_subjects() -> None:
         allowed_verbs=["instantiate"],
     )
     assert "feat: add x" in prompt
+
+
+def test_build_prompt_includes_original_bodies() -> None:
+    prompt = build_prompt(
+        date_str="2026-04-07",
+        files=["src/x.py"],
+        commit_count=1,
+        original_subjects=["feat: add x"],
+        allowed_verbs=["instantiate"],
+        original_bodies=["feat: add x\n\nDetailed explanation of the change."],
+    )
+    assert "Detailed explanation" in prompt
+    assert "Original commit messages" in prompt
+
+
+def test_build_prompt_skips_all_empty_bodies() -> None:
+    prompt = build_prompt(
+        date_str="2026-04-07",
+        files=["src/x.py"],
+        commit_count=1,
+        original_subjects=["lots of changes"],
+        allowed_verbs=["instantiate"],
+        original_bodies=["", "  "],
+    )
+    assert "Original commit messages" not in prompt

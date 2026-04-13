@@ -6,5 +6,8 @@
       "description": "base type definitions introduced"
     }
   ],
-  "summary": "Introduced the base type definitions covering primitives and the value wrapper. This establishes the shape all subsequent modules will build against."
+  "body": "The base type definitions establish the primitive value layer that all subsequent modules build against.",
+  "changes": [
+    {"file": "src/core/api.py", "description": "introduce base type class hierarchy covering primitives and value wrapper"}
+  ]
 }

@@ -443,7 +443,8 @@ class TestSnapshotLLMRefine:
             "repogerbil.llm.generator.MessageGenerator.generate",
             return_value=GeneratedMessage(
                 message="instantiate(core): base type definitions introduced",
-                summary="The core module now has base type definitions.",
+                body="The core module now has base type definitions.",
+                changes=[{"file": "src/core/api.py", "description": "introduce base types"}],
             ),
         ):
             result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])

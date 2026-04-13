@@ -5,13 +5,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from repogerbil.core.vocabulary import allowed_verbs as _allowed_verbs
 from repogerbil.llm.client import OllamaClient
 from repogerbil.llm.prompt import PROMPT_VERSION, build_prompt
-from repogerbil.llm.schema import build_schema, compose_message, extract_summary
+from repogerbil.llm.schema import build_schema, compose_message, extract_body, extract_changes
 
 
 class RefinementError(Exception):
@@ -25,12 +25,15 @@ class GeneratedMessage:
     Attributes:
         message: Commit message headers only — one ``verb(scope): description``
                  line per entry. Suitable for use as a git commit message.
-        summary: Narrative summary describing what changed and why. Stored in
-                 a sidecar file rather than in the commit message itself.
+        body: Narrative paragraph explaining why the change exists. Stored in
+              a sidecar file rather than in the commit message itself.
+        changes: Per-file change descriptions — list of
+                 ``{"file": str, "description": str}`` dicts. Stored in sidecar.
     """
 
     message: str
-    summary: str
+    body: str
+    changes: list[dict[str, str]] = field(default_factory=list)
 
 
 class MessageGenerator:
@@ -65,6 +68,7 @@ class MessageGenerator:
         files: list[str],
         commit_count: int,
         original_subjects: list[str],
+        original_bodies: list[str] | None = None,
     ) -> GeneratedMessage:
         """Generate a refined commit message for a group of source commits.
 
@@ -73,10 +77,14 @@ class MessageGenerator:
             files: Sorted union of file paths touched by all commits in the group.
             commit_count: Total number of source commits in the group.
             original_subjects: Raw source commit subjects (may be empty or noisy).
+            original_bodies: Full commit message bodies from source (may be empty
+                             strings for commits with no body). When provided, the
+                             LLM uses them as source material to extract intent.
 
         Returns:
             ``GeneratedMessage`` with ``.message`` (header lines only, suitable
-            for git commit) and ``.summary`` (narrative, for sidecar storage).
+            for git commit), ``.body`` (narrative paragraph), and ``.changes``
+            (per-file descriptions) for sidecar storage.
 
         Raises:
             RefinementError: If the LLM response fails validation.
@@ -87,6 +95,7 @@ class MessageGenerator:
             commit_count=commit_count,
             original_subjects=original_subjects,
             allowed_verbs=self._verbs,
+            original_bodies=original_bodies,
         )
         response = self._client.generate(
             prompt=prompt,
@@ -98,7 +107,8 @@ class MessageGenerator:
         self._validate(response)
         return GeneratedMessage(
             message=compose_message(response),
-            summary=extract_summary(response),
+            body=extract_body(response),
+            changes=extract_changes(response),
         )
 
     def _validate(self, response: dict[str, Any]) -> None:
@@ -107,8 +117,8 @@ class MessageGenerator:
         Raises:
             RefinementError: If required fields are missing or verb is not in the allowed set.
         """
-        if "entries" not in response or "summary" not in response:
-            missing = [k for k in ("entries", "summary") if k not in response]
+        missing = [k for k in ("entries", "body", "changes") if k not in response]
+        if missing:
             msg = f"LLM response missing required fields: {missing}"
             raise RefinementError(msg)
         for entry in response["entries"]:

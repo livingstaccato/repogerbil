@@ -10,7 +10,7 @@ from typing import Any
 
 _BASE_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["entries", "summary"],
+    "required": ["entries", "body", "changes"],
     "properties": {
         "entries": {
             "type": "array",
@@ -36,10 +36,22 @@ _BASE_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        "summary": {
+        "body": {
             "type": "string",
             "minLength": 20,
             "maxLength": 600,
+        },
+        "changes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["file", "description"],
+                "properties": {
+                    "file": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "description": {"type": "string", "minLength": 5, "maxLength": 200},
+                },
+            },
         },
     },
 }
@@ -63,13 +75,13 @@ def compose_message(response: dict[str, Any]) -> str:
     """Compose a commit message (headers only) from a validated LLM response dict.
 
     Args:
-        response: Dict with ``entries`` list and ``summary`` string,
+        response: Dict with ``entries`` list, ``body`` string, and ``changes`` list,
                   as returned by the Ollama structured-output call.
 
     Returns:
         Commit message string: one ``verb(scope): description`` line per entry.
-        The summary is intentionally excluded — callers retrieve it via
-        ``extract_summary()`` and store it in a sidecar file.
+        The body and changes are intentionally excluded — callers retrieve them via
+        ``extract_body()`` / ``extract_changes()`` and store them in a sidecar file.
     """
     entries: list[dict[str, str]] = response["entries"]
     header_lines = [
@@ -81,13 +93,25 @@ def compose_message(response: dict[str, Any]) -> str:
     return "\n".join(header_lines)
 
 
-def extract_summary(response: dict[str, Any]) -> str:
-    """Extract the narrative summary from a validated LLM response dict.
+def extract_body(response: dict[str, Any]) -> str:
+    """Extract the narrative body paragraph from a validated LLM response dict.
 
     Args:
-        response: Dict with ``entries`` list and ``summary`` string.
+        response: Dict with ``entries``, ``body``, and ``changes`` fields.
 
     Returns:
-        The summary string, stripped of leading/trailing whitespace.
+        The body string, stripped of leading/trailing whitespace.
     """
-    return str(response["summary"]).strip()
+    return str(response["body"]).strip()
+
+
+def extract_changes(response: dict[str, Any]) -> list[dict[str, str]]:
+    """Extract the per-file changes list from a validated LLM response dict.
+
+    Args:
+        response: Dict with ``entries``, ``body``, and ``changes`` fields.
+
+    Returns:
+        List of ``{"file": str, "description": str}`` dicts.
+    """
+    return list(response["changes"])

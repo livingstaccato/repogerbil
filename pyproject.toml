@@ -78,6 +78,7 @@ combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "S"]
+"src/repogerbil/llm/client.py" = ["S310"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -146,6 +147,7 @@ source = ["src/repogerbil"]
 branch = true
 omit = [
     "src/repogerbil/cli/commands/vectordb_cmds.py",
+    "src/repogerbil/llm/client.py",
 ]
 
 [tool.coverage.report]

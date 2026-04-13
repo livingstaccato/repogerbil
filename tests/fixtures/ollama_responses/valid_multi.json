@@ -1,0 +1,15 @@
+{
+  "entries": [
+    {
+      "verb": "instantiate",
+      "scope": "core-api",
+      "description": "primary api module built over the type layer"
+    },
+    {
+      "verb": "qualify",
+      "scope": "primitives",
+      "description": "first unit tests for conversions and equality"
+    }
+  ],
+  "summary": "Added the primary api module that operates over the type definitions. Simultaneously brought in the first round of unit tests covering primitive conversions and the equality surface."
+}

@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "verb": "instantiate",
+      "scope": "core",
+      "description": "base type definitions introduced"
+    }
+  ],
+  "summary": "Introduced the base type definitions covering primitives and the value wrapper. This establishes the shape all subsequent modules will build against."
+}

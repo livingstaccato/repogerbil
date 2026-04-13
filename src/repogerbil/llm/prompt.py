@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-PROMPT_VERSION: str = "1.2.0"
+PROMPT_VERSION: str = "1.3.0"
 
 _VERB_HINTS: dict[str, str] = {
     # conventional prefixes
@@ -73,9 +73,11 @@ The commit represents {commit_count} source commit(s) from {date_str}.
 ## Instructions
 - Choose 1-4 header lines: each must be `verb(scope): description`
 - Only use multiple lines when files span genuinely distinct concerns
-- scope: noun naming a top-level section of the codebase — use the top-level directory
-  or module name (e.g. core, cli, tests, types, cty, schema). Do NOT use sub-path
-  descriptors like "cty-values" or "core-registry"; prefer the parent name ("cty", "core")
+- scope: optional. Only include when it names a specific subsystem or module that adds
+  meaning (e.g. feat(auth), fix(core), refactor(cli)). Omit scope entirely when it would
+  just repeat the verb or be generic — e.g. docs(docs), test(tests), chore(chore) are all
+  wrong; use docs:, test:, chore: instead. Use the top-level directory or module name;
+  never sub-path descriptors like "cty-values" — prefer "cty"
 - description: precise phrase describing what changed (not what the file is named)
 - summary: 2-5 sentences. Write as a technical note about what the code does or what
   capability now exists — NOT a narration of what was done. DO NOT start with "This

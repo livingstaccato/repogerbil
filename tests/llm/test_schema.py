@@ -60,6 +60,24 @@ def test_compose_message_excludes_summary() -> None:
     assert "Updated ruff" not in msg
 
 
+def test_compose_message_omits_empty_scope() -> None:
+    response = {
+        "entries": [{"verb": "docs", "scope": "", "description": "add readme"}],
+        "summary": "Added readme.",
+    }
+    msg = compose_message(response)
+    assert msg == "docs: add readme"
+
+
+def test_compose_message_omits_missing_scope() -> None:
+    response = {
+        "entries": [{"verb": "test", "description": "add coverage for parser"}],
+        "summary": "Added parser tests.",
+    }
+    msg = compose_message(response)
+    assert msg == "test: add coverage for parser"
+
+
 def test_extract_summary_strips_whitespace() -> None:
     response = {
         "entries": [{"verb": "baseline", "scope": "deps", "description": "bump ruff"}],

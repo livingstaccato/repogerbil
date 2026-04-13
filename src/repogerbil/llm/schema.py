@@ -26,7 +26,6 @@ _BASE_SCHEMA: dict[str, Any] = {
                     },
                     "scope": {
                         "type": "string",
-                        "minLength": 1,
                         "maxLength": 40,
                     },
                     "description": {
@@ -73,7 +72,12 @@ def compose_message(response: dict[str, Any]) -> str:
         ``extract_summary()`` and store it in a sidecar file.
     """
     entries: list[dict[str, str]] = response["entries"]
-    header_lines = [f"{e['verb']}({e['scope']}): {e['description']}" for e in entries]
+    header_lines = [
+        f"{e['verb']}({e['scope']}): {e['description']}"
+        if e.get("scope")
+        else f"{e['verb']}: {e['description']}"
+        for e in entries
+    ]
     return "\n".join(header_lines)
 
 

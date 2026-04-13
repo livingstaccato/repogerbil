@@ -271,6 +271,7 @@ def _attach_file_lists(repo_path: str | Path, commits: list[CommitInfo]) -> list
             files=hash_files.get(c.hash, []),
             body=c.body,
             refs=c.refs,
+            timestamp=c.timestamp,
         )
         for c in commits
     ]

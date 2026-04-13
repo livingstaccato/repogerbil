@@ -325,6 +325,15 @@ class TestAttachFileLists:
             res = _attach_file_lists(".", commits)
             assert res[0].files == ["file1.py"]
 
+    def test_preserves_timestamp(self) -> None:
+        """_attach_file_lists must preserve CommitInfo.timestamp (regression: was dropped)."""
+        h1 = "a" * 40
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"{h1}\nfile1.py\n")
+            commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test", timestamp=1234567890)]
+            res = _attach_file_lists(".", commits)
+            assert res[0].timestamp == 1234567890
+
 
 class TestCommitTimestamps:
     def test_timestamp_populated_from_git_log(self, git_repo: Path) -> None:

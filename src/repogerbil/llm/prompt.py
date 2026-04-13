@@ -98,8 +98,9 @@ The commit represents {commit_count} source commit(s) from {date_str}.
   "This change", "This PR", or any similar phrase. If original commit messages are
   provided above, extract and synthesize their intent rather than inventing from scratch.
 - changes: one entry per file from "Files changed" above. Use the exact file path.
-  description: one line — what changed in that file and why. If an original commit
-  message explains this file, use that explanation (normalized to one line).
+  description: one line — what changed in that file and why. Start with a lowercase
+  verb (e.g. "add", "remove", "update", "fix", "introduce"). If an original commit
+  message explains this file, use that explanation (normalized to one line, lowercase start).
 - Use only allowed verbs — any other word in the verb position is invalid
 - Respond only with valid JSON matching the provided schema
 """

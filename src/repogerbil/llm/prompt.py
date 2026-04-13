@@ -17,6 +17,7 @@ _VERB_HINTS: dict[str, str] = {
     "docs": "documentation only",
     "chore": "maintenance, config, build, or dependency update",
     # semantic aliases (prefer these when more precise)
+    "scaffold": "creating skeleton structure, boilerplate, or project/module setup without full implementation",
     "instantiate": "introducing new code, types, or modules for the first time",
     "interface": "wiring two subsystems together or defining a contract",
     "remediate": "fixing a bug or incorrect behaviour (more specific than fix)",

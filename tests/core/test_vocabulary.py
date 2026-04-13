@@ -118,6 +118,7 @@ class TestVocabVersion:
 class TestAllowedVerbs:
     def test_allowed_verbs_returns_semantic_verbs(self) -> None:
         verbs = allowed_verbs()
+        assert "scaffold" in verbs
         assert "instantiate" in verbs
         assert "interface" in verbs
         assert "remediate" in verbs

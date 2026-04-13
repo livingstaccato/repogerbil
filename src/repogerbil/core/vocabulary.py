@@ -23,6 +23,7 @@ def _default_categories() -> dict[str, CategoryDefinition]:
         "perf": CategoryDefinition(label="perf", conventional="perf"),
         "docs": CategoryDefinition(label="docs", conventional="docs"),
         "chore": CategoryDefinition(label="chore", conventional="chore"),
+        "scaffold": CategoryDefinition(label="feat", conventional="feat", verb="Scaffold"),
         "instantiate": CategoryDefinition(label="feat", conventional="feat", verb="Add"),
         "interface": CategoryDefinition(label="feat", conventional="feat", verb="Wire"),
         "remediate": CategoryDefinition(label="fix", conventional="fix", verb="Fix"),
@@ -85,7 +86,7 @@ def conventional_to_category(prefix: str, vocab: VocabularyConfig | None = None)
     return p.get(prefix.lower())
 
 
-VOCAB_VERSION: str = "1.1.0"
+VOCAB_VERSION: str = "1.2.0"
 
 
 def allowed_verbs() -> list[str]:

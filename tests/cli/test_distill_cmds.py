@@ -429,3 +429,18 @@ class TestDeriveCommitType:
         msg = _changelog_to_message(data)
         assert msg.startswith("feat: Add widget factory")
         assert not msg.startswith("feat: feat:")
+
+
+class TestSnapshotLLMRefine:
+    def test_llm_refine_flag_accepted(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-llm"
+        with patch(
+            "repogerbil.llm.generator.MessageGenerator.generate",
+            return_value="instantiate(core): base type definitions introduced",
+        ):
+            result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])
+        assert result.exit_code == 0, result.output
+        assert "Snapshot created" in result.output

@@ -100,8 +100,6 @@ def _init_and_fetch(
     """Initialize destination repo and fetch all source remotes."""
     dest_path.mkdir(parents=True, exist_ok=True)
     _run_git(dest_path, "init")
-    _run_git(dest_path, "config", "user.email", "repogerbil@localhost")
-    _run_git(dest_path, "config", "user.name", "repogerbil")
 
     _fetch_source(dest_path, "source", source_path)
     remote_names = ["source"]

@@ -25,7 +25,7 @@ def _make_repo(tmp_path: Path, with_lock: bool = True) -> Path:
     (repo / "main.py").write_text("x = 1\n")
     if with_lock:
         (repo / "poetry.lock").write_text("lock\n")
-    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
     return repo
 
@@ -60,7 +60,7 @@ class TestPreflightCmd:
     def test_unknown_section_for_mystery_file(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         (repo / "mystery.bin").write_bytes(b"\xde\xad")
-        subprocess.run(["git", "add", "mystery.bin"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "add", "mystery.bin"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "mystery"], cwd=repo, capture_output=True, check=True)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo)])
@@ -121,7 +121,7 @@ class TestPreflightCmd:
         ]:
             subprocess.run(cmd, cwd=repo2, capture_output=True, check=False)
         (repo2 / "poetry.lock").write_text("lock\n")
-        subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo2), "--verbose"])

@@ -16,6 +16,13 @@ class TestArtifactPatterns:
         assert rule.flag == r"test_flag"
         assert rule._compiled is not None
 
+    def test_artifact_rule_flag_defaults_to_pattern(self) -> None:
+        rule = ArtifactRule("test label", r"test_pattern")
+        assert rule.label == "test label"
+        assert rule.pattern == r"test_pattern"
+        assert rule.flag == r"test_pattern"
+        assert rule._compiled is not None
+
     def test_pycache_matches(self) -> None:
         assert _rule_for("src/foo/__pycache__/bar.cpython-313.pyc") is not None
 
@@ -52,3 +59,12 @@ class TestArtifactPatterns:
 
     def test_no_false_positive_on_build_in_name(self) -> None:
         assert _rule_for("src/rebuild.py") is None
+
+    def test_no_false_positive_on_git_lock_file(self) -> None:
+        """Ensure .git/index.lock is not matched by the lock file pattern."""
+        assert _rule_for(".git/index.lock") is None
+
+    def test_htmlcov_pattern_anchored(self) -> None:
+        """Ensure htmlcov/ is anchored at the start."""
+        assert _rule_for("htmlcov/index.html") is not None
+        assert _rule_for(".venv/lib/python3.11/site-packages/htmlcov/file.html") is None

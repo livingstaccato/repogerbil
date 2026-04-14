@@ -12,12 +12,17 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import yaml
 
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
+from repogerbil.core.tree_filter import exclude_files, filter_tree
+
+if TYPE_CHECKING:
+    from repogerbil.llm.generator import MessageGenerator
 
 
 @dataclass(frozen=True)
@@ -37,12 +42,14 @@ def create_multi_snapshot(
     commit_time: str = "20:00",
     timezone: str = "America/Los_Angeles",
     changelog_dir: Path | None = None,
+    exclude_paths: list[str] | None = None,
+    llm_generator: MessageGenerator | None = None,
 ) -> MultiSnapshotResult:
     """Create an independent repo with one daily commit merging multiple source repos.
 
     Each source repo gets its own subdirectory in the destination. Commits are
     timestamped at commit_time in the specified timezone. Commit messages are
-    assembled from changelog YAMLs when available.
+    assembled from changelog YAMLs when available, or refined by an LLM.
 
     Args:
         source_repos: Mapping of name → path for source repositories.
@@ -51,6 +58,8 @@ def create_multi_snapshot(
         commit_time: Time for daily commits (HH:MM format).
         timezone: IANA timezone name for commit timestamps.
         changelog_dir: Directory containing <repo>/<date>-<repo>-changelog.yaml files.
+        exclude_paths: Regex patterns stripped from every committed tree (via re.search).
+        llm_generator: When set, refine each commit message using the LLM.
 
     Returns:
         MultiSnapshotResult with path and counts.
@@ -78,6 +87,7 @@ def create_multi_snapshot(
     # Create daily commits
     repo_first_dates = _get_first_commit_dates(source_repos)
     per_repo_dates = _collect_per_repo_dates(source_repos)
+    summaries_path = dest_path.parent / f"{dest_path.name}.summaries.jsonl" if llm_generator else None
     repos_included: set[str] = set()
     commits_created = _create_daily_commits(
         dest_path,
@@ -89,6 +99,9 @@ def create_multi_snapshot(
         changelog_messages,
         commit_time,
         timezone,
+        exclude_paths=exclude_paths,
+        llm_generator=llm_generator,
+        summaries_path=summaries_path,
     )
 
     # Cleanup remotes
@@ -133,26 +146,67 @@ def _create_daily_commits(
     changelog_messages: dict[str, dict[str, str]],
     commit_time: str,
     timezone: str,
+    *,
+    exclude_paths: list[str] | None = None,
+    llm_generator: MessageGenerator | None = None,
+    summaries_path: Path | None = None,
 ) -> int:
     """Create one commit per active day in the destination repo."""
+    import json
+    import sys
+
     commits_created = 0
-    for day in active_dates:
+    total = len(active_dates)
+    width = len(str(total))
+
+    for idx, day in enumerate(active_dates, 1):
         repo_trees = _collect_repo_trees_for_day(
             dest_path,
             source_repos,
             day,
             repo_first_dates,
             repos_included,
+            exclude_paths=exclude_paths,
         )
         if not repo_trees:  # pragma: no cover — dates come from repos that have commits
             continue
 
         active_repos = {name for name, dates in per_repo_dates.items() if day in dates}
         combined_tree = _build_merged_tree(dest_path, repo_trees)
-        message = _build_message(day, active_repos, changelog_messages)
+
+        generated = None
+        if llm_generator is not None:
+            files, subjects, bodies = _collect_day_context(source_repos, active_repos, day, exclude_paths)
+            try:
+                generated = llm_generator.generate(
+                    date_str=day.isoformat(),
+                    files=files,
+                    commit_count=len(subjects),
+                    original_subjects=subjects,
+                    original_bodies=bodies,
+                )
+                message = generated.message
+            except Exception:
+                message = _build_message(day, active_repos, changelog_messages)
+        else:
+            message = _build_message(day, active_repos, changelog_messages)
+
         timestamp = _make_timestamp(day, commit_time, timezone)
-        _commit_tree(dest_path, combined_tree, message, timestamp)
+        first_line = message.splitlines()[0][:72]
+        print(f"[{idx:{width}}/{total}] {day.isoformat()}  {first_line}", file=sys.stderr, flush=True)
+        commit_hash = _commit_tree(dest_path, combined_tree, message, timestamp)
         commits_created += 1
+
+        if generated is not None and summaries_path is not None:
+            record = {
+                "hash": commit_hash,
+                "date": day.isoformat(),
+                "subjects": message.splitlines(),
+                "body": generated.body,
+                "changes": generated.changes,
+            }
+            with summaries_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
 
     return commits_created
 
@@ -163,6 +217,8 @@ def _collect_repo_trees_for_day(
     day: date,
     repo_first_dates: dict[str, date],
     repos_included: set[str],
+    *,
+    exclude_paths: list[str] | None = None,
 ) -> dict[str, str]:
     """Collect tree SHAs for all repos that should appear on this day."""
     repo_trees: dict[str, str] = {}
@@ -174,13 +230,14 @@ def _collect_repo_trees_for_day(
             continue
         tree_sha = _get_tree_at_date(dest_path, name, day)
         if tree_sha:  # pragma: no branch — tree always exists for fetched commits
+            tree_sha = filter_tree(dest_path, tree_sha, exclude_paths)
             repo_trees[name] = tree_sha
             repos_included.add(name)
     return repo_trees
 
 
-def _commit_tree(dest_path: Path, tree_sha: str, message: str, timestamp: str) -> None:
-    """Create a commit on the tree with the given timestamp."""
+def _commit_tree(dest_path: Path, tree_sha: str, message: str, timestamp: str) -> str:
+    """Create a commit on the tree with the given timestamp. Returns the commit hash."""
     cmd = ["commit-tree", tree_sha, "-m", message]
 
     try:
@@ -204,6 +261,7 @@ def _commit_tree(dest_path: Path, tree_sha: str, message: str, timestamp: str) -
     )
     new_commit = result.stdout.strip()
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
+    return new_commit
 
 
 def _collect_all_active_dates(source_repos: dict[str, Path]) -> list[date]:
@@ -385,3 +443,69 @@ def _load_multi_changelog_messages(changelog_dir: Path) -> dict[str, dict[str, s
             messages[repo_name][date_key] = f"{title}\n  {summary}" if summary else title
 
     return messages
+
+
+def _collect_day_context(
+    source_repos: dict[str, Path],
+    active_repos: set[str],
+    day: date,
+    exclude_paths: list[str] | None,
+) -> tuple[list[str], list[str], list[str]]:
+    """Collect files changed, commit subjects, and bodies for all active repos on a day.
+
+    Uses two separate git calls per repo: one for subjects/bodies, one for file names.
+
+    Returns:
+        Tuple of (sorted_files, subjects, bodies) for passing to MessageGenerator.
+    """
+    since = f"{day.isoformat()}T00:00:00"
+    until = f"{day.isoformat()}T23:59:59"
+    all_files: set[str] = set()
+    subjects: list[str] = []
+    bodies: list[str] = []
+
+    for name in sorted(active_repos):
+        path = source_repos.get(name)
+        if path is None or not path.exists():
+            continue
+        try:
+            # Subjects and bodies — one record separator (RS = \x1e) per commit
+            msg_out = subprocess.run(  # noqa: S603
+                ["git", "log", f"--since={since}", f"--until={until}", "--format=%s\x1f%b\x1e"],  # noqa: S607
+                cwd=str(path),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            ).stdout
+            # Files changed — empty format strips hash lines
+            file_out = subprocess.run(  # noqa: S603
+                ["git", "log", f"--since={since}", f"--until={until}", "--name-only", "--format="],  # noqa: S607
+                cwd=str(path),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            ).stdout
+        except subprocess.SubprocessError:
+            continue
+
+        for record in msg_out.split("\x1e"):
+            record = record.strip()
+            if not record:
+                continue
+            parts = record.split("\x1f", 1)
+            subject = parts[0].strip()
+            body = parts[1].strip() if len(parts) > 1 else ""
+            if subject:
+                subjects.append(f"{name}: {subject}")
+            if body:
+                bodies.append(body)
+
+        for line in file_out.splitlines():
+            line = line.strip()
+            if line:
+                all_files.add(line)
+
+    filtered = exclude_files(all_files, exclude_paths)
+    return sorted(filtered), subjects, bodies

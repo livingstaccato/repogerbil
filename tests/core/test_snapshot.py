@@ -14,13 +14,12 @@ from repogerbil.core.git import CommitInfo, get_commits_for_date
 from repogerbil.core.snapshot import (
     SnapshotResult,
     _compute_window_timestamps,
-    _exclude_files,
-    _filter_tree,
     _get_commit_body,
     _get_files_for_commit,
     _spread_timestamps_for_day,
     create_snapshot,
 )
+from repogerbil.core.tree_filter import exclude_files as _exclude_files, filter_tree as _filter_tree
 
 
 def _init_repo(tmp_path: Path) -> Path:

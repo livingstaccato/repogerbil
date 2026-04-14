@@ -23,6 +23,7 @@ from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 from repogerbil.core.multi_snapshot import _make_timestamp
+from repogerbil.core.tree_filter import exclude_files as _exclude_files, filter_tree as _filter_tree
 
 if TYPE_CHECKING:
     from repogerbil.llm.generator import MessageGenerator
@@ -338,82 +339,6 @@ def _commit_with_timestamp(
 
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
     return new_commit
-
-
-def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None) -> str:
-    """Return a new tree SHA with files matching any exclude regex removed.
-
-    Uses a temporary index so the real index and working tree are untouched.
-    Returns the original ``tree_sha`` unchanged when ``exclude_paths`` is empty.
-
-    Args:
-        dest_path: Repository where the tree object lives.
-        tree_sha: SHA of the tree to filter.
-        exclude_paths: Regex patterns to match against file paths (via re.search).
-                      E.g. ["^\\.claude(/|$)", ".*\\.lock$"].
-
-    Returns:
-        SHA of the filtered tree, or the original SHA if nothing to exclude.
-    """
-    if not exclude_paths:
-        return tree_sha
-
-    import tempfile
-
-    compiled = [re.compile(p) for p in exclude_paths]
-
-    with tempfile.NamedTemporaryFile(dir=str(dest_path / ".git"), delete=True) as tmp:
-        env = {**os.environ, "GIT_INDEX_FILE": tmp.name}
-        subprocess.run(  # noqa: S603
-            ["git", "read-tree", tree_sha],  # noqa: S607
-            cwd=str(dest_path),
-            env=env,
-            capture_output=True,
-            check=True,
-        )
-        # Enumerate all files and filter by regex
-        ls = subprocess.run(
-            ["git", "ls-files"],  # noqa: S607
-            cwd=str(dest_path),
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        to_remove = [f for f in ls.stdout.splitlines() if f and any(pat.search(f) for pat in compiled)]
-        for f in to_remove:
-            subprocess.run(  # noqa: S603
-                ["git", "rm", "--cached", "--quiet", f],  # noqa: S607
-                cwd=str(dest_path),
-                env=env,
-                capture_output=True,
-            )
-        result = subprocess.run(
-            ["git", "write-tree"],  # noqa: S607
-            cwd=str(dest_path),
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    return result.stdout.strip()
-
-
-def _exclude_files(files: set[str], exclude_paths: list[str] | None) -> set[str]:
-    """Remove files whose path matches any of the exclude regex patterns.
-
-    Args:
-        files: Set of file paths to filter.
-        exclude_paths: Regex patterns to match against file paths (via re.search).
-                      E.g. ["^\\.claude(/|$)", ".*\\.lock$"].
-
-    Returns:
-        Filtered set with matched paths removed.
-    """
-    if not exclude_paths:
-        return files
-    compiled = [re.compile(p) for p in exclude_paths]
-    return {f for f in files if not any(pat.search(f) for pat in compiled)}
 
 
 def _get_commit_body(dest_path: Path, commit_hash: str) -> str:

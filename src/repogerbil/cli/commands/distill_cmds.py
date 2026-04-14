@@ -173,6 +173,13 @@ def snapshot(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
 @click.option("--dry-run", is_flag=True, help="Preview only, no git changes")
+@click.option("--llm-refine", is_flag=True, default=False, help="Refine commit messages with local Ollama LLM")
+@click.option(
+    "--exclude-path",
+    "exclude_paths",
+    multiple=True,
+    help="Regex patterns to strip from every committed tree (repeatable)",
+)
 def multi_snapshot(
     dest_path: str,
     repos: tuple[str, ...],
@@ -181,6 +188,8 @@ def multi_snapshot(
     since: str | None,
     changelog_dir: str | None,
     dry_run: bool,
+    llm_refine: bool,
+    exclude_paths: tuple[str, ...],
 ) -> None:
     """Create a new repo merging multiple source repos into daily commits."""
     from datetime import date as date_type
@@ -202,6 +211,7 @@ def multi_snapshot(
 
     since_date = date_type.fromisoformat(since) if since else None
     cl_dir = Path(changelog_dir) if changelog_dir else None
+    settings = load_settings()
 
     if dry_run:
         from repogerbil.core.multi_snapshot import _collect_all_active_dates
@@ -216,6 +226,19 @@ def multi_snapshot(
             click.echo(f"  ... and {len(active_dates) - 10} more")
         return
 
+    llm_generator = None
+    if llm_refine:
+        from repogerbil.llm.client import HTTPOllamaClient
+        from repogerbil.llm.generator import MessageGenerator
+
+        client = HTTPOllamaClient(base_url=settings.llm_ollama_url)
+        llm_generator = MessageGenerator(
+            client=client,
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            timeout=settings.llm_timeout_seconds,
+        )
+
     result = create_multi_snapshot(
         source_repos=source_repos,
         dest_path=Path(dest_path),
@@ -223,6 +246,8 @@ def multi_snapshot(
         commit_time=commit_time,
         timezone=timezone,
         changelog_dir=cl_dir,
+        exclude_paths=list(exclude_paths) or None,
+        llm_generator=llm_generator,
     )
     click.echo(
         f"Multi-snapshot created at {result.dest_path} "

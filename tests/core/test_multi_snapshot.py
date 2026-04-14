@@ -410,3 +410,129 @@ class TestCreateMultiSnapshot:
 
         # Both dates should produce commits (Jan 10 for beta only, Jan 20 for both)
         assert result.commits_created == 2
+
+
+class TestMultiSnapshotExcludePaths:
+    def test_excluded_files_absent_from_tree(self, tmp_path: Path) -> None:
+        """Files matching exclude_paths are stripped from the merged tree."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-02-01", "main.py", "feat: init")])
+        # Add an artifact file in a second commit
+        (repo / "poetry.lock").write_text("lock\n")
+        subprocess.run(["git", "add", "poetry.lock"], cwd=repo, capture_output=True, check=True)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add lock"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-02-01T13:00:00", "GIT_COMMITTER_DATE": "2026-02-01T13:00:00"},
+        )
+        dest = tmp_path / "dest"
+
+        result = create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            exclude_paths=[r"(poetry|yarn|Pipfile|Gemfile|Cargo|composer|packages|uv)\.lock$"],
+        )
+
+        assert result.commits_created == 1
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "poetry.lock" not in ls.stdout
+        assert "alpha/main.py" in ls.stdout
+
+    def test_no_exclude_paths_passes_through(self, tmp_path: Path) -> None:
+        """Without exclude_paths, all files are kept."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-02-01", "poetry.lock", "chore: lock")])
+        dest = tmp_path / "dest"
+
+        result = create_multi_snapshot(source_repos={"alpha": repo}, dest_path=dest)
+
+        assert result.commits_created == 1
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "alpha/poetry.lock" in ls.stdout
+
+
+class TestMultiSnapshotLLMFallback:
+    def test_llm_error_falls_back_to_default_message(self, tmp_path: Path) -> None:
+        """When the LLM raises, commit still succeeds with the default message."""
+        from unittest.mock import MagicMock
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "feat: init")])
+        dest = tmp_path / "dest"
+
+        bad_generator = MagicMock()
+        bad_generator.generate.side_effect = RuntimeError("LLM unavailable")
+
+        result = create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            llm_generator=bad_generator,
+        )
+
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=dest, capture_output=True, text=True, check=True
+        )
+        # Should have a non-empty commit subject (default message, not empty)
+        assert log.stdout.strip()
+
+
+class TestCollectDayContext:
+    def test_returns_files_and_subjects(self, tmp_path: Path) -> None:
+        """_collect_day_context extracts changed files and subjects for a given day."""
+        from datetime import date
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
+        files, subjects, _bodies = _collect_day_context(
+            {"alpha": repo},
+            {"alpha"},
+            date(2026, 4, 1),
+            exclude_paths=None,
+        )
+        assert "foo.py" in files
+        assert any("add foo" in s for s in subjects)
+
+    def test_exclude_paths_filters_files(self, tmp_path: Path) -> None:
+        """exclude_paths removes matching files from the collected set."""
+        from datetime import date
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "poetry.lock", "chore: lock")])
+        files, _, _ = _collect_day_context(
+            {"alpha": repo},
+            {"alpha"},
+            date(2026, 4, 1),
+            exclude_paths=[r"\.lock$"],
+        )
+        assert not any("lock" in f for f in files)
+
+    def test_missing_repo_skipped(self, tmp_path: Path) -> None:
+        """Repos not present in source_repos dict are silently skipped."""
+        from datetime import date
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        files, subjects, bodies = _collect_day_context(
+            {},
+            {"ghost"},
+            date(2026, 4, 1),
+            exclude_paths=None,
+        )
+        assert files == []
+        assert subjects == []
+        assert bodies == []

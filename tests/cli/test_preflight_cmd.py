@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from repogerbil.cli.main import cli
 
 
-def _make_repo(tmp_path: Path) -> Path:
+def _make_repo(tmp_path: Path, with_lock: bool = True) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     for cmd in [
@@ -23,7 +23,8 @@ def _make_repo(tmp_path: Path) -> Path:
     ]:
         subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
     (repo / "main.py").write_text("x = 1\n")
-    (repo / "poetry.lock").write_text("lock\n")
+    if with_lock:
+        (repo / "poetry.lock").write_text("lock\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
     return repo
@@ -74,19 +75,9 @@ class TestPreflightCmd:
         assert "main.py" in result.output
 
     def test_no_artifacts_shows_none_message(self, tmp_path: Path) -> None:
-        import subprocess as sp
-
-        repo2 = tmp_path / "clean"
-        repo2.mkdir()
-        for cmd in [
-            ["git", "init"],
-            ["git", "config", "user.email", "t@t.com"],
-            ["git", "config", "user.name", "T"],
-        ]:
-            sp.run(cmd, cwd=repo2, capture_output=True, check=False)
-        (repo2 / "main.py").write_text("x = 1\n")
-        sp.run(["git", "add", "."], cwd=repo2, capture_output=True)
-        sp.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
+        clean_dir = tmp_path / "clean"
+        clean_dir.mkdir()
+        repo2 = _make_repo(clean_dir, with_lock=False)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo2)])
         assert result.exit_code == 0
@@ -105,19 +96,9 @@ class TestPreflightCmd:
         assert result.exit_code == 0
 
     def test_no_suggested_flags_message(self, tmp_path: Path) -> None:
-        repo2 = tmp_path / "clean2"
-        repo2.mkdir()
-        import subprocess as sp
-
-        for cmd in [
-            ["git", "init"],
-            ["git", "config", "user.email", "t@t.com"],
-            ["git", "config", "user.name", "T"],
-        ]:
-            sp.run(cmd, cwd=repo2, capture_output=True, check=False)
-        (repo2 / "main.py").write_text("x = 1\n")
-        sp.run(["git", "add", "."], cwd=repo2, capture_output=True)
-        sp.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
+        clean_dir = tmp_path / "clean2"
+        clean_dir.mkdir()
+        repo2 = _make_repo(clean_dir, with_lock=False)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo2)])
         assert result.exit_code == 0
@@ -131,8 +112,6 @@ class TestPreflightCmd:
 
     def test_verbose_no_source_files(self, tmp_path: Path) -> None:
         """Verbose on a repo with only artifact files should not show SOURCE section."""
-        import subprocess as sp
-
         repo2 = tmp_path / "artifacts_only"
         repo2.mkdir()
         for cmd in [
@@ -140,29 +119,19 @@ class TestPreflightCmd:
             ["git", "config", "user.email", "t@t.com"],
             ["git", "config", "user.name", "T"],
         ]:
-            sp.run(cmd, cwd=repo2, capture_output=True, check=False)
+            subprocess.run(cmd, cwd=repo2, capture_output=True, check=False)
         (repo2 / "poetry.lock").write_text("lock\n")
-        sp.run(["git", "add", "."], cwd=repo2, capture_output=True)
-        sp.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo2), "--verbose"])
         assert result.exit_code == 0
         assert "SOURCE" not in result.output
 
     def test_emit_flags_empty_repo_no_output(self, tmp_path: Path) -> None:
-        repo2 = tmp_path / "clean3"
-        repo2.mkdir()
-        import subprocess as sp
-
-        for cmd in [
-            ["git", "init"],
-            ["git", "config", "user.email", "t@t.com"],
-            ["git", "config", "user.name", "T"],
-        ]:
-            sp.run(cmd, cwd=repo2, capture_output=True, check=False)
-        (repo2 / "main.py").write_text("x = 1\n")
-        sp.run(["git", "add", "."], cwd=repo2, capture_output=True)
-        sp.run(["git", "commit", "-m", "init"], cwd=repo2, capture_output=True, check=True)
+        clean_dir = tmp_path / "clean3"
+        clean_dir.mkdir()
+        repo2 = _make_repo(clean_dir, with_lock=False)
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(repo2), "--emit-flags"])
         assert result.exit_code == 0

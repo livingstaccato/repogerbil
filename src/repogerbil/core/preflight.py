@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pre-flight repo scanning and classification."""
+
 from __future__ import annotations
 
 from collections import Counter

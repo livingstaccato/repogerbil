@@ -91,13 +91,20 @@ gerbil related provide-telemetry --date 2026-04-07
 | `fix-stats` | Correct changelog stats to match git truth |
 | `verify` | Check stats accuracy + file coverage |
 | `enrich` | Add per-section stats + import impact to changelogs |
-| `preflight` | Scan a source repo and report files to exclude before distilling |
-| `snapshot` | Create an independent repo with distilled history |
-| `distill` | Consolidate commits into daily/weekly groups (same repo, destructive) |
 | `audit` | Report commit message prefix adoption |
+| `preflight` | Scan a source repo — classify committed files as artifact/source/unknown, emit exclude flags |
+| `snapshot` | Create an independent repo with distilled history |
+| `multi-snapshot` | Merge multiple source repos into one distilled snapshot |
+| `distill` | Consolidate commits into daily/weekly groups (same repo, destructive) |
+| `distill-ecosystem` | Distill multiple repos in parallel with conventional commits |
+| `preview` | Rich table preview of what distillation would produce |
+| `export-cadence` | Export cadence-grouped commits as JSON |
+| `probe` | Probe candidate commit sources for a repo/date pair |
 | `summary` | Generate weekly cross-repo summary |
 | `missing` | Show missing changelog dates across tracked repos |
 | `backfill` | Batch generate changelogs for all missing dates |
+| `lint` | Validate changelog YAML files against schema |
+| `plugin` | Export or install bundled assistant plugin files |
 | `index` | Index changelogs into vector database (requires `[vectordb]`) |
 | `search` | Semantic search across changelogs (requires `[vectordb]`) |
 | `related` | Find related work in other repos (requires `[vectordb]`) |

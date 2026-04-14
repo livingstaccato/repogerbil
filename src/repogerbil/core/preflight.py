@@ -47,6 +47,16 @@ _SOURCE_EXTENSIONS = frozenset(
         ".scss",
         ".proto",
         ".sql",
+        # Cert/key files (test fixtures)
+        ".pem",
+        ".crt",
+        ".csr",
+        ".key",
+        ".srl",
+        ".conf",
+        ".ini",
+        ".feature",
+        ".xml",
     }
 )
 

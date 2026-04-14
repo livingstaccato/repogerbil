@@ -84,4 +84,13 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     # OS noise
     ArtifactRule("OS noise", r"\.DS_Store$"),
     ArtifactRule("OS noise", r"^Thumbs\.db$"),
+    # Binary image files
+    ArtifactRule("binary image", r"\.(png|jpg|jpeg|gif|ico|webp|bmp|tiff)$"),
+    # Binary media files
+    ArtifactRule("binary media", r"\.(mp4|mov|avi|webm|mkv|wmv|flv|m4v)$"),
+    # BFG repo-cleaner leftovers
+    ArtifactRule("BFG leftover", r"\.REMOVED\.git-id$"),
+    ArtifactRule("BFG leftover", r"(^|/)\.bfile$"),
+    # Compiled / linked binaries (by common extensions)
+    ArtifactRule("compiled binary", r"\.(exe|dll|wasm|o|a)$"),
 ]

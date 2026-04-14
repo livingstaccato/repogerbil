@@ -142,3 +142,41 @@ class TestArtifactPatterns:
 
     def test_py_typed_not_matched(self) -> None:
         assert _rule_for("src/repogerbil/py.typed") is None
+
+    def test_png_image(self) -> None:
+        r = _rule_for("docker/images/screenshot.png")
+        assert r is not None and r.label == "binary image"
+
+    def test_jpg_image(self) -> None:
+        assert _rule_for("assets/photo.jpg") is not None
+
+    def test_jpeg_image(self) -> None:
+        assert _rule_for("assets/photo.jpeg") is not None
+
+    def test_gif_image(self) -> None:
+        assert _rule_for("site/favicon.gif") is not None
+
+    def test_mp4_video(self) -> None:
+        r = _rule_for(".tmp-proof-reel/demo.mp4")
+        assert r is not None and r.label == "binary media"
+
+    def test_mov_video(self) -> None:
+        assert _rule_for("recordings/screen.mov") is not None
+
+    def test_bfg_removed_git_id(self) -> None:
+        r = _rule_for("tests/wrapper/pyvider-wrapper.REMOVED.git-id")
+        assert r is not None and r.label == "BFG leftover"
+
+    def test_bfg_bfile(self) -> None:
+        r = _rule_for("src/pyvider/.bfile")
+        assert r is not None and r.label == "BFG leftover"
+
+    def test_bfg_bfile_at_root(self) -> None:
+        assert _rule_for(".bfile") is not None
+
+    def test_exe_binary(self) -> None:
+        r = _rule_for("bin/tool.exe")
+        assert r is not None and r.label == "compiled binary"
+
+    def test_wasm_binary(self) -> None:
+        assert _rule_for("dist/app.wasm") is not None

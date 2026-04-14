@@ -130,6 +130,26 @@ class TestScanRepo:
         assert "Makefile" in source_paths
 
 
+class TestScanRepoErrors:
+    def test_non_git_dir_raises(self, tmp_path: Path) -> None:
+        """scan_repo raises NotAGitRepositoryError for a non-git directory."""
+        import subprocess
+        from unittest.mock import patch
+
+        from repogerbil.core.errors import NotAGitRepositoryError
+
+        plain_dir = tmp_path / "notgit"
+        plain_dir.mkdir()
+        with patch(
+            "repogerbil.core.preflight.subprocess.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            import pytest
+
+            with pytest.raises(NotAGitRepositoryError):
+                scan_repo(plain_dir)
+
+
 class TestCountFiles:
     def test_blank_lines_skipped(self, tmp_path: Path) -> None:
         """Blank lines emitted by git --format= between commits are ignored."""

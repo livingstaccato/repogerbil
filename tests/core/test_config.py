@@ -228,7 +228,7 @@ class TestFindConfigFileMocked:
 def test_settings_has_llm_defaults() -> None:
     s = Settings()
     assert s.llm_ollama_url == "http://localhost:11434"
-    assert s.llm_model == "gemma4"
+    assert s.llm_model == "qwen3-coder-next:q8_0"
     assert s.llm_temperature == 0.0
     assert s.llm_timeout_seconds == 120.0
     assert s.llm_concurrency == 1

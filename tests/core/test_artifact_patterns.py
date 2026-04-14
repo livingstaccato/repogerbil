@@ -110,3 +110,10 @@ class TestArtifactPatterns:
 
     def test_py_file_not_matched_by_pyi(self) -> None:
         assert _rule_for("src/module.py") is None
+
+    def test_codeowners(self) -> None:
+        r = _rule_for(".github/CODEOWNERS")
+        assert r is not None and r.label == "VCS meta"
+
+    def test_codeowners_at_root(self) -> None:
+        assert _rule_for("CODEOWNERS") is not None

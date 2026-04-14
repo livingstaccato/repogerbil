@@ -56,6 +56,8 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     ArtifactRule("ephemeral doc", r"(^|/)SCRATCH\.md$"),
     ArtifactRule("ephemeral doc", r"(^|/)NOTES\.md$"),
     ArtifactRule("ephemeral doc", r"^\.provide(/|$)"),
+    # GitHub/VCS meta files
+    ArtifactRule("VCS meta", r"(^|/)CODEOWNERS$"),
     # Mutation testing artifacts
     ArtifactRule("mutation testing", r"^mutants/"),
     ArtifactRule("mutation testing", r"\.meta$"),

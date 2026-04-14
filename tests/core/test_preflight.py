@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
-
-import pytest
+import subprocess
 
 from repogerbil.core.preflight import PreflightReport, scan_repo
 

@@ -568,9 +568,10 @@ class TestMultiSnapshotLLMRefine:
             changes=[],
         )
 
-        with patch("repogerbil.llm.client.HTTPOllamaClient") as mock_client_cls, patch(
-            "repogerbil.llm.generator.MessageGenerator"
-        ) as mock_gen_cls:
+        with (
+            patch("repogerbil.llm.client.HTTPOllamaClient") as mock_client_cls,
+            patch("repogerbil.llm.generator.MessageGenerator") as mock_gen_cls,
+        ):
             mock_gen_cls.return_value = mock_generator_instance
             result = CliRunner().invoke(
                 cli,

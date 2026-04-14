@@ -90,8 +90,9 @@ The commit represents {commit_count} source commit(s) from {date_str}.
 - scope: optional. Only include when it names a specific subsystem or module that adds
   meaning (e.g. feat(auth), fix(core), refactor(cli)). Omit scope entirely when it would
   just repeat the verb or be generic — e.g. docs(docs), test(tests), chore(chore) are all
-  wrong; use docs:, test:, chore: instead. Use the top-level directory or module name;
-  never sub-path descriptors like "cty-values" — prefer "cty"
+  wrong; use docs:, test:, chore: instead. Scope is always a single word — no dots, no
+  slashes, no hyphens. Use the top-level directory or module name only; never sub-paths
+  like "schema.conversion" or "cty-values" — just "schema" or "cty"
 - description: precise phrase describing what changed (not what the file is named)
 - body: 2-4 sentences explaining WHY this change exists — what problem it solves or what
   capability it establishes. Write in present tense. Do NOT start with "This commit",

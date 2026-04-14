@@ -551,3 +551,32 @@ class TestSnapshotLLMRefine:
             result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])
         assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
+
+
+class TestMultiSnapshotLLMRefine:
+    def test_llm_refine_flag_imports_and_creates_generator(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "multi-llm"
+        from repogerbil.llm.generator import GeneratedMessage
+
+        mock_generator_instance = MagicMock()
+        mock_generator_instance.generate.return_value = GeneratedMessage(
+            message="feat(core): initial implementation",
+            body="Core module introduced.",
+            changes=[],
+        )
+
+        with patch("repogerbil.llm.client.HTTPOllamaClient") as mock_client_cls, patch(
+            "repogerbil.llm.generator.MessageGenerator"
+        ) as mock_gen_cls:
+            mock_gen_cls.return_value = mock_generator_instance
+            result = CliRunner().invoke(
+                cli,
+                ["multi-snapshot", str(dest), f"--repo=alpha:{repo}", "--llm-refine"],
+            )
+
+        assert result.exit_code == 0, result.output
+        mock_client_cls.assert_called_once()
+        mock_gen_cls.assert_called_once()

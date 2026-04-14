@@ -56,6 +56,20 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     ArtifactRule("ephemeral doc", r"(^|/)SCRATCH\.md$"),
     ArtifactRule("ephemeral doc", r"(^|/)NOTES\.md$"),
     ArtifactRule("ephemeral doc", r"^\.provide(/|$)"),
+    # Mutation testing artifacts
+    ArtifactRule("mutation testing", r"^mutants/"),
+    ArtifactRule("mutation testing", r"\.meta$"),
+    # Stale backup files
+    ArtifactRule("backup file", r"\.bak$"),
+    # Coverage reports
+    ArtifactRule("coverage report", r"(^|/)cov\.xml$"),
+    ArtifactRule("coverage report", r"(^|/)coverage\.xml$"),
+    # Go module checksums (lock-file equivalent)
+    ArtifactRule("lock file", r"go\.sum$"),
+    # Developer tool configs
+    ArtifactRule("tool config", r"^\.python-version$"),
+    ArtifactRule("tool config", r"^\.actrc$"),
+    ArtifactRule("tool config", r"^\.pyre_configuration$"),
     # OS noise
     ArtifactRule("OS noise", r"\.DS_Store$"),
     ArtifactRule("OS noise", r"^Thumbs\.db$"),

@@ -68,3 +68,38 @@ class TestArtifactPatterns:
         """Ensure htmlcov/ is anchored at the start."""
         assert _rule_for("htmlcov/index.html") is not None
         assert _rule_for(".venv/lib/python3.11/site-packages/htmlcov/file.html") is None
+
+    def test_mutation_testing_meta_file(self) -> None:
+        r = _rule_for("mutants/src/pyvider/cty/codec.py.meta")
+        assert r is not None and r.label == "mutation testing"
+
+    def test_mutation_testing_dir(self) -> None:
+        assert _rule_for("mutants/src/foo.py") is not None
+
+    def test_bak_file(self) -> None:
+        r = _rule_for("docs/MIGRATION.md.bak")
+        assert r is not None and r.label == "backup file"
+
+    def test_cov_xml(self) -> None:
+        r = _rule_for("cov.xml")
+        assert r is not None and r.label == "coverage report"
+
+    def test_coverage_xml(self) -> None:
+        assert _rule_for("coverage.xml") is not None
+
+    def test_go_sum(self) -> None:
+        r = _rule_for("go.sum")
+        assert r is not None and r.label == "lock file"
+
+    def test_go_sum_in_subdir(self) -> None:
+        assert _rule_for("compatibility/go/go.sum") is not None
+
+    def test_python_version_file(self) -> None:
+        r = _rule_for(".python-version")
+        assert r is not None and r.label == "tool config"
+
+    def test_actrc(self) -> None:
+        assert _rule_for(".actrc") is not None
+
+    def test_pyre_configuration(self) -> None:
+        assert _rule_for(".pyre_configuration") is not None

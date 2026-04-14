@@ -1,6 +1,6 @@
 ---
 name: gerbil
-description: Git history documentation and consolidation — generate changelogs, verify stats, distill commits, audit prefix adoption, and search changelog archives. Context-aware when invoked without arguments.
+description: Git history documentation, consolidation, and snapshot distillation — generate changelogs, verify stats, distill commits, audit prefix adoption, preflight inspect repos before snapshot, and search changelog archives. Context-aware when invoked without arguments.
 user-invocable: true
 ---
 
@@ -40,9 +40,10 @@ When invoked without arguments:
 | `fix-stats` | `<cl_dir> <repo>` | `--since` | Correct stats to match git truth |
 | `verify` | `<cl_dir> <repo>` | `--since`, `--tolerance` | Check stats accuracy and file coverage |
 | `enrich` | `<cl_dir> <repo>` | `--since`, `--depth {file\|package\|cross-repo}` | Add per-section stats and impact |
-| `distill` | `<repo>` | `--dry-run`, `--cadence`, `--since`, `--target-branch`, `--changelog-dir` | Consolidate commits on a branch |
+| `distill` | `<repo>` | `--dry-run`, `--cadence`, `--since`, `--target-branch`, `--changelog-dir` | Consolidate commits on a branch (destructive) |
 | `preview` | `<repo>` | `--cadence`, `--since` | Rich table preview of distillation |
-| `snapshot` | `<repo> <dest>` | `--cadence`, `--since`, `--source-branch`, `--changelog-dir` | Create an independent repo with distilled history |
+| `preflight` | `<source>` | `--since`, `--until`, `--emit-flags`, `--verbose` | Inspect source repo — classify files as artifact/source/unknown, suggest exclude flags |
+| `snapshot` | `<source> <dest>` | `--cadence`, `--since`, `--exclude-path`, `--time-window-start`, `--time-window-end`, `--timezone`, `--commit-time`, `--source-branch`, `--changelog-dir` | Create an independent repo with distilled history |
 | `export-cadence` | `<repo>` | `--cadence`, `--since`, `-o` | JSON export of time-grouped commits |
 | `audit` | `<repo>` | `--since`, `--show-bad` | Commit message prefix adoption |
 | `summary` | `<cl_dir>` | `--year`, `--week`, `--output-dir`, `--prompt`, `--force` | Weekly cross-repo summary |
@@ -72,7 +73,7 @@ gerbil verify <cl_dir> <repo>
 gerbil enrich <cl_dir> <repo>
 ```
 
-### Clean up history
+### Clean up history (same-repo, destructive)
 
 ```bash
 gerbil preview <repo> --cadence daily
@@ -80,6 +81,28 @@ gerbil distill <repo> --dry-run --changelog-dir <cl_dir>
 # Ask the user before proceeding: distilling is destructive
 gerbil distill <repo> --changelog-dir <cl_dir>
 ```
+
+### Snapshot a repo (independent copy, non-destructive)
+
+```bash
+# Step 1: inspect first — classify every committed file path
+gerbil preflight <source>
+# Step 2: copy suggested flags and build the snapshot command
+gerbil preflight <source> --emit-flags
+# Step 3: create the distilled snapshot
+gerbil snapshot <source> <dest> \
+  --cadence gap:15m \
+  --exclude-path '__pycache__' \
+  --exclude-path '(poetry|yarn|Pipfile|Gemfile|Cargo|composer|packages|uv)\.lock$' \
+  --time-window-start 20:00 \
+  --time-window-end 00:00 \
+  --timezone America/Los_Angeles
+```
+
+Key snapshot options:
+- `--exclude-path` — full Python `re.search()` regex, repeatable; strips matching paths from every committed tree
+- `--time-window-start` / `--time-window-end` — spread commits across a daily window (`HH:MM`), proportional to file count + jitter; requires `--timezone`; mutually exclusive with `--commit-time`
+- `--commit-time` — pin all commits to a fixed `HH:MM` time instead
 
 ### Weekly report
 

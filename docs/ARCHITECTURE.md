@@ -17,12 +17,17 @@ repogerbil/
 │   ├── summary.py         Weekly summary generation
 │   ├── config.py          pydantic-settings with TOML + env vars
 │   ├── vocabulary.py      Category/severity definitions
+│   ├── snapshot.py        Independent repo creation with distilled history
+│   ├── artifact_patterns.py  Regex rules classifying known artifact file types
+│   ├── preflight.py       Scan repo file history into PreflightReport
 │   ├── embeddings.py      Embedding model wrapper (sentence-transformers or hash)
 │   ├── vectordb.py        ChromaDB wrapper with 4 collections
 │   └── search.py          High-level semantic search + indexing
 ├── cli/               Click CLI — thin wrappers around core
-│   ├── main.py            14 commands
+│   ├── main.py            16 commands
 │   └── commands/
+│       ├── distill_cmds.py   snapshot, multi-snapshot, preview, export-cadence
+│       ├── preflight_cmd.py  preflight — repo inspection before distilling
 │       └── vectordb_cmds.py  Optional vector DB commands (index, search, related)
 ```
 
@@ -96,6 +101,9 @@ Source repo (git)
 - **Settings** — pydantic-settings: full config with TOML + env resolution
 - **TimeGroup** — frozen dataclass: period_start, period_end, commits, files_affected
 - **ConsolidationResult** — frozen dataclass: target_branch, backup_branch, backup_tag, counts
+- **ArtifactRule** — frozen dataclass: label, pattern (regex), flag (exclude-path value); pre-compiled
+- **FileRecord** — frozen dataclass: path, commit_count, rule (ArtifactRule | None)
+- **PreflightReport** — frozen dataclass: artifacts, source, unknown (all tuples), suggested_flags
 - **VectorStore** — ChromaDB wrapper: changelogs, changes, filepaths, diffs collections
 - **Embedder** — Protocol: embed(text) → list[float], embed_batch(texts) → list[list[float]]
 

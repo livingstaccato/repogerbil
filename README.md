@@ -57,6 +57,21 @@ gerbil distill /path/to/repo --dry-run
 # Distill with changelog-based commit messages
 gerbil distill /path/to/repo --changelog-dir /path/to/changelogs
 
+# Inspect a source repo before distilling — surface artifacts to exclude
+gerbil preflight /path/to/repo
+
+# Emit ready-to-paste --exclude-path flags for gerbil snapshot
+gerbil preflight /path/to/repo --emit-flags
+
+# Create an independent distilled snapshot repo
+gerbil snapshot /path/to/source /path/to/dest \
+  --cadence gap:15m \
+  --exclude-path '^\.claude(/|$)' \
+  --exclude-path '\.lock$' \
+  --time-window-start 20:00 \
+  --time-window-end 00:00 \
+  --timezone America/Los_Angeles
+
 # Index changelogs for semantic search (requires vectordb extra)
 gerbil index /path/to/changelogs
 
@@ -76,7 +91,9 @@ gerbil related provide-telemetry --date 2026-04-07
 | `fix-stats` | Correct changelog stats to match git truth |
 | `verify` | Check stats accuracy + file coverage |
 | `enrich` | Add per-section stats + import impact to changelogs |
-| `distill` | Consolidate commits into daily/weekly groups |
+| `preflight` | Scan a source repo and report files to exclude before distilling |
+| `snapshot` | Create an independent repo with distilled history |
+| `distill` | Consolidate commits into daily/weekly groups (same repo, destructive) |
 | `audit` | Report commit message prefix adoption |
 | `summary` | Generate weekly cross-repo summary |
 | `missing` | Show missing changelog dates across tracked repos |
@@ -84,6 +101,72 @@ gerbil related provide-telemetry --date 2026-04-07
 | `index` | Index changelogs into vector database (requires `[vectordb]`) |
 | `search` | Semantic search across changelogs (requires `[vectordb]`) |
 | `related` | Find related work in other repos (requires `[vectordb]`) |
+
+## Snapshot Workflow
+
+`snapshot` creates an entirely independent destination repo with a clean, distilled history derived from the source. The source is never modified.
+
+```bash
+# 1. Inspect the source repo — see what would be excluded
+gerbil preflight /path/to/source
+gerbil preflight /path/to/source --verbose   # also show source files
+gerbil preflight /path/to/source --emit-flags  # print ready-to-paste flags
+
+# 2. Create the snapshot
+gerbil snapshot /path/to/source /path/to/dest \
+  --cadence gap:15m \
+  --exclude-path '__pycache__' \
+  --exclude-path '(poetry|yarn|Pipfile|Gemfile|Cargo|composer|packages|uv)\.lock$' \
+  --exclude-path '^\.claude(/|$)' \
+  --time-window-start 20:00 \
+  --time-window-end 00:00 \
+  --timezone America/Los_Angeles
+```
+
+### `--exclude-path`
+
+Full Python `re.search()` regex. Matched paths are stripped from every committed tree. Repeatable.
+
+| Pattern | Excludes |
+|---------|---------|
+| `__pycache__` | All `__pycache__` dirs |
+| `\.lock$` | All lock files |
+| `^\.claude(/\|$)` | `.claude/` directory at repo root |
+| `^mutants/` | Mutation testing output |
+| `\.bak$` | Stale backup files |
+
+### `--time-window-start` / `--time-window-end`
+
+Spread snapshot commits across a daily time window (`HH:MM` format). Commits are spaced proportionally by number of changed files with random jitter — makes reconstructed history look organic. Requires `--timezone`. Mutually exclusive with `--commit-time`.
+
+```bash
+--time-window-start 20:00 --time-window-end 00:00 --timezone America/Los_Angeles
+# 3 commits on 2026-04-10 land at e.g. 20:14, 21:47, 23:22
+```
+
+Windows crossing midnight are supported (`23:00`–`01:00`).
+
+### Preflight artifact categories
+
+`preflight` classifies every committed file path against known artifact patterns:
+
+| Category | Examples |
+|----------|---------|
+| Python bytecode | `__pycache__/`, `.pyc`, `.pyo`, `.pytest_cache`, `.mypy_cache` |
+| Lock files | `poetry.lock`, `yarn.lock`, `go.sum`, `go.mod`, `package-lock.json` |
+| Build artifacts | `dist/`, `build/`, `.egg-info/`, `.so`, `.zip` |
+| Generated stubs | `.pyi` |
+| Mutation testing | `mutants/`, `.meta` |
+| Backup files | `.bak` |
+| Coverage reports | `htmlcov/`, `.coverage`, `cov.xml`, `coverage.xml` |
+| AI tool configs | `.claude/`, `.codex/`, `.cursor/`, `.aider/`, `.continue/` |
+| IDE configs | `.idea/`, `.vscode/` |
+| VCS meta | `CODEOWNERS` |
+| Ephemeral docs | `HANDOFF.md`, `SCRATCH.md`, `NOTES.md`, `.provide/` |
+| Tool configs | `.python-version`, `.actrc`, `.pyre_configuration` |
+| Vendored deps | `vendor/`, `node_modules/` |
+| Binary fixtures | `.msgpack` |
+| OS noise | `.DS_Store`, `Thumbs.db` |
 
 ## Changelog Modes
 

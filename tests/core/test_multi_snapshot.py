@@ -576,8 +576,8 @@ class TestCollectDayContext:
 
     def test_subprocess_error_skips_repo(self, tmp_path: Path) -> None:
         """SubprocessError from git is caught and the repo is silently skipped."""
-        import subprocess
         from datetime import date
+        import subprocess
         from unittest.mock import patch
 
         from repogerbil.core.multi_snapshot import _collect_day_context

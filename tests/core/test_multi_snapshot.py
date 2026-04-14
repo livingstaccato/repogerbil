@@ -464,6 +464,49 @@ class TestMultiSnapshotExcludePaths:
         assert "alpha/poetry.lock" in ls.stdout
 
 
+class TestMultiSnapshotLLMBypass:
+    def test_llm_skipped_when_all_subjects_well_formed(self, tmp_path: Path) -> None:
+        """LLM is not called when all commit subjects in the day are already well-formed."""
+        from unittest.mock import MagicMock
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "feat: add module")])
+        dest = tmp_path / "dest-bypass"
+        mock_gen = MagicMock()
+
+        result = create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            llm_generator=mock_gen,
+        )
+
+        assert result.commits_created == 1
+        mock_gen.generate.assert_not_called()
+
+    def test_llm_called_when_subjects_not_well_formed(self, tmp_path: Path) -> None:
+        """LLM is called when at least one commit subject is not well-formed."""
+        from unittest.mock import MagicMock
+
+        from repogerbil.llm.generator import GeneratedMessage
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "wip: messy commit")])
+        dest = tmp_path / "dest-llm"
+        mock_gen = MagicMock()
+        mock_gen.generate.return_value = GeneratedMessage(
+            message="scaffold(alpha): initial module",
+            body="Sets up the module.",
+            changes=[{"file": "a.py", "description": "introduce module"}],
+        )
+
+        result = create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            llm_generator=mock_gen,
+        )
+
+        assert result.commits_created == 1
+        mock_gen.generate.assert_called_once()
+
+
 class TestMultiSnapshotLLMSuccess:
     def test_llm_success_writes_sidecar_jsonl(self, tmp_path: Path) -> None:
         """When LLM succeeds, message is used and sidecar JSONL is written."""
@@ -472,7 +515,7 @@ class TestMultiSnapshotLLMSuccess:
 
         from repogerbil.llm.generator import GeneratedMessage
 
-        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "feat: init")])
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "wip: messy message")])
         dest = tmp_path / "dest"
 
         good_generator = MagicMock()
@@ -506,7 +549,7 @@ class TestMultiSnapshotLLMFallback:
         """When the LLM raises, commit still succeeds with the default message."""
         from unittest.mock import MagicMock
 
-        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "feat: init")])
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "wip: messy message")])
         dest = tmp_path / "dest"
 
         bad_generator = MagicMock()

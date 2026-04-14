@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import random
-import re
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -24,6 +23,7 @@ from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 from repogerbil.core.multi_snapshot import _make_timestamp
 from repogerbil.core.tree_filter import exclude_files as _exclude_files, filter_tree as _filter_tree
+from repogerbil.llm.prompt import WELL_FORMED_RE
 
 if TYPE_CHECKING:
     from repogerbil.llm.generator import MessageGenerator
@@ -245,7 +245,8 @@ def _create_commits(  # noqa: C901 — intentionally broad; each branch is simpl
         _run_git(dest_path, "read-tree", tree_sha)
 
         generated = None
-        if llm_generator is not None:
+        subjects = [c.subject for c in group.commits]
+        if llm_generator is not None and not all(WELL_FORMED_RE.match(s) for s in subjects):
             all_files: set[str] = set()
             for commit in group.commits:
                 all_files.update(_get_files_for_commit(dest_path, commit.hash))
@@ -255,7 +256,7 @@ def _create_commits(  # noqa: C901 — intentionally broad; each branch is simpl
                 date_str=group.period_start.strftime("%Y-%m-%d"),
                 files=sorted(all_files),
                 commit_count=len(group.commits),
-                original_subjects=[c.subject for c in group.commits],
+                original_subjects=subjects,
                 original_bodies=original_bodies,
             )
             message = generated.message
@@ -492,12 +493,6 @@ def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:
     )
 
 
-_CONVENTIONAL_RE = re.compile(
-    r"^(feat|fix|refactor|chore|test|docs|ci|perf|build|style|release"
-    r"|standardize|revert|Merge )(\(.*?\))?:?"
-)
-
-
 def _build_snapshot_message(
     group: TimeGroup,
     changelog_messages: dict[str, str] | None,
@@ -520,9 +515,9 @@ def _build_snapshot_message(
             used_keys.add(date_str)
         return changelog_messages[date_str]
 
-    # No changelog (or already used): only list conventional commits, suppress garbage
+    # No changelog (or already used): only list well-formed commits, suppress garbage
     n = len(group.commits)
-    conventional = [c.subject for c in group.commits if _CONVENTIONAL_RE.match(c.subject)]
+    conventional = [c.subject for c in group.commits if WELL_FORMED_RE.match(c.subject)]
 
     if len(conventional) == 1:
         return conventional[0]

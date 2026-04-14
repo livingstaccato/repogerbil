@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import re
+
 PROMPT_VERSION: str = "1.4.0"
 
-_VERB_HINTS: dict[str, str] = {
+VERB_HINTS: dict[str, str] = {
     # conventional prefixes
     "feat": "new user-visible feature or capability",
     "fix": "bug fix or incorrect-behaviour correction",
@@ -30,6 +32,12 @@ _VERB_HINTS: dict[str, str] = {
     "baseline": "maintenance, config, dependency, or build changes (more specific than chore)",
     "deprecate": "removing or marking functionality for removal",
 }
+
+# Regex matching any well-formed conventional commit subject using the full verb vocabulary.
+# Used by snapshot and multi_snapshot to skip the LLM when all commits in a group are
+# already well-formed (verb(scope): description or verb: description).
+_verb_alt = "|".join(re.escape(v) for v in VERB_HINTS)
+WELL_FORMED_RE: re.Pattern[str] = re.compile(rf"^({_verb_alt})(\([^)]+\))?:\s+\S")
 
 
 def build_prompt(
@@ -54,7 +62,7 @@ def build_prompt(
     Returns:
         Prompt string to send to the LLM.
     """
-    verb_block = "\n".join(f"  - {v}: {_VERB_HINTS.get(v, '')}" for v in sorted(allowed_verbs))
+    verb_block = "\n".join(f"  - {v}: {VERB_HINTS.get(v, '')}" for v in sorted(allowed_verbs))
     file_block = "\n".join(f"  - {f}" for f in sorted(files))
     if original_subjects:
         subject_block = "\n".join(f"  - {s}" for s in original_subjects)

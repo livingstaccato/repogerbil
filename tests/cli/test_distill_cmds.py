@@ -533,6 +533,24 @@ class TestSnapshotTimeWindow:
 
 
 class TestSnapshotLLMRefine:
+    def test_llm_refine_skips_llm_when_all_well_formed(self, tmp_path: Path) -> None:
+        """LLM is not called when every commit in a group already has a well-formed subject."""
+        from unittest.mock import MagicMock, patch
+
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-bypass"
+        mock_gen = MagicMock()
+
+        with (
+            patch("repogerbil.llm.client.HTTPOllamaClient"),
+            patch("repogerbil.llm.generator.MessageGenerator", return_value=mock_gen),
+        ):
+            result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])
+
+        assert result.exit_code == 0, result.output
+        # The test repo has "feat: initial" — well-formed, so generator.generate is never called
+        mock_gen.generate.assert_not_called()
+
     def test_llm_refine_flag_accepted(self, tmp_path: Path) -> None:
         from unittest.mock import patch
 

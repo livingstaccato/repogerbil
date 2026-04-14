@@ -34,7 +34,7 @@ def _init_repo(tmp_path: Path) -> Path:
     (repo / "a.py").write_text("a\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
-        ["git", "commit", "-m", "feat: add a"],
+        ["git", "commit", "-m", "add a"],
         cwd=repo,
         capture_output=True,
         check=True,
@@ -171,15 +171,18 @@ class TestCreateSnapshot:
         """Test auto-generated message for group with multiple commits."""
         source = _init_repo(tmp_path)
         dest = tmp_path / "multi"
-        # Both commits are on different days but we'll group them into one
+        # Both commits are on different days but we'll group them into one.
+        # Override subjects explicitly so the test is independent of _init_repo commit messages.
         apr7 = get_commits_for_date(source, "2026-04-07")
         apr8 = get_commits_for_date(source, "2026-04-08")
-        combined = apr7 + apr8
         groups = [
             TimeGroup(
                 period_start=datetime(2026, 4, 7, tzinfo=UTC),
                 period_end=datetime(2026, 4, 8, 23, 59, 59, tzinfo=UTC),
-                commits=combined,
+                commits=[
+                    CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="feat: add a"),
+                    CommitInfo(hash=apr8[0].hash, date=apr8[0].date, subject="fix: add b"),
+                ],
             ),
         ]
         result = create_snapshot(source, dest, groups)
@@ -556,7 +559,7 @@ class TestGetCommitBody:
 
         commits = get_commits_for_date(source, "2026-04-07")
         body = _get_commit_body(dest, commits[0].hash)
-        assert "feat: add a" in body
+        assert "add a" in body
 
     def test_returns_empty_string_on_bad_hash(self, tmp_path: Path) -> None:
         """_get_commit_body returns '' for an invalid commit hash."""

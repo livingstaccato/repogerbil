@@ -24,6 +24,7 @@ from repogerbil.core._multi_snapshot_git import (
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 from repogerbil.core.tree_filter import exclude_files
+from repogerbil.llm.prompt import WELL_FORMED_RE
 
 if TYPE_CHECKING:
     from repogerbil.llm.generator import MessageGenerator
@@ -165,17 +166,22 @@ def _create_daily_commits(
         generated = None
         if llm_generator is not None:
             files, subjects, bodies = _collect_day_context(source_repos, active_repos, day, exclude_paths)
-            try:
-                generated = llm_generator.generate(
-                    date_str=day.isoformat(),
-                    files=files,
-                    commit_count=len(subjects),
-                    original_subjects=subjects,
-                    original_bodies=bodies,
-                )
-                message = generated.message
-            except Exception:
+            # Strip the "reponame: " prefix that _collect_day_context prepends before checking
+            raw_subjects = [s.split(": ", 1)[1] if ": " in s else s for s in subjects]
+            if raw_subjects and all(WELL_FORMED_RE.match(s) for s in raw_subjects):
                 message = _build_message(day, active_repos, changelog_messages)
+            else:
+                try:
+                    generated = llm_generator.generate(
+                        date_str=day.isoformat(),
+                        files=files,
+                        commit_count=len(subjects),
+                        original_subjects=subjects,
+                        original_bodies=bodies,
+                    )
+                    message = generated.message
+                except Exception:
+                    message = _build_message(day, active_repos, changelog_messages)
         else:
             message = _build_message(day, active_repos, changelog_messages)
 

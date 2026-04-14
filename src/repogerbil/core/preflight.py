@@ -68,15 +68,18 @@ class FileRecord:
 
 @dataclass(frozen=True)
 class PreflightReport:
-    artifacts: list[FileRecord]  # matched an ARTIFACT_RULES rule
-    source: list[FileRecord]  # .py/.go/.rb/.tf/etc — clearly source
-    unknown: list[FileRecord]  # everything else — needs human eval
-    suggested_flags: list[str]  # de-duped --exclude-path values, in order
+    artifacts: tuple[FileRecord, ...]  # matched an ARTIFACT_RULES rule
+    source: tuple[FileRecord, ...]  # .py/.go/.rb/.tf/etc — clearly source
+    unknown: tuple[FileRecord, ...]  # everything else — needs human eval
+    suggested_flags: tuple[str, ...]  # de-duped --exclude-path values, in order
 
 
 def _count_files(repo: Path, since: str | None, until: str | None) -> Counter[str]:
-    """Run git log and return per-file commit counts."""
-    cmd = ["git", "log", "--name-only", "--format=%H"]
+    """Run git log and return per-file commit counts.
+
+    git --format= emits blank lines between commits; rename tracking shows old and new names as separate paths.
+    """
+    cmd = ["git", "log", "--name-only", "--format="]
     if since:
         cmd += [f"--since={since}"]
     if until:
@@ -94,9 +97,6 @@ def _count_files(repo: Path, since: str | None, until: str | None) -> Counter[st
     for line in result.stdout.splitlines():
         stripped = line.strip()
         if not stripped:
-            continue
-        # Skip commit hash lines (40 hex chars)
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
             continue
         counts[stripped] += 1
     return counts
@@ -137,10 +137,10 @@ def scan_repo(
     file_counts = _count_files(repo, since, until)
     artifacts, source, unknown, suggested_flags = _classify_files(file_counts)
     return PreflightReport(
-        artifacts=artifacts,
-        source=source,
-        unknown=unknown,
-        suggested_flags=suggested_flags,
+        artifacts=tuple(artifacts),
+        source=tuple(source),
+        unknown=tuple(unknown),
+        suggested_flags=tuple(suggested_flags),
     )
 
 

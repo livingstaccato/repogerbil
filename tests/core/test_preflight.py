@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from unittest.mock import MagicMock, patch
 
-from repogerbil.core.preflight import PreflightReport, scan_repo
+from repogerbil.core.preflight import PreflightReport, _count_files, scan_repo
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -83,20 +84,20 @@ class TestScanRepo:
         repo = _make_repo(tmp_path)
         # A future date means no commits match; should return empty report.
         report = scan_repo(repo, since="2099-01-01")
-        assert report.artifacts == []
-        assert report.source == []
-        assert report.unknown == []
-        assert report.suggested_flags == []
+        assert report.artifacts == ()
+        assert report.source == ()
+        assert report.unknown == ()
+        assert report.suggested_flags == ()
 
     def test_until_filter(self, tmp_path: Path) -> None:
         """until parameter is passed through to git log."""
         repo = _make_repo(tmp_path)
         # A past date means no commits match; should return empty report.
         report = scan_repo(repo, until="1970-01-01")
-        assert report.artifacts == []
-        assert report.source == []
-        assert report.unknown == []
-        assert report.suggested_flags == []
+        assert report.artifacts == ()
+        assert report.source == ()
+        assert report.unknown == ()
+        assert report.suggested_flags == ()
 
     def test_file_record_rule_is_none_for_source(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
@@ -125,3 +126,15 @@ class TestScanRepo:
         report = scan_repo(repo)
         source_paths = {r.path for r in report.source}
         assert "Makefile" in source_paths
+
+
+class TestCountFiles:
+    def test_blank_lines_skipped(self, tmp_path: Path) -> None:
+        """Blank lines emitted by git --format= between commits are ignored."""
+        mock_result = MagicMock()
+        mock_result.stdout = "\nmain.py\n\nREADME.md\n\n"
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result):
+            counts = _count_files(tmp_path, None, None)
+        assert counts["main.py"] == 1
+        assert counts["README.md"] == 1
+        assert "" not in counts

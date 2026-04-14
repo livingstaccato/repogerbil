@@ -54,7 +54,21 @@ if TYPE_CHECKING:
     "--exclude-path",
     "exclude_paths",
     multiple=True,
-    help="Strip this path from every committed tree (repeatable, e.g. --exclude-path .claude)",
+    help=(
+        "Regex pattern to strip matching paths from every committed tree (repeatable). "
+        "Uses re.search so the pattern matches anywhere in the file path unless anchored. "
+        "E.g. --exclude-path '^\\.claude(/|$)' or --exclude-path '.*\\.lock$'"
+    ),
+)
+@click.option(
+    "--time-window-start",
+    default=None,
+    help="Start of daily commit window as HH:MM (use with --timezone and --time-window-end)",
+)
+@click.option(
+    "--time-window-end",
+    default=None,
+    help="End of daily commit window as HH:MM. Supports midnight-crossing windows.",
 )
 def snapshot(
     repo_path: str,
@@ -70,10 +84,19 @@ def snapshot(
     source_subdir: str | None = None,
     llm_refine: bool = False,
     exclude_paths: tuple[str, ...] = (),
+    time_window_start: str | None = None,
+    time_window_end: str | None = None,
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
     from repogerbil.core.git import get_commits_for_path
     from repogerbil.core.snapshot import create_snapshot
+
+    if commit_time and (time_window_start or time_window_end):
+        raise click.UsageError(
+            "--commit-time and --time-window-start/--time-window-end are mutually exclusive"
+        )
+    if (time_window_start is None) != (time_window_end is None):
+        raise click.UsageError("--time-window-start and --time-window-end must both be provided")
 
     path = Path(repo_path)
     dest = Path(dest_path)
@@ -133,6 +156,8 @@ def snapshot(
         source_subdir=source_subdir,
         llm_generator=llm_generator,
         exclude_paths=list(exclude_paths) or None,
+        time_window_start=time_window_start,
+        time_window_end=time_window_end,
     )
     dedup_msg = f" ({result.groups_skipped} duplicate tree states removed)" if result.groups_skipped else ""
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits){dedup_msg}")

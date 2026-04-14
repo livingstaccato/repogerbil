@@ -5,16 +5,19 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 import contextlib
 from dataclasses import dataclass
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timedelta
 import json
 import os
 from pathlib import Path
+import random
 import re
 import subprocess
 import sys
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.errors import GitCommandError
@@ -50,6 +53,8 @@ def create_snapshot(
     llm_generator: MessageGenerator | None = None,
     progress: bool = False,
     exclude_paths: list[str] | None = None,
+    time_window_start: str | None = None,
+    time_window_end: str | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
@@ -59,9 +64,16 @@ def create_snapshot(
     Args:
         source_subdir: When set, filter primary source commits to this subdirectory
                       and use its tree state (for monorepo sources).
-        exclude_paths: Paths to strip from every committed tree (e.g. [".claude",
-                      "vendor"]). Deduplication also uses the filtered tree so groups
-                      that differ only in excluded content are correctly collapsed.
+        exclude_paths: Regex patterns to strip matching paths from every committed tree
+                      (e.g. ["^\\.claude(/|$)", ".*\\.lock$"]). Uses re.search so patterns
+                      match anywhere in the file path unless anchored. Deduplication also
+                      uses the filtered tree so groups that differ only in excluded content
+                      are correctly collapsed.
+        time_window_start: Start of daily commit window as HH:MM (use with --timezone).
+                          Commits are spread across [time_window_start, time_window_end]
+                          with spacing weighted by group size plus random jitter.
+        time_window_end: End of daily commit window as HH:MM. Supports midnight-crossing
+                        windows (e.g. start="23:00", end="01:00").
     """
     if dest_path.exists() and any(dest_path.iterdir()):
         msg = f"Destination already exists and is not empty: {dest_path}"
@@ -87,6 +99,8 @@ def create_snapshot(
         progress,
         summaries_path,
         exclude_paths,
+        time_window_start,
+        time_window_end,
     )
 
     for rname in remote_names:
@@ -174,7 +188,7 @@ def _deduplicate_groups(
     return unique_groups, skipped
 
 
-def _create_commits(
+def _create_commits(  # noqa: C901 — intentionally broad; each branch is simple
     dest_path: Path,
     groups: list[TimeGroup],
     changelog_messages: dict[str, str] | None,
@@ -186,6 +200,8 @@ def _create_commits(
     progress: bool = False,
     summaries_path: Path | None = None,
     exclude_paths: list[str] | None = None,
+    time_window_start: str | None = None,
+    time_window_end: str | None = None,
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
@@ -193,12 +209,18 @@ def _create_commits(
         source_subdir: When set, use the tree state of this subdirectory
                       within each commit (for monorepo sources).
         summaries_path: When set, append LLM summaries as JSONL records here.
-        exclude_paths: Paths stripped from every committed tree.
+        exclude_paths: Regex patterns stripped from every committed tree.
+        time_window_start: Start of daily commit window (HH:MM).
+        time_window_end: End of daily commit window (HH:MM).
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
     total = len(groups)
     width = len(str(total))
+
+    window_timestamps: list[str] | None = None
+    if time_window_start and time_window_end and timezone:
+        window_timestamps = _compute_window_timestamps(groups, time_window_start, time_window_end, timezone)
 
     for idx, group in enumerate(groups, 1):
         if not group.commits:
@@ -238,7 +260,10 @@ def _create_commits(
             message = generated.message
         else:
             message = _build_snapshot_message(group, changelog_messages, used_changelog_keys)
-        date_str = _resolve_timestamp(group, commit_time, timezone)
+        if window_timestamps is not None:
+            date_str = window_timestamps[idx - 1]
+        else:
+            date_str = _resolve_timestamp(group, commit_time, timezone)
 
         if progress:
             first_line = message.splitlines()[0][:72]
@@ -316,7 +341,7 @@ def _commit_with_timestamp(
 
 
 def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None) -> str:
-    """Return a new tree SHA with the given paths removed.
+    """Return a new tree SHA with files matching any exclude regex removed.
 
     Uses a temporary index so the real index and working tree are untouched.
     Returns the original ``tree_sha`` unchanged when ``exclude_paths`` is empty.
@@ -324,7 +349,8 @@ def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None
     Args:
         dest_path: Repository where the tree object lives.
         tree_sha: SHA of the tree to filter.
-        exclude_paths: Top-level paths to strip (e.g. [".claude", "vendor"]).
+        exclude_paths: Regex patterns to match against file paths (via re.search).
+                      E.g. ["^\\.claude(/|$)", ".*\\.lock$"].
 
     Returns:
         SHA of the filtered tree, or the original SHA if nothing to exclude.
@@ -333,6 +359,8 @@ def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None
         return tree_sha
 
     import tempfile
+
+    compiled = [re.compile(p) for p in exclude_paths]
 
     with tempfile.NamedTemporaryFile(dir=str(dest_path / ".git"), delete=True) as tmp:
         env = {**os.environ, "GIT_INDEX_FILE": tmp.name}
@@ -343,9 +371,19 @@ def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None
             capture_output=True,
             check=True,
         )
-        for path in exclude_paths:
+        # Enumerate all files and filter by regex
+        ls = subprocess.run(
+            ["git", "ls-files"],  # noqa: S607
+            cwd=str(dest_path),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        to_remove = [f for f in ls.stdout.splitlines() if f and any(pat.search(f) for pat in compiled)]
+        for f in to_remove:
             subprocess.run(  # noqa: S603
-                ["git", "rm", "-r", "--cached", "--quiet", "--ignore-unmatch", path],  # noqa: S607
+                ["git", "rm", "--cached", "--quiet", f],  # noqa: S607
                 cwd=str(dest_path),
                 env=env,
                 capture_output=True,
@@ -362,18 +400,20 @@ def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None
 
 
 def _exclude_files(files: set[str], exclude_paths: list[str] | None) -> set[str]:
-    """Remove files whose path starts with any of the excluded prefixes.
+    """Remove files whose path matches any of the exclude regex patterns.
 
     Args:
         files: Set of file paths to filter.
-        exclude_paths: Path prefixes to exclude (e.g. [".claude", "vendor"]).
+        exclude_paths: Regex patterns to match against file paths (via re.search).
+                      E.g. ["^\\.claude(/|$)", ".*\\.lock$"].
 
     Returns:
-        Filtered set with excluded paths removed.
+        Filtered set with matched paths removed.
     """
     if not exclude_paths:
         return files
-    return {f for f in files if not any(f == p or f.startswith(p + "/") for p in exclude_paths)}
+    compiled = [re.compile(p) for p in exclude_paths]
+    return {f for f in files if not any(pat.search(f) for pat in compiled)}
 
 
 def _get_commit_body(dest_path: Path, commit_hash: str) -> str:
@@ -419,6 +459,100 @@ def _get_files_for_commit(dest_path: Path, commit_hash: str) -> list[str]:
         return sorted(line.strip() for line in output.splitlines() if line.strip())
     except GitCommandError:
         return []
+
+
+def _spread_timestamps_for_day(
+    day_groups: list[TimeGroup],
+    start_dt: datetime,
+    end_dt: datetime,
+    rng: random.Random,
+) -> list[str]:
+    """Spread N groups across [start_dt, end_dt] with weight-proportional spacing.
+
+    Each group occupies a proportional slot sized by its ``files_affected`` count.
+    A random position is chosen within the middle 80% of each slot, ensuring
+    strictly increasing timestamps by construction.
+
+    Args:
+        day_groups: Groups to spread (all from the same calendar day).
+        start_dt: Window start (timezone-aware).
+        end_dt: Window end (timezone-aware, may be next day for midnight-crossing windows).
+        rng: Random number generator for reproducible tests.
+
+    Returns:
+        List of ISO8601 timestamp strings, one per group, strictly increasing.
+    """
+    total_seconds = (end_dt - start_dt).total_seconds()
+    if len(day_groups) == 1:
+        offset = rng.uniform(0, total_seconds)
+        return [(start_dt + timedelta(seconds=offset)).strftime("%Y-%m-%dT%H:%M:%S%z")]
+
+    weights = [max(1, len(g.files_affected)) for g in day_groups]
+    total_weight = sum(weights)
+    cumulative = 0.0
+    results = []
+    for w in weights:
+        slot_start = cumulative / total_weight
+        slot_end = (cumulative + w) / total_weight
+        # Random position in middle 80% of slot (10% margin each side)
+        lo = slot_start + 0.1 * (slot_end - slot_start)
+        hi = slot_end - 0.1 * (slot_end - slot_start)
+        pos = rng.uniform(lo, hi)
+        ts = start_dt + timedelta(seconds=pos * total_seconds)
+        results.append(ts.strftime("%Y-%m-%dT%H:%M:%S%z"))
+        cumulative += w
+    return results
+
+
+def _compute_window_timestamps(
+    groups: list[TimeGroup],
+    window_start_hm: str,
+    window_end_hm: str,
+    timezone: str,
+    seed: int | None = None,
+) -> list[str]:
+    """Distribute groups across a daily time window, one timestamp per group.
+
+    Groups are bucketed by calendar day. Each day's groups are spread across
+    [window_start_hm, window_end_hm] using weighted random spacing. Timestamps
+    are strictly increasing within each day's window.
+
+    Args:
+        groups: All groups to timestamp (may span multiple calendar days).
+        window_start_hm: Window start as ``HH:MM``.
+        window_end_hm: Window end as ``HH:MM``. If end <= start, the window
+                      crosses midnight (end is on the next calendar day).
+        timezone: IANA timezone name (e.g. ``"America/Los_Angeles"``).
+        seed: Optional RNG seed for deterministic output (useful in tests).
+
+    Returns:
+        List of ISO8601 timestamp strings, one per input group, in input order.
+    """
+    rng = random.Random(seed)  # noqa: S311 — not security-sensitive, used for commit timestamp jitter
+    tz = ZoneInfo(timezone)
+    sh, sm = map(int, window_start_hm.split(":"))
+    eh, em = map(int, window_end_hm.split(":"))
+
+    day_to_indices: dict[date_type, list[int]] = defaultdict(list)
+    for i, g in enumerate(groups):
+        day_to_indices[g.period_start.date()].append(i)
+
+    timestamps: list[str | None] = [None] * len(groups)
+
+    for day, indices in sorted(day_to_indices.items()):
+        start_dt = datetime(day.year, day.month, day.day, sh, sm, 0, tzinfo=tz)
+        end_day = day
+        if eh < sh or (eh == sh and em <= sm):
+            # Window crosses midnight — end is on the following calendar day
+            end_day = day + timedelta(days=1)
+        end_dt = datetime(end_day.year, end_day.month, end_day.day, eh, em, 0, tzinfo=tz)
+
+        day_groups = [groups[i] for i in indices]
+        day_ts = _spread_timestamps_for_day(day_groups, start_dt, end_dt, rng)
+        for idx, ts in zip(indices, day_ts, strict=True):
+            timestamps[idx] = ts
+
+    return timestamps  # type: ignore[return-value]  # all slots filled by construction
 
 
 def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:

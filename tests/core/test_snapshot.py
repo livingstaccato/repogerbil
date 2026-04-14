@@ -13,10 +13,12 @@ from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
 from repogerbil.core.snapshot import (
     SnapshotResult,
+    _compute_window_timestamps,
     _exclude_files,
     _filter_tree,
     _get_commit_body,
     _get_files_for_commit,
+    _spread_timestamps_for_day,
     create_snapshot,
 )
 
@@ -535,17 +537,249 @@ class TestExcludeFiles:
         assert _exclude_files(files, []) == files
 
     def test_excludes_exact_match(self) -> None:
-        files = {"src/core/api.py", ".claude"}
-        result = _exclude_files(files, [".claude"])
-        assert ".claude" not in result
+        files = {"src/core/api.py", ".claude/settings.json"}
+        result = _exclude_files(files, [r"^\.claude(/|$)"])
+        assert ".claude/settings.json" not in result
         assert "src/core/api.py" in result
 
     def test_excludes_directory_prefix(self) -> None:
         files = {"src/core/api.py", "vendor/lib.py", "vendor/other.py"}
-        result = _exclude_files(files, ["vendor"])
+        result = _exclude_files(files, ["^vendor/"])
         assert result == {"src/core/api.py"}
 
     def test_does_not_exclude_partial_prefix(self) -> None:
         files = {"src/core/api.py", "vendor_util.py"}
-        result = _exclude_files(files, ["vendor"])
+        result = _exclude_files(files, ["^vendor/"])
         assert "vendor_util.py" in result
+
+    def test_regex_extension_match(self) -> None:
+        files = {"poetry.lock", "src/core/api.py", "subdir/package.lock"}
+        result = _exclude_files(files, [r".*\.lock$"])
+        assert result == {"src/core/api.py"}
+
+    def test_regex_anchored_prevents_false_positive(self) -> None:
+        files = {"src/.claude/config", ".claude/settings.json"}
+        # Anchored pattern only removes top-level .claude
+        result = _exclude_files(files, [r"^\.claude(/|$)"])
+        assert ".claude/settings.json" not in result
+        assert "src/.claude/config" in result
+
+
+class TestFilterTreeRegex:
+    def _init_repo_with_files(self, tmp_path: Path) -> tuple[Path, Path]:
+        """Create source with .claude dir and a lock file; return (source, dest)."""
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (source / ".claude").mkdir()
+        (source / ".claude" / "settings.json").write_text("{}")
+        (source / "poetry.lock").write_text("lock\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add extras"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-09T10:00:00", "GIT_COMMITTER_DATE": "2026-04-09T10:00:00"},
+        )
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        return source, dest
+
+    def _get_tree_sha(self, dest: Path, source: Path, date: str) -> str:
+        from repogerbil.core.git import get_commits_for_date
+
+        commits = get_commits_for_date(source, date)
+        return subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def test_regex_removes_extension(self, tmp_path: Path) -> None:
+        """Regex .*\\.lock$ removes lock file but not other files."""
+        source, dest = self._init_repo_with_files(tmp_path)
+        tree_sha = self._get_tree_sha(dest, source, "2026-04-09")
+        filtered = _filter_tree(dest, tree_sha, [r".*\.lock$"])
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", filtered],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "poetry.lock" not in ls
+        assert "a.py" in ls  # original files still present
+
+    def test_regex_removes_directory(self, tmp_path: Path) -> None:
+        """Anchored regex removes .claude directory."""
+        source, dest = self._init_repo_with_files(tmp_path)
+        tree_sha = self._get_tree_sha(dest, source, "2026-04-09")
+        filtered = _filter_tree(dest, tree_sha, [r"^\.claude(/|$)"])
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", filtered],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert ".claude" not in ls
+        assert "poetry.lock" in ls  # other files unaffected
+
+    def test_multiple_patterns(self, tmp_path: Path) -> None:
+        """Multiple patterns — both matched files removed."""
+        source, dest = self._init_repo_with_files(tmp_path)
+        tree_sha = self._get_tree_sha(dest, source, "2026-04-09")
+        filtered = _filter_tree(dest, tree_sha, [r"^\.claude(/|$)", r".*\.lock$"])
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", filtered],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert ".claude" not in ls
+        assert "poetry.lock" not in ls
+        assert "a.py" in ls
+
+
+class TestSpreadTimestamps:
+    def _make_group(self, date_str: str, n_files: int) -> TimeGroup:
+        from repogerbil.core.git import CommitInfo
+
+        dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+        c = CommitInfo(hash="a" * 40, date=date_str[:10], subject="feat: x")
+        return TimeGroup(
+            period_start=dt,
+            period_end=dt,
+            commits=[c],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_single_group_within_window(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("America/Los_Angeles")
+        from datetime import datetime as dt_cls
+
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 11, 0, 0, tzinfo=tz)
+        group = self._make_group("2026-04-10T10:00:00", 3)
+        import random
+
+        rng = random.Random(42)
+        result = _spread_timestamps_for_day([group], start, end, rng)
+        assert len(result) == 1
+        ts = datetime.fromisoformat(result[0])
+        assert start <= ts <= end
+
+    def test_multiple_groups_strictly_increasing(self) -> None:
+        groups = [self._make_group("2026-04-10T10:00:00", i + 1) for i in range(5)]
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("America/Los_Angeles")
+        from datetime import datetime as dt_cls
+
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 11, 0, 0, tzinfo=tz)
+        import random
+
+        rng = random.Random(42)
+        result = _spread_timestamps_for_day(groups, start, end, rng)
+        parsed = [datetime.fromisoformat(ts) for ts in result]
+        import itertools
+
+        for a, b in itertools.pairwise(parsed):
+            assert a < b
+
+    def test_timestamps_within_window(self) -> None:
+        groups = [self._make_group("2026-04-10T10:00:00", i + 2) for i in range(4)]
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("America/Los_Angeles")
+        from datetime import datetime as dt_cls
+
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 11, 0, 0, tzinfo=tz)
+        import random
+
+        rng = random.Random(7)
+        result = _spread_timestamps_for_day(groups, start, end, rng)
+        for ts_str in result:
+            ts = datetime.fromisoformat(ts_str)
+            assert start <= ts <= end
+
+    def test_weighting_larger_groups_get_later_slot(self) -> None:
+        """Group with more files should land in a later slot."""
+        group_small = self._make_group("2026-04-10T10:00:00", 1)
+        group_large = self._make_group("2026-04-10T11:00:00", 20)
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        from datetime import datetime as dt_cls
+
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 23, 59, tzinfo=tz)
+        import random
+
+        rng = random.Random(0)
+        result = _spread_timestamps_for_day([group_small, group_large], start, end, rng)
+        ts_small = datetime.fromisoformat(result[0])
+        ts_large = datetime.fromisoformat(result[1])
+        assert ts_small < ts_large
+
+    def test_deterministic_with_seed(self) -> None:
+        groups = [self._make_group("2026-04-10T10:00:00", i + 1) for i in range(3)]
+        ts1 = _compute_window_timestamps(groups, "20:00", "00:00", "America/Los_Angeles", seed=42)
+        ts2 = _compute_window_timestamps(groups, "20:00", "00:00", "America/Los_Angeles", seed=42)
+        assert ts1 == ts2
+
+    def test_window_crossing_midnight(self) -> None:
+        """Window 23:00-01:00 spans midnight; all timestamps land in that range."""
+        group = self._make_group("2026-04-10T22:00:00", 3)
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        from datetime import datetime as dt_cls
+
+        start = dt_cls(2026, 4, 10, 23, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 11, 1, 0, tzinfo=tz)
+        import random
+
+        rng = random.Random(1)
+        result = _spread_timestamps_for_day([group], start, end, rng)
+        ts = datetime.fromisoformat(result[0])
+        assert start <= ts <= end
+
+    def test_compute_window_timestamps_multiple_days(self) -> None:
+        """Groups on different days each span their own full window."""
+        groups = [
+            self._make_group("2026-04-10T10:00:00", 2),
+            self._make_group("2026-04-11T10:00:00", 2),
+        ]
+        result = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=5)
+        assert len(result) == 2
+        ts0 = datetime.fromisoformat(result[0])
+        ts1 = datetime.fromisoformat(result[1])
+        # Each should be on their respective day at 20:00-23:00 UTC
+        assert ts0.date().isoformat() == "2026-04-10"
+        assert ts1.date().isoformat() == "2026-04-11"
+
+    def test_midnight_crossing_via_compute(self) -> None:
+        """_compute_window_timestamps handles 23:00-01:00 correctly."""
+        group = self._make_group("2026-04-10T10:00:00", 3)
+        result = _compute_window_timestamps([group], "23:00", "01:00", "UTC", seed=0)
+        assert len(result) == 1
+        ts = datetime.fromisoformat(result[0])
+        # Should be between 23:00 on Apr 10 and 01:00 on Apr 11
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        from datetime import datetime as dt_cls
+
+        assert ts >= dt_cls(2026, 4, 10, 23, 0, tzinfo=tz)
+        assert ts <= dt_cls(2026, 4, 11, 1, 0, tzinfo=tz)

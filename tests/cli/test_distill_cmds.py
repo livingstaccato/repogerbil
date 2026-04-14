@@ -431,6 +431,68 @@ class TestDeriveCommitType:
         assert not msg.startswith("feat: feat:")
 
 
+class TestSnapshotTimeWindow:
+    def test_time_window_flags_accepted(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-tw"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "snapshot",
+                str(repo),
+                str(dest),
+                "--time-window-start",
+                "20:00",
+                "--time-window-end",
+                "00:00",
+                "--timezone",
+                "America/Los_Angeles",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Snapshot created" in result.output
+
+    def test_commit_time_and_window_mutually_exclusive(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-ex"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "snapshot",
+                str(repo),
+                str(dest),
+                "--commit-time",
+                "20:00",
+                "--time-window-start",
+                "20:00",
+                "--time-window-end",
+                "00:00",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+    def test_window_start_without_end_raises(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-ex2"
+        result = CliRunner().invoke(
+            cli,
+            ["snapshot", str(repo), str(dest), "--time-window-start", "20:00"],
+        )
+        assert result.exit_code != 0
+        assert "must both be provided" in result.output
+
+    def test_window_end_without_start_raises(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-ex3"
+        result = CliRunner().invoke(
+            cli,
+            ["snapshot", str(repo), str(dest), "--time-window-end", "00:00"],
+        )
+        assert result.exit_code != 0
+        assert "must both be provided" in result.output
+
+
 class TestSnapshotLLMRefine:
     def test_llm_refine_flag_accepted(self, tmp_path: Path) -> None:
         from unittest.mock import patch

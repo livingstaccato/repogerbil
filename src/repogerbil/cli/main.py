@@ -95,6 +95,11 @@ from repogerbil.cli.commands.lint_cmd import lint  # noqa: E402
 
 cli.add_command(lint)
 
+# Register preflight command
+from repogerbil.cli.commands.preflight_cmd import preflight_cmd  # noqa: E402
+
+cli.add_command(preflight_cmd)
+
 # Register plugin commands
 from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
 

@@ -24,7 +24,7 @@ repogerbil/
 │   ├── vectordb.py        ChromaDB wrapper with 4 collections
 │   └── search.py          High-level semantic search + indexing
 ├── cli/               Click CLI — thin wrappers around core
-│   ├── main.py            16 commands
+│   ├── main.py            22 commands
 │   └── commands/
 │       ├── distill_cmds.py   snapshot, multi-snapshot, preview, export-cadence
 │       ├── preflight_cmd.py  preflight — repo inspection before distilling

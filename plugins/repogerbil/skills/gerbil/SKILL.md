@@ -43,12 +43,16 @@ When invoked without arguments:
 | `distill` | `<repo>` | `--dry-run`, `--cadence`, `--since`, `--target-branch`, `--changelog-dir` | Consolidate commits on a branch (destructive) |
 | `preview` | `<repo>` | `--cadence`, `--since` | Rich table preview of distillation |
 | `preflight` | `<source>` | `--since`, `--until`, `--emit-flags`, `--verbose` | Inspect source repo — classify files as artifact/source/unknown, suggest exclude flags |
-| `snapshot` | `<source> <dest>` | `--cadence`, `--since`, `--exclude-path`, `--time-window-start`, `--time-window-end`, `--timezone`, `--commit-time`, `--source-branch`, `--changelog-dir` | Create an independent repo with distilled history |
+| `snapshot` | `<source> <dest>` | `--cadence`, `--since`, `--exclude-path`, `--time-window-start`, `--time-window-end`, `--timezone`, `--commit-time`, `--source-branch`, `--changelog-dir`, `--extra-source`, `--all-branches`, `--source-subdir`, `--llm-refine` | Create an independent repo with distilled history |
+| `multi-snapshot` | `<dest>` | `--source`, `--cadence`, `--since`, `--exclude-path`, `--timezone` | Merge multiple source repos into one distilled snapshot |
 | `export-cadence` | `<repo>` | `--cadence`, `--since`, `-o` | JSON export of time-grouped commits |
 | `audit` | `<repo>` | `--since`, `--show-bad` | Commit message prefix adoption |
 | `summary` | `<cl_dir>` | `--year`, `--week`, `--output-dir`, `--prompt`, `--force` | Weekly cross-repo summary |
 | `missing` | `<cl_dir>` | `--config` | Show missing changelog dates across tracked repos |
 | `backfill` | `<cl_dir>` | `--config`, `--since` | Batch generate missing changelogs |
+| `lint` | `<cl_dir>` | — | Validate changelog YAML files against schema |
+| `probe` | `<repo>` | `--date`, `--cadence` | Probe candidate sources for a repo/date pair |
+| `plugin` | — | `--target {codex\|claude}` | Export or install bundled assistant plugin files |
 | `index` | `<cl_dir>` | `--db-path` | Index changelogs into vector DB* |
 | `search` | `<query>` | `--top`, `--repo`, `--db-path` | Semantic search across changelogs* |
 | `related` | `<repo>` | `--date`, `--top`, `--db-path` | Find related cross-repo work* |
@@ -101,8 +105,12 @@ gerbil snapshot <source> <dest> \
 
 Key snapshot options:
 - `--exclude-path` — full Python `re.search()` regex, repeatable; strips matching paths from every committed tree
-- `--time-window-start` / `--time-window-end` — spread commits across a daily window (`HH:MM`), proportional to file count + jitter; requires `--timezone`; mutually exclusive with `--commit-time`
+- `--time-window-start` / `--time-window-end` — spread commits across a daily window (`HH:MM`), proportional to file count + jitter; requires `--timezone`; mutually exclusive with `--commit-time`; midnight-crossing windows supported
 - `--commit-time` — pin all commits to a fixed `HH:MM` time instead
+- `--extra-source` — additional source repos for multi-era history (repeatable)
+- `--all-branches` — include commits from all branches, not just source-branch
+- `--source-subdir` — for monorepos: extract only a subdirectory's tree state
+- `--llm-refine` — use Ollama LLM (Gemma 4) to generate narrative commit messages
 
 ### Weekly report
 

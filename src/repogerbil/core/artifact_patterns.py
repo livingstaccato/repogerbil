@@ -43,6 +43,10 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     ArtifactRule("build artifact", r"\.egg-info/"),
     ArtifactRule("build artifact", r"\.so$"),
     ArtifactRule("build artifact", r"\.dylib$"),
+    ArtifactRule("build artifact", r"\.zip$"),
+    # Vendored dependencies
+    ArtifactRule("vendored dependency", r"^vendor/"),
+    ArtifactRule("vendored dependency", r"^node_modules/"),
     # AI / IDE tool configs
     ArtifactRule("AI tool config", r"^\.claude(/|$)"),
     ArtifactRule("AI tool config", r"^\.codex(/|$)"),

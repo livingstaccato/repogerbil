@@ -117,3 +117,17 @@ class TestArtifactPatterns:
 
     def test_codeowners_at_root(self) -> None:
         assert _rule_for("CODEOWNERS") is not None
+
+    def test_zip_archive(self) -> None:
+        r = _rule_for("src/pyvider/cty.zip")
+        assert r is not None and r.label == "build artifact"
+
+    def test_vendor_dir(self) -> None:
+        r = _rule_for("vendor/github.com/hashicorp/go-cty/cty.go")
+        assert r is not None and r.label == "vendored dependency"
+
+    def test_node_modules(self) -> None:
+        assert _rule_for("node_modules/lodash/index.js") is not None
+
+    def test_py_typed_not_matched(self) -> None:
+        assert _rule_for("src/repogerbil/py.typed") is None

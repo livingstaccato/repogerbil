@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 
 from repogerbil.core.artifact_patterns import ARTIFACT_RULES, ArtifactRule
+from repogerbil.core.errors import NotAGitRepositoryError
 
 _SOURCE_EXTENSIONS = frozenset(
     {
@@ -90,13 +91,16 @@ def _count_files(repo: Path, since: str | None, until: str | None) -> Counter[st
     if until:
         cmd += [f"--until={until}"]
 
-    result = subprocess.run(  # noqa: S603
-        cmd,
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            cmd,
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise NotAGitRepositoryError(repo) from exc
 
     counts: Counter[str] = Counter()
     for line in result.stdout.splitlines():

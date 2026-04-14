@@ -136,3 +136,24 @@ class TestPreflightCmd:
         result = runner.invoke(cli, ["preflight", str(repo2), "--emit-flags"])
         assert result.exit_code == 0
         assert result.output.strip() == ""
+
+    def test_multiple_lock_types_both_flagged(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        # Add package-lock.json alongside poetry.lock
+        (repo / "package-lock.json").write_text("{}\n")
+        subprocess.run(["git", "add", "package-lock.json"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "add npm lock"], cwd=repo, capture_output=True, check=True)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["preflight", str(repo)])
+        assert result.exit_code == 0
+        # Both lock types should appear as separate rows
+        assert "lock file" in result.output
+        # Suggested flags section should have both
+        assert "poetry" in result.output or "lock" in result.output
+
+    def test_non_git_directory_shows_error(self, tmp_path: Path) -> None:
+        non_git = tmp_path / "not_a_repo"
+        non_git.mkdir()
+        runner = CliRunner()
+        result = runner.invoke(cli, ["preflight", str(non_git)])
+        assert result.exit_code != 0

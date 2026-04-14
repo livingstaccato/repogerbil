@@ -15,17 +15,17 @@ from repogerbil.core.preflight import FileRecord, PreflightReport, scan_repo
 
 def _print_artifacts(report: PreflightReport) -> None:
     """Print the ARTIFACTS section."""
-    if report.artifacts:
-        click.echo(f"\nARTIFACTS (safe to exclude -- {len(report.artifacts)} files)")
-        by_label: dict[str, list[FileRecord]] = defaultdict(list)
-        for rec in report.artifacts:
-            label = rec.rule.label if rec.rule else "unknown"
-            by_label[label].append(rec)
-        for label, recs in sorted(by_label.items()):
-            flag = recs[0].rule.flag if recs[0].rule else ""
-            click.echo(f"  {label:<28}  {len(recs):>4} files   --exclude-path '{flag}'")
-    else:
+    if not report.artifacts:
         click.echo("\nARTIFACTS: none found")
+        return
+    click.echo(f"\nARTIFACTS (safe to exclude -- {len(report.artifacts)} files)")
+    by_label_flag: dict[tuple[str, str], list[FileRecord]] = defaultdict(list)
+    for rec in report.artifacts:
+        label = rec.rule.label if rec.rule else "unknown"
+        flag = rec.rule.flag if rec.rule else ""
+        by_label_flag[(label, flag)].append(rec)
+    for (label, flag), recs in sorted(by_label_flag.items()):
+        click.echo(f"  {label:<28}  {len(recs):>4} files   --exclude-path '{flag}'")
 
 
 def _print_unknown(report: PreflightReport) -> None:

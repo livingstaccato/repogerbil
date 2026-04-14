@@ -14,6 +14,7 @@ def _make_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
 
     # Commit 1: initial source
     (repo / "main.py").write_text("x = 1\n")
@@ -119,6 +120,7 @@ class TestScanRepo:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
         (repo / "Makefile").write_text("all:\n\techo done\n")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
         subprocess.run(["git", "commit", "-m", "add Makefile"], cwd=repo, capture_output=True, check=True)

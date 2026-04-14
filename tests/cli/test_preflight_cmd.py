@@ -20,6 +20,7 @@ def _make_repo(tmp_path: Path, with_lock: bool = True) -> Path:
         ["git", "init"],
         ["git", "config", "user.email", "t@t.com"],
         ["git", "config", "user.name", "T"],
+        ["git", "config", "commit.gpgsign", "false"],
     ]:
         subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
     (repo / "main.py").write_text("x = 1\n")
@@ -118,6 +119,7 @@ class TestPreflightCmd:
             ["git", "init"],
             ["git", "config", "user.email", "t@t.com"],
             ["git", "config", "user.name", "T"],
+            ["git", "config", "commit.gpgsign", "false"],
         ]:
             subprocess.run(cmd, cwd=repo2, capture_output=True, check=False)
         (repo2 / "poetry.lock").write_text("lock\n")

@@ -464,6 +464,43 @@ class TestMultiSnapshotExcludePaths:
         assert "alpha/poetry.lock" in ls.stdout
 
 
+class TestMultiSnapshotLLMSuccess:
+    def test_llm_success_writes_sidecar_jsonl(self, tmp_path: Path) -> None:
+        """When LLM succeeds, message is used and sidecar JSONL is written."""
+        import json
+        from unittest.mock import MagicMock
+
+        from repogerbil.llm.generator import GeneratedMessage
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "feat: init")])
+        dest = tmp_path / "dest"
+
+        good_generator = MagicMock()
+        good_generator.generate.return_value = GeneratedMessage(
+            message="feat(core): add initial module",
+            body="Establishes the core module foundation.",
+            changes=[{"file": "a.py", "description": "introduce module"}],
+        )
+
+        result = create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            llm_generator=good_generator,
+        )
+
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=dest, capture_output=True, text=True, check=True
+        )
+        assert "feat(core): add initial module" in log.stdout
+
+        sidecar = dest.parent / f"{dest.name}.summaries.jsonl"
+        assert sidecar.exists()
+        record = json.loads(sidecar.read_text().strip())
+        assert record["body"] == "Establishes the core module foundation."
+        assert record["date"] == "2026-03-01"
+
+
 class TestMultiSnapshotLLMFallback:
     def test_llm_error_falls_back_to_default_message(self, tmp_path: Path) -> None:
         """When the LLM raises, commit still succeeds with the default message."""
@@ -536,3 +573,70 @@ class TestCollectDayContext:
         assert files == []
         assert subjects == []
         assert bodies == []
+
+    def test_subprocess_error_skips_repo(self, tmp_path: Path) -> None:
+        """SubprocessError from git is caught and the repo is silently skipped."""
+        import subprocess
+        from datetime import date
+        from unittest.mock import patch
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
+        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=subprocess.SubprocessError):
+            files, subjects, bodies = _collect_day_context(
+                {"alpha": repo},
+                {"alpha"},
+                date(2026, 4, 1),
+                exclude_paths=None,
+            )
+        assert files == []
+        assert subjects == []
+        assert bodies == []
+
+    def test_body_appended_when_present(self, tmp_path: Path) -> None:
+        """Commit body text is collected into the bodies list."""
+        from datetime import date
+        from unittest.mock import MagicMock, patch
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
+        # format=%s\x1f%b\x1e — subject, unit-sep, body, record-sep
+        msg_mock = MagicMock()
+        msg_mock.stdout = "feat: add foo\x1fThis is the commit body.\x1e"
+        file_mock = MagicMock()
+        file_mock.stdout = "foo.py\n"
+
+        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=[msg_mock, file_mock]):
+            _, subjects, bodies = _collect_day_context(
+                {"alpha": repo},
+                {"alpha"},
+                date(2026, 4, 1),
+                exclude_paths=None,
+            )
+        assert subjects == ["alpha: feat: add foo"]
+        assert bodies == ["This is the commit body."]
+
+    def test_empty_file_lines_skipped(self, tmp_path: Path) -> None:
+        """Blank lines in file output are not added to the files set."""
+        from datetime import date
+        from unittest.mock import MagicMock, patch
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
+        msg_mock = MagicMock()
+        msg_mock.stdout = ""
+        file_mock = MagicMock()
+        file_mock.stdout = "\n\nfoo.py\n\n"
+
+        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=[msg_mock, file_mock]):
+            files, _, _ = _collect_day_context(
+                {"alpha": repo},
+                {"alpha"},
+                date(2026, 4, 1),
+                exclude_paths=None,
+            )
+        assert files == ["foo.py"]
+        assert "" not in files

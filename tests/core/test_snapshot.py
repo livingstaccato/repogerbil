@@ -9,13 +9,12 @@ import subprocess
 
 import pytest
 
+from repogerbil.core._snapshot_git import _get_commit_body, _get_files_for_commit
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
 from repogerbil.core.snapshot import (
     SnapshotResult,
     _compute_window_timestamps,
-    _get_commit_body,
-    _get_files_for_commit,
     _spread_timestamps_for_day,
     create_snapshot,
 )
@@ -523,6 +522,37 @@ class TestCreateSnapshot:
         assert "file" in record["changes"][0]
         assert "description" in record["changes"][0]
         assert len(record["hash"]) == 40
+
+    def test_llm_timeout_falls_back_to_builtin_message(self, tmp_path: Path) -> None:
+        """When LLM raises, snapshot falls back to built-in message instead of aborting."""
+        from unittest.mock import MagicMock
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snapshot-timeout"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="add a")],
+            ),
+        ]
+
+        generator = MagicMock()
+        generator.generate.side_effect = TimeoutError("timed out")
+
+        result = create_snapshot(source, dest, groups, llm_generator=generator)
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Fell back to built-in count-only message (no LLM output)
+        assert "1 commits" in log
+        generator.generate.assert_called_once()
 
 
 class TestGetFilesForCommit:

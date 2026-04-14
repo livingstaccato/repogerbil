@@ -70,8 +70,11 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     # Coverage reports
     ArtifactRule("coverage report", r"(^|/)cov\.xml$"),
     ArtifactRule("coverage report", r"(^|/)coverage\.xml$"),
-    # Go module checksums (lock-file equivalent)
+    # Go module definitions and checksums
     ArtifactRule("lock file", r"go\.sum$"),
+    ArtifactRule("lock file", r"go\.mod$"),
+    # Binary test fixtures
+    ArtifactRule("binary fixture", r"\.msgpack$"),
     # Generated type stubs
     ArtifactRule("generated stub", r"\.pyi$"),
     # Developer tool configs

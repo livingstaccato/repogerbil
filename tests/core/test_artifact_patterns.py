@@ -94,6 +94,17 @@ class TestArtifactPatterns:
     def test_go_sum_in_subdir(self) -> None:
         assert _rule_for("compatibility/go/go.sum") is not None
 
+    def test_go_mod(self) -> None:
+        r = _rule_for("go.mod")
+        assert r is not None and r.label == "lock file"
+
+    def test_go_mod_in_subdir(self) -> None:
+        assert _rule_for("compatibility/go/go.mod") is not None
+
+    def test_msgpack_fixture(self) -> None:
+        r = _rule_for("tests/fixtures/go-cty/bool_true.msgpack")
+        assert r is not None and r.label == "binary fixture"
+
     def test_python_version_file(self) -> None:
         r = _rule_for(".python-version")
         assert r is not None and r.label == "tool config"

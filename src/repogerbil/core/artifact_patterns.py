@@ -66,6 +66,8 @@ ARTIFACT_RULES: list[ArtifactRule] = [
     ArtifactRule("coverage report", r"(^|/)coverage\.xml$"),
     # Go module checksums (lock-file equivalent)
     ArtifactRule("lock file", r"go\.sum$"),
+    # Generated type stubs
+    ArtifactRule("generated stub", r"\.pyi$"),
     # Developer tool configs
     ArtifactRule("tool config", r"^\.python-version$"),
     ArtifactRule("tool config", r"^\.actrc$"),

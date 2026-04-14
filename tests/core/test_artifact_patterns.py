@@ -103,3 +103,10 @@ class TestArtifactPatterns:
 
     def test_pyre_configuration(self) -> None:
         assert _rule_for(".pyre_configuration") is not None
+
+    def test_pyi_stub_file(self) -> None:
+        r = _rule_for("pyvider/cty/codec.pyi")
+        assert r is not None and r.label == "generated stub"
+
+    def test_py_file_not_matched_by_pyi(self) -> None:
+        assert _rule_for("src/module.py") is None

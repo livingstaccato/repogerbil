@@ -357,6 +357,109 @@ class TestCreateSnapshot:
         assert result.commits_created == 1
         assert result.groups_created == 2  # But we grouped 2 groups
 
+    def test_time_window_produces_commits_within_range(self, tmp_path: Path) -> None:
+        """create_snapshot with time_window_start/end stamps commits inside the window."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snapshot-tw"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            timezone="UTC",
+            time_window_start="20:00",
+            time_window_end="23:00",
+        )
+        assert result.commits_created == 2
+
+        # Inspect actual commit timestamps in the snapshot repo
+        timestamps = (
+            subprocess.run(
+                ["git", "log", "--format=%ai", "--reverse"],
+                cwd=dest,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+        assert len(timestamps) == 2
+
+        for ts_str in timestamps:
+            # git %ai format: "2026-04-07 20:14:33 +0000"
+            ts = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M:%S %z")
+            hour = ts.hour
+            assert 20 <= hour <= 23, f"Commit timestamp {ts_str} outside 20:00-23:00 window"
+
+        # Apr 7 commit must be on Apr 7, Apr 8 on Apr 8
+        assert "2026-04-07" in timestamps[0]
+        assert "2026-04-08" in timestamps[1]
+
+    def test_exclude_paths_regex_absent_from_snapshot_commits(self, tmp_path: Path) -> None:
+        """Regex exclude patterns strip matching files from every snapshot commit tree."""
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+
+        # Add a lock file and .claude dir to the source repo
+        (source / "poetry.lock").write_text("lock content\n")
+        (source / ".claude").mkdir()
+        (source / ".claude" / "settings.json").write_text("{}")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add lock and claude"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-09T10:00:00", "GIT_COMMITTER_DATE": "2026-04-09T10:00:00"},
+        )
+
+        dest = tmp_path / "snapshot-excl"
+        apr9 = get_commits_for_date(source, "2026-04-09")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 9, tzinfo=UTC),
+                period_end=datetime(2026, 4, 9, 23, 59, 59, tzinfo=UTC),
+                commits=apr9,
+            ),
+        ]
+
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            exclude_paths=[r".*\.lock$", r"^\.claude(/|$)"],
+        )
+        assert result.commits_created == 1
+
+        # Inspect the committed tree — excluded files must be absent
+        tree_files = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "poetry.lock" not in tree_files
+        assert ".claude" not in tree_files
+        # Regular files must still be present
+        assert "a.py" in tree_files
+        assert "b.py" in tree_files
+
     def test_llm_refine_uses_generator_message(self, tmp_path: Path) -> None:
         """When llm_generator is provided, snapshot uses its output as commit messages."""
         import json

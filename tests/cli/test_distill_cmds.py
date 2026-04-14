@@ -277,6 +277,45 @@ class TestSnapshot:
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
+    def test_snapshot_exclude_path_regex_removes_files(self, tmp_path: Path) -> None:
+        """--exclude-path regex strips matching files from every committed tree."""
+        repo = _init_test_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+
+        # Add a lock file to the source repo
+        (repo / "poetry.lock").write_text("lock\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add lock"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env={
+                **env,
+                "GIT_AUTHOR_DATE": "2026-04-07T12:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T12:00:00",
+            },
+        )
+
+        dest = tmp_path / "snap-excl"
+        result = CliRunner().invoke(
+            cli,
+            ["snapshot", str(repo), str(dest), "--exclude-path", r".*\.lock$"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Snapshot created" in result.output
+
+        # The snapshot commit tree must not contain poetry.lock
+        tree_files = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "poetry.lock" not in tree_files
+        assert "f.py" in tree_files  # original files still present
+
 
 class TestExportCadence:
     def test_export_to_stdout(self, tmp_path: Path) -> None:

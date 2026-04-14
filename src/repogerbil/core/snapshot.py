@@ -56,7 +56,7 @@ def create_snapshot(
     time_window_start: str | None = None,
     time_window_end: str | None = None,
 ) -> SnapshotResult:
-    """Create an independent repo with one commit per TimeGroup.
+    r"""Create an independent repo with one commit per TimeGroup.
 
     Uses git read-tree for fast, working-directory-free operations.
     Source repos are never written to — only the destination receives writes.
@@ -65,7 +65,7 @@ def create_snapshot(
         source_subdir: When set, filter primary source commits to this subdirectory
                       and use its tree state (for monorepo sources).
         exclude_paths: Regex patterns to strip matching paths from every committed tree
-                      (e.g. ["^\\.claude(/|$)", ".*\\.lock$"]). Uses re.search so patterns
+                      (e.g. [r"^\.claude(/|$)", r".*\.lock$"]). Uses re.search so patterns
                       match anywhere in the file path unless anchored. Deduplication also
                       uses the filtered tree so groups that differ only in excluded content
                       are correctly collapsed.

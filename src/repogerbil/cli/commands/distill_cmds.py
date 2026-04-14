@@ -50,6 +50,12 @@ if TYPE_CHECKING:
     help="For monorepo sources: subdirectory to extract and use its tree state",
 )
 @click.option("--llm-refine", is_flag=True, help="Use Ollama LLM to generate narrative commit messages")
+@click.option(
+    "--exclude-path",
+    "exclude_paths",
+    multiple=True,
+    help="Strip this path from every committed tree (repeatable, e.g. --exclude-path .claude)",
+)
 def snapshot(
     repo_path: str,
     dest_path: str,
@@ -63,6 +69,7 @@ def snapshot(
     all_branches: bool = False,
     source_subdir: str | None = None,
     llm_refine: bool = False,
+    exclude_paths: tuple[str, ...] = (),
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
     from repogerbil.core.git import get_commits_for_path
@@ -125,6 +132,7 @@ def snapshot(
         extra_sources=[Path(e) for e in extra_sources],
         source_subdir=source_subdir,
         llm_generator=llm_generator,
+        exclude_paths=list(exclude_paths) or None,
     )
     dedup_msg = f" ({result.groups_skipped} duplicate tree states removed)" if result.groups_skipped else ""
     click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits){dedup_msg}")

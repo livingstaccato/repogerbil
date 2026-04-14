@@ -49,6 +49,7 @@ def create_snapshot(
     source_subdir: str | None = None,
     llm_generator: MessageGenerator | None = None,
     progress: bool = False,
+    exclude_paths: list[str] | None = None,
 ) -> SnapshotResult:
     """Create an independent repo with one commit per TimeGroup.
 
@@ -58,6 +59,9 @@ def create_snapshot(
     Args:
         source_subdir: When set, filter primary source commits to this subdirectory
                       and use its tree state (for monorepo sources).
+        exclude_paths: Paths to strip from every committed tree (e.g. [".claude",
+                      "vendor"]). Deduplication also uses the filtered tree so groups
+                      that differ only in excluded content are correctly collapsed.
     """
     if dest_path.exists() and any(dest_path.iterdir()):
         msg = f"Destination already exists and is not empty: {dest_path}"
@@ -66,7 +70,7 @@ def create_snapshot(
     remote_names = _init_and_fetch(dest_path, source_path, extra_sources)
 
     # Deduplicate groups by tree state BEFORE creating commits
-    dedup_groups, groups_skipped = _deduplicate_groups(dest_path, groups, source_subdir)
+    dedup_groups, groups_skipped = _deduplicate_groups(dest_path, groups, source_subdir, exclude_paths)
 
     # Sidecar JSONL path — only used when LLM is active
     summaries_path = dest_path.parent / f"{dest_path.name}.summaries.jsonl" if llm_generator else None
@@ -82,6 +86,7 @@ def create_snapshot(
         llm_generator,
         progress,
         summaries_path,
+        exclude_paths,
     )
 
     for rname in remote_names:
@@ -122,6 +127,7 @@ def _deduplicate_groups(
     dest_path: Path,
     groups: list[TimeGroup],
     source_subdir: str | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> tuple[list[TimeGroup], int]:
     """Deduplicate groups by their tree state, keeping only unique code states.
 
@@ -131,6 +137,7 @@ def _deduplicate_groups(
         dest_path: Path to destination repo with all sources fetched.
         groups: Groups to deduplicate.
         source_subdir: Optional subdirectory for monorepo filtering.
+        exclude_paths: Paths stripped before comparing tree states.
     """
     seen_trees: set[str] = set()
     unique_groups: list[TimeGroup] = []
@@ -154,6 +161,8 @@ def _deduplicate_groups(
             # Fall back to full tree if subdir doesn't exist
             tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
 
+        tree_sha = _filter_tree(dest_path, tree_sha, exclude_paths)
+
         # Skip if we've already seen this tree state
         if tree_sha in seen_trees:
             skipped += 1
@@ -176,6 +185,7 @@ def _create_commits(
     llm_generator: MessageGenerator | None = None,
     progress: bool = False,
     summaries_path: Path | None = None,
+    exclude_paths: list[str] | None = None,
 ) -> int:
     """Create one commit per TimeGroup in the destination repo.
 
@@ -183,6 +193,7 @@ def _create_commits(
         source_subdir: When set, use the tree state of this subdirectory
                       within each commit (for monorepo sources).
         summaries_path: When set, append LLM summaries as JSONL records here.
+        exclude_paths: Paths stripped from every committed tree.
     """
     commits_created = 0
     used_changelog_keys: set[str] = set()
@@ -207,6 +218,7 @@ def _create_commits(
             # Fall back to full tree if subdir doesn't exist
             tree_sha = _run_git(dest_path, "rev-parse", f"{last_commit.hash}^{{tree}}", timeout=10).strip()
 
+        tree_sha = _filter_tree(dest_path, tree_sha, exclude_paths)
         _run_git(dest_path, "read-tree", tree_sha)
 
         generated = None
@@ -214,6 +226,7 @@ def _create_commits(
             all_files: set[str] = set()
             for commit in group.commits:
                 all_files.update(_get_files_for_commit(dest_path, commit.hash))
+            all_files = _exclude_files(all_files, exclude_paths)
             original_bodies = [_get_commit_body(dest_path, c.hash) for c in group.commits]
             generated = llm_generator.generate(
                 date_str=group.period_start.strftime("%Y-%m-%d"),
@@ -300,6 +313,67 @@ def _commit_with_timestamp(
 
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
     return new_commit
+
+
+def _filter_tree(dest_path: Path, tree_sha: str, exclude_paths: list[str] | None) -> str:
+    """Return a new tree SHA with the given paths removed.
+
+    Uses a temporary index so the real index and working tree are untouched.
+    Returns the original ``tree_sha`` unchanged when ``exclude_paths`` is empty.
+
+    Args:
+        dest_path: Repository where the tree object lives.
+        tree_sha: SHA of the tree to filter.
+        exclude_paths: Top-level paths to strip (e.g. [".claude", "vendor"]).
+
+    Returns:
+        SHA of the filtered tree, or the original SHA if nothing to exclude.
+    """
+    if not exclude_paths:
+        return tree_sha
+
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(dir=str(dest_path / ".git"), delete=True) as tmp:
+        env = {**os.environ, "GIT_INDEX_FILE": tmp.name}
+        subprocess.run(  # noqa: S603
+            ["git", "read-tree", tree_sha],  # noqa: S607
+            cwd=str(dest_path),
+            env=env,
+            capture_output=True,
+            check=True,
+        )
+        for path in exclude_paths:
+            subprocess.run(  # noqa: S603
+                ["git", "rm", "-r", "--cached", "--quiet", "--ignore-unmatch", path],  # noqa: S607
+                cwd=str(dest_path),
+                env=env,
+                capture_output=True,
+            )
+        result = subprocess.run(
+            ["git", "write-tree"],  # noqa: S607
+            cwd=str(dest_path),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    return result.stdout.strip()
+
+
+def _exclude_files(files: set[str], exclude_paths: list[str] | None) -> set[str]:
+    """Remove files whose path starts with any of the excluded prefixes.
+
+    Args:
+        files: Set of file paths to filter.
+        exclude_paths: Path prefixes to exclude (e.g. [".claude", "vendor"]).
+
+    Returns:
+        Filtered set with excluded paths removed.
+    """
+    if not exclude_paths:
+        return files
+    return {f for f in files if not any(f == p or f.startswith(p + "/") for p in exclude_paths)}
 
 
 def _get_commit_body(dest_path: Path, commit_hash: str) -> str:

@@ -11,7 +11,14 @@ import pytest
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.git import CommitInfo, get_commits_for_date
-from repogerbil.core.snapshot import SnapshotResult, _get_commit_body, _get_files_for_commit, create_snapshot
+from repogerbil.core.snapshot import (
+    SnapshotResult,
+    _exclude_files,
+    _filter_tree,
+    _get_commit_body,
+    _get_files_for_commit,
+    create_snapshot,
+)
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -454,3 +461,91 @@ class TestGetCommitBody:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         result = _get_commit_body(repo, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
         assert result == ""
+
+
+class TestFilterTree:
+    def test_no_exclude_returns_same_sha(self, tmp_path: Path) -> None:
+        """_filter_tree with no excludes returns the original tree SHA."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        from repogerbil.core.git import get_commits_for_date
+
+        commits = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        result = _filter_tree(dest, tree_sha, None)
+        assert result == tree_sha
+
+    def test_excludes_path_from_tree(self, tmp_path: Path) -> None:
+        """_filter_tree removes the specified path and returns a new tree SHA."""
+        source = _init_repo(tmp_path)
+        # Add a .claude directory to the source repo
+        (source / ".claude").mkdir()
+        (source / ".claude" / "settings.json").write_text("{}")
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: add .claude"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-09T10:00:00", "GIT_COMMITTER_DATE": "2026-04-09T10:00:00"},
+        )
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        from repogerbil.core.git import get_commits_for_date
+
+        commits = get_commits_for_date(source, "2026-04-09")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        filtered = _filter_tree(dest, tree_sha, [".claude"])
+        assert filtered != tree_sha
+        # Filtered tree should not contain .claude
+        ls = subprocess.run(
+            ["git", "ls-tree", filtered],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert ".claude" not in ls
+
+
+class TestExcludeFiles:
+    def test_no_excludes_returns_all(self) -> None:
+        files = {"src/core/api.py", "vendor/lib.py", ".claude/settings.json"}
+        assert _exclude_files(files, None) == files
+        assert _exclude_files(files, []) == files
+
+    def test_excludes_exact_match(self) -> None:
+        files = {"src/core/api.py", ".claude"}
+        result = _exclude_files(files, [".claude"])
+        assert ".claude" not in result
+        assert "src/core/api.py" in result
+
+    def test_excludes_directory_prefix(self) -> None:
+        files = {"src/core/api.py", "vendor/lib.py", "vendor/other.py"}
+        result = _exclude_files(files, ["vendor"])
+        assert result == {"src/core/api.py"}
+
+    def test_does_not_exclude_partial_prefix(self) -> None:
+        files = {"src/core/api.py", "vendor_util.py"}
+        result = _exclude_files(files, ["vendor"])
+        assert "vendor_util.py" in result

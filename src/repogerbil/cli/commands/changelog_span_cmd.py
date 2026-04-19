@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 
 import click
 
@@ -101,7 +102,9 @@ def changelog_span_cmd(
         return
 
     # runner_lc == "agent"
-    prompt_path = Path(output_path) if output_path else Path(f"/tmp/{repo_name}-changelog-prompt.md")
+    prompt_path = (
+        Path(output_path) if output_path else Path(tempfile.gettempdir()) / f"{repo_name}-changelog-prompt.md"
+    )
     prompt_path.write_text(prompt, encoding="utf-8")
     click.echo(agent_dispatch_instructions(prompt_path))
 

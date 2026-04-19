@@ -35,8 +35,10 @@ def run_claude_cli(prompt: str, *, timeout: int = 600) -> str:
             "'claude' CLI not on PATH. Install from https://docs.claude.com/en/docs/claude-code "
             "or pick a different runner with --run."
         )
-    result = subprocess.run(
-        ["claude", "-p", prompt],
+    # S603/S607: 'claude' is resolved via shutil.which above; invoking by name
+    # is the point (users have the CLI on PATH).
+    result = subprocess.run(  # noqa: S603
+        ["claude", "-p", prompt],  # noqa: S607
         capture_output=True,
         text=True,
         timeout=timeout,

@@ -53,9 +53,11 @@ DOC_ACCEPT_THEIRS_SUFFIXES = (
 def scrub(msg: str) -> str:
     msg = re.sub(r"(?im)^\s*Co-Authored-By:.*$\n?", "", msg)
     msg = re.sub(r"[a-zA-Z0-9._+-]+@anthropic\.com", "code@tim.life", msg)
-    msg = re.sub(r"tim\.perkins@nwea\.org", "code@tim.life", msg)
-    msg = msg.replace("engineering@provide.io", "code@provide.io")
+    msg = msg.replace("timothy.perkins@hmhco.com", "code@tim.life")
+    msg = msg.replace("tim.perkins@nwea.org", "code@tim.life")
     msg = msg.replace("tim@neurotic.org", "code@tim.life")
+    msg = msg.replace("tim@provide.io", "code@provide.io")
+    msg = msg.replace("engineering@provide.io", "code@provide.io")
     msg = CHERRY_TRAILER.sub("", msg)
     msg = re.sub(r"\n{3,}", "\n\n", msg)
     return msg.rstrip()

@@ -103,6 +103,95 @@ def generate_prompt(
     return "\n".join(parts)
 
 
+def generate_prompt_span(
+    repo: str,
+    from_ref: str,
+    to_ref: str,
+    commits: list[CommitInfo],
+    stats: DiffStats,
+    diff_content: dict[str, str],
+) -> str:
+    """Generate a prompt for an external LLM to write a release-span changelog.
+
+    Parallel to ``generate_prompt`` but scoped to a commit range instead of
+    a single date. Intended for release-note generation where the span
+    corresponds to a version boundary.
+    """
+    parts = [
+        f"# Generate a release changelog for {repo}",
+        f"## Span\n- From: `{from_ref}`\n- To: `{to_ref}`\n",
+        (
+            f"## Stats\n- {len(commits)} commits, {stats.files_changed} files changed, "
+            f"+{stats.insertions}/-{stats.deletions}\n"
+        ),
+        "## Commits (oldest → newest)\n",
+    ]
+    for c in commits:
+        files = ", ".join(c.files[:5])
+        parts.append(f"- `{c.subject}`")
+        if files:
+            parts.append(f"  files: {files}")
+        parts.append("")
+
+    if diff_content:
+        parts.append("## Diffs (key files)\n")
+        for filepath, diff_text in list(diff_content.items())[:30]:
+            parts.append(f"### {filepath}\n```diff\n{diff_text}\n```\n")
+
+    parts.append(_prompt_instructions_span(repo, from_ref, to_ref, stats, len(commits)))
+    return "\n".join(parts)
+
+
+def _prompt_instructions_span(
+    repo: str, from_ref: str, to_ref: str, stats: DiffStats, commit_count: int
+) -> str:
+    return f"""## Instructions
+
+Write a release changelog section in Markdown (Keep-a-Changelog flavor)
+covering the span `{from_ref}..{to_ref}` for {repo}.
+
+Structure:
+
+```markdown
+## [<version>] — <YYYY-MM-DD>
+
+### Highlights
+<1-3 bullets describing what a user actually notices about this release>
+
+### Breaking Changes
+<bullets, or omit if none>
+
+### Features
+<bullets>
+
+### Fixes
+<bullets>
+
+### Security & Resilience
+<bullets, or omit if none>
+
+### Performance
+<bullets, or omit if none>
+
+### Refactors
+<bullets, or omit if none>
+
+### Documentation
+<bullets, or omit if none>
+```
+
+Guidelines:
+- Write as prose, not commit-subject echoes. Explain impact, not mechanics.
+- Group related commits; collapse mechanical churn into one line.
+- Use the existing provide.io vocabulary where accurate (instantiate, harden,
+  qualify, baseline, specify, remediate, streamline, decouple).
+- Skip `chore(ci|deps|build): bump X from Y to Z` entirely.
+- Total commit count: {commit_count} ({stats.files_changed} files, +{stats.insertions}/-{stats.deletions}).
+
+Output the markdown block only — no YAML wrapper, no frontmatter.
+"""
+
+
 def update_stats(yaml_path: Path, stats: DiffStats, commit_count: int) -> bool:
     """Update only the stats block in an existing changelog file.
 

@@ -435,6 +435,85 @@ def resolve_commit_trees(
     return tree_map
 
 
+def get_commits_for_range(
+    repo_path: str | Path,
+    from_ref: str,
+    to_ref: str,
+    include_files: bool = False,
+) -> list[CommitInfo]:
+    """Get commits in a ref range (exclusive of from_ref, inclusive of to_ref).
+
+    Equivalent to ``git log from_ref..to_ref`` in oldest-first order.
+
+    Args:
+        repo_path: Path to the git repository.
+        from_ref: Exclusive lower bound (tag, branch, or SHA).
+        to_ref: Inclusive upper bound (tag, branch, or SHA).
+        include_files: Attach per-commit file lists.
+    """
+    output = _run_git(
+        repo_path,
+        "log",
+        "--no-merges",
+        "--format=%H\t%as\t%at\t%s",
+        f"{from_ref}..{to_ref}",
+    )
+    commits: list[CommitInfo] = []
+    for line in output.strip().splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) >= 3:
+            commits.append(
+                CommitInfo(
+                    hash=parts[0],
+                    date=parts[1],
+                    subject=parts[3] if len(parts) > 3 else "",
+                    timestamp=int(parts[2]),
+                )
+            )
+    commits.reverse()
+    if include_files and commits:
+        commits = _attach_commit_files_from_range(repo_path, commits, from_ref, to_ref)
+    return commits
+
+
+def _attach_commit_files_from_range(
+    repo_path: str | Path,
+    commits: list[CommitInfo],
+    from_ref: str,
+    to_ref: str,
+) -> list[CommitInfo]:
+    """Attach per-commit file lists for a ref range."""
+    output = _run_git(
+        repo_path,
+        "log",
+        "--no-merges",
+        "--format=%H",
+        "--name-only",
+        f"{from_ref}..{to_ref}",
+    )
+    hash_files: dict[str, list[str]] = {}
+    current_hash: str | None = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
+            current_hash = stripped
+            hash_files[current_hash] = []
+        elif current_hash is not None:
+            hash_files[current_hash].append(stripped)
+    return [
+        CommitInfo(
+            hash=c.hash,
+            date=c.date,
+            subject=c.subject,
+            timestamp=c.timestamp,
+            files=hash_files.get(c.hash, []),
+        )
+        for c in commits
+    ]
+
+
 def deduplicate_by_tree(
     commits: list[CommitInfo],
     tree_map: dict[str, str],

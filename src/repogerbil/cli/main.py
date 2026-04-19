@@ -100,6 +100,11 @@ from repogerbil.cli.commands.preflight_cmd import preflight_cmd  # noqa: E402
 
 cli.add_command(preflight_cmd)
 
+# Register changelog-span command
+from repogerbil.cli.commands.changelog_span_cmd import changelog_span_cmd  # noqa: E402
+
+cli.add_command(changelog_span_cmd)
+
 # Register plugin commands
 from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
 

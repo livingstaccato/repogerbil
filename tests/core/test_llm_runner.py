@@ -15,7 +15,28 @@ from repogerbil.core.llm_runner import (
     LlmRunnerError,
     agent_dispatch_instructions,
     run_claude_cli,
+    strip_fence_wrapper,
 )
+
+
+def test_strip_fence_wrapper_removes_outer_markdown_fence() -> None:
+    wrapped = "```markdown\n## [v0.3.33]\n\n### Features\n- x\n```"
+    assert strip_fence_wrapper(wrapped) == "## [v0.3.33]\n\n### Features\n- x"
+
+
+def test_strip_fence_wrapper_no_fence_returns_as_is() -> None:
+    plain = "## [v0.3.33]\n\n### Features\n- x\n"
+    assert strip_fence_wrapper(plain) == plain
+
+
+def test_strip_fence_wrapper_preserves_inner_fences() -> None:
+    wrapped = "```markdown\n## Title\n\n```python\ncode\n```\n\n- bullet\n```"
+    out = strip_fence_wrapper(wrapped)
+    assert out.startswith("## Title")
+    assert "```python" in out
+    assert "code" in out
+    # trailing outer fence removed
+    assert not out.endswith("```\n```")
 
 
 def test_run_claude_cli_happy_path() -> None:

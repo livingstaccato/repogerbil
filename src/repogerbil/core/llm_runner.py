@@ -17,6 +17,7 @@ Two paths are supported:
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -25,10 +26,28 @@ class LlmRunnerError(Exception):
     """Raised when an LLM runner cannot complete its task."""
 
 
+# Matches a full-document fence wrapping: leading ```<lang>\n ... \n``` trailing.
+_FENCE_WRAPPER = re.compile(r"^\s*```[a-zA-Z0-9_+-]*\n(.*)\n```\s*$", re.DOTALL)
+
+
+def strip_fence_wrapper(text: str) -> str:
+    """Strip a single outer ``` ``` fence if the whole output is wrapped.
+
+    LLMs often wrap their final answer in a ```markdown fenced block for
+    display purposes; when we save that output to a .md file, the fences
+    become literal content and Marked / GitHub render the whole thing as a
+    code block. Strip exactly one layer if it wraps the entire payload;
+    leave inner fences alone.
+    """
+    match = _FENCE_WRAPPER.match(text)
+    return match.group(1) if match else text
+
+
 def run_claude_cli(prompt: str, *, timeout: int = 600) -> str:
     """Feed ``prompt`` to the ``claude`` CLI via ``-p`` and return stdout.
 
     Raises ``LlmRunnerError`` if the CLI isn't installed or exits non-zero.
+    The returned string has any outer ``` ``` wrapper fence stripped.
     """
     if shutil.which("claude") is None:
         raise LlmRunnerError(
@@ -46,7 +65,7 @@ def run_claude_cli(prompt: str, *, timeout: int = 600) -> str:
     )
     if result.returncode != 0:
         raise LlmRunnerError(f"claude CLI failed (rc={result.returncode}): {result.stderr.strip()[:500]}")
-    return result.stdout
+    return strip_fence_wrapper(result.stdout)
 
 
 def agent_dispatch_instructions(prompt_path: Path) -> str:

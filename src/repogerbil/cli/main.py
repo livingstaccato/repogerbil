@@ -105,6 +105,16 @@ from repogerbil.cli.commands.changelog_span_cmd import changelog_span_cmd  # noq
 
 cli.add_command(changelog_span_cmd)
 
+# Register append command (forward-only jsonl catch-up)
+from repogerbil.cli.commands.append_cmd import append_cmd  # noqa: E402
+
+cli.add_command(append_cmd)
+
+# Register realign command (legacy jsonl record → current local hash)
+from repogerbil.cli.commands.realign_cmd import realign_cmd  # noqa: E402
+
+cli.add_command(realign_cmd)
+
 # Register plugin commands
 from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
 

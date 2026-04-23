@@ -177,26 +177,47 @@ class TestGetDiffStats:
         assert stats.insertions >= 1
 
     def test_root_commit_fallback(self, git_repo: Path) -> None:
-        """First commit in repo uses --root fallback."""
+        """Single-commit call on the root commit exercises the --root fallback and returns real stats."""
         commits = get_commits_for_date(git_repo, "2026-04-07")
-        # The first commit's parent doesn't exist, triggering the --root path
+        # Passing the same hash for first and last triggers the single-commit path.
+        # The root commit adds file1.py, so stats must be non-zero.
         stats = get_diff_stats(git_repo, commits[0].hash, commits[0].hash)
         assert isinstance(stats, DiffStats)
+        assert stats.files_changed >= 1
+        assert stats.insertions >= 1
+
+    def test_single_commit_root(self, tmp_path: Path) -> None:
+        """Repo with exactly one commit exercises the --root fallback for a true root commit."""
+        repo = tmp_path / "single"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+        (repo / "hello.py").write_text("print('hello')\n")
+        subprocess.run(["git", "add", "hello.py"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+        out = subprocess.run(
+            ["git", "log", "--format=%H", "-1"], cwd=repo, capture_output=True, text=True, check=True
+        )
+        h = out.stdout.strip()
+        stats = get_diff_stats(repo, h, h)
+        assert isinstance(stats, DiffStats)
+        assert stats.files_changed >= 1
+        assert stats.insertions >= 1
 
     def test_empty_diff(self, tmp_path: Path) -> None:
-        """Empty repo returns zero stats."""
+        """A truly empty commit (no file changes) returns zero stats."""
         repo = tmp_path / "empty"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-        (repo / "f.txt").write_text("x")
-        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        # Use --allow-empty with no staged files so the commit itself has no diff
         subprocess.run(
-            ["git", "commit", "-m", "init", "--allow-empty"], cwd=repo, capture_output=True, check=True
+            ["git", "commit", "--allow-empty", "-m", "empty"], cwd=repo, capture_output=True, check=True
         )
-        # Diff a commit with itself — no changes
         out = subprocess.run(
             ["git", "log", "--format=%H", "-1"], cwd=repo, capture_output=True, text=True, check=True
         )
@@ -226,16 +247,16 @@ class TestGetDiffStatsMocked:
 class TestHiddenRefs:
     def test_hidden_ref_hashes_git_failure(self) -> None:
         with patch(
-            "repogerbil.core.git._run_git",
+            "repogerbil.core.git._commits._run_git",
             side_effect=GitCommandError("boom", returncode=1, stderr="boom"),
         ):
             assert get_hidden_ref_hashes(".") == []
 
     def test_hidden_ref_dates_git_failure(self) -> None:
         with (
-            patch("repogerbil.core.git.get_hidden_ref_hashes", return_value=["a" * 40]),
+            patch("repogerbil.core.git._commits.get_hidden_ref_hashes", return_value=["a" * 40]),
             patch(
-                "repogerbil.core.git._run_git",
+                "repogerbil.core.git._commits._run_git",
                 side_effect=GitCommandError("boom", returncode=1, stderr="boom"),
             ),
         ):
@@ -243,15 +264,18 @@ class TestHiddenRefs:
 
     def test_hidden_ref_dates_ignores_empty_date(self) -> None:
         with (
-            patch("repogerbil.core.git.get_hidden_ref_hashes", return_value=["a" * 40]),
-            patch("repogerbil.core.git._run_git", return_value=" \n"),
+            patch("repogerbil.core.git._commits.get_hidden_ref_hashes", return_value=["a" * 40]),
+            patch("repogerbil.core.git._commits._run_git", return_value=" \n"),
         ):
             assert get_hidden_ref_dates(".") == set()
 
 
 class TestCommitLookup:
     def test_get_commit_for_hash_invalid_output(self) -> None:
-        with patch("repogerbil.core.git._run_git", return_value="bad-output"), pytest.raises(GitCommandError):
+        with (
+            patch("repogerbil.core.git._commits._run_git", return_value="bad-output"),
+            pytest.raises(GitCommandError),
+        ):
             get_commit_for_hash(".", "a" * 40)
 
     def test_get_commits_for_hashes(self, git_repo: Path) -> None:
@@ -263,7 +287,7 @@ class TestCommitLookup:
 
     def test_get_commit_for_hash_empty_files_output(self) -> None:
         h = "a" * 40
-        with patch("repogerbil.core.git._run_git") as mock_run:
+        with patch("repogerbil.core.git._commits._run_git") as mock_run:
             mock_run.side_effect = [
                 f"{h}\x002026-04-07\x001234567890\x00feat: test\x00body\n",
                 "\n",
@@ -534,7 +558,12 @@ class TestDeduplication:
         original_run_git = _run_git
         call_count: list[int] = [0]
 
-        def mock_run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
+        def mock_run_git(
+            repo_path: str | Path,
+            *args: str,
+            timeout: int = 60,
+            env: dict[str, str] | None = None,
+        ) -> str:
             call_count[0] += 1
             # Fail on first rev-parse with subdir (HASH:subdir)
             if len(args) >= 2 and ":" in str(args[1]):
@@ -543,9 +572,9 @@ class TestDeduplication:
                     returncode=128,
                     stderr="path 'nonexistent' does not exist",
                 )
-            return original_run_git(repo_path, *args, timeout=timeout)
+            return original_run_git(repo_path, *args, timeout=timeout, env=env)
 
-        monkeypatch.setattr("repogerbil.core.git._run_git", mock_run_git)
+        monkeypatch.setattr("repogerbil.core.git._trees._run_git", mock_run_git)
         commits = get_commits_for_path(monorepo, "pyvider-cty")
         tree_map = resolve_commit_trees(monorepo, commits, source_subdir="nonexistent")
 

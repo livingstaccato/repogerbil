@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: help install lint type-check test test-cov security complexity dead-code mutation quality check
+.PHONY: help install lint type-check test test-cov security complexity dead-code mutation max-loc quality check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -35,6 +35,9 @@ dead-code: ## Run vulture dead code detection
 mutation: ## Run mutmut mutation testing
 	uv run mutmut run --max-children 8
 
-quality: lint type-check security complexity dead-code test ## Run all quality gates
+max-loc: ## Enforce 500-line per-file cap
+	python scripts/check_max_loc.py
+
+quality: lint type-check security complexity dead-code max-loc test ## Run all quality gates
 
 check: quality ## Alias for quality

@@ -1,88 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""Git analysis via subprocess — no GitPython dependency."""
+"""Commit retrieval and parsing functions."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import replace
 from pathlib import Path
-import re
-import subprocess
 
-from repogerbil.core.errors import GitCommandError, NotAGitRepositoryError
+from repogerbil.core.errors import GitCommandError
 
-_SHORTSTAT_FILE_RE = re.compile(r"(\d+)\s+file")
-_SHORTSTAT_INS_RE = re.compile(r"(\d+)\s+insertion")
-_SHORTSTAT_DEL_RE = re.compile(r"(\d+)\s+deletion")
-
-_REF_RE = re.compile(r"(?:Fix(?:es)?|Clos(?:e[ds]?|ing)|Ref(?:s)?)\s+#(\d+)", re.IGNORECASE)
-
-
-@dataclass(frozen=True)
-class CommitInfo:
-    """Immutable representation of a single git commit."""
-
-    hash: str
-    date: str
-    subject: str
-    files: list[str] = field(default_factory=list)
-    body: str = ""
-    refs: list[str] = field(default_factory=list)
-    timestamp: int = 0  # unix epoch; 0 means only date available
-
-
-@dataclass(frozen=True)
-class DiffStats:
-    """Aggregate diff statistics for a commit range."""
-
-    commits: int
-    files_changed: int
-    insertions: int
-    deletions: int
-
-
-def _run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
-    """Run a git command and return stdout.
-
-    Raises:
-        NotAGitRepositoryError: If the path is not a git repository.
-        GitCommandError: If the git command fails.
-    """
-    result = subprocess.run(  # noqa: S603 — git is a trusted binary
-        ["git", *args],  # noqa: S607 — partial path is intentional
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if "not a git repository" in stderr.lower():
-            raise NotAGitRepositoryError(repo_path)
-        raise GitCommandError(
-            f"Git command failed: git {' '.join(args)}\n{stderr}",
-            returncode=result.returncode,
-            stderr=stderr,
-        )
-
-    return result.stdout
-
-
-def parse_shortstat(stat_line: str) -> dict[str, int]:
-    """Parse a git diff --shortstat line into files/insertions/deletions."""
-    stats: dict[str, int] = {"files_changed": 0, "insertions": 0, "deletions": 0}
-    m = _SHORTSTAT_FILE_RE.search(stat_line)
-    if m:
-        stats["files_changed"] = int(m.group(1))
-    m = _SHORTSTAT_INS_RE.search(stat_line)
-    if m:
-        stats["insertions"] = int(m.group(1))
-    m = _SHORTSTAT_DEL_RE.search(stat_line)
-    if m:
-        stats["deletions"] = int(m.group(1))
-    return stats
+from ._runner import _run_git
+from ._types import _REF_RE, CommitInfo
 
 
 def get_active_dates(repo_path: str | Path) -> set[str]:
@@ -176,14 +105,7 @@ def get_commit_for_hash(
         if stripped:
             files.append(stripped)
 
-    return CommitInfo(
-        hash=commit.hash,
-        date=commit.date,
-        subject=commit.subject,
-        files=files,
-        body=commit.body,
-        refs=commit.refs,
-    )
+    return replace(commit, files=files)
 
 
 def get_commits_for_hashes(
@@ -372,168 +294,3 @@ def get_commits_for_path(
         commits = _attach_file_lists(repo_path, commits)
 
     return commits
-
-
-def get_diff_stats(repo_path: str | Path, first_hash: str, last_hash: str) -> DiffStats:
-    """Get aggregate diff stats between two commits.
-
-    Uses ``first^..last`` to capture all changes in the range.  When
-    ``first`` is the initial commit (no parent) git returns a non-zero exit
-    code; in that case the function falls back to ``--root last``.
-    When both hashes are identical, returns zero stats (no diff).
-    """
-    from repogerbil.core.errors import GitCommandError
-
-    if first_hash == last_hash:
-        return DiffStats(commits=0, files_changed=0, insertions=0, deletions=0)
-
-    try:
-        output = _run_git(repo_path, "diff", "--shortstat", f"{first_hash}^..{last_hash}", timeout=30)
-    except GitCommandError:
-        output = ""
-
-    stat_line = output.strip()
-    if not stat_line:  # pragma: no branch — first-commit fallback
-        output = _run_git(repo_path, "diff", "--shortstat", "--root", last_hash, timeout=30)
-        stat_line = output.strip()
-    if not stat_line:
-        return DiffStats(commits=0, files_changed=0, insertions=0, deletions=0)
-    parsed = parse_shortstat(stat_line)
-    return DiffStats(commits=0, **parsed)
-
-
-def resolve_commit_trees(
-    repo_path: str | Path,
-    commits: list[CommitInfo],
-    source_subdir: str | None = None,
-) -> dict[str, str]:
-    """Resolve tree SHA for each commit (monorepo subdir or full tree).
-
-    Returns dict mapping commit hash → tree SHA.
-    Falls back to full tree if subdir doesn't exist in commit.
-
-    Args:
-        repo_path: Path to git repository with all commits fetched.
-        commits: List of commits to resolve trees for.
-        source_subdir: Optional subdirectory for monorepo filtering.
-    """
-    tree_map: dict[str, str] = {}
-    for commit in commits:
-        try:
-            if source_subdir:
-                # Try subdir first (monorepo)
-                tree_sha = _run_git(
-                    repo_path, "rev-parse", f"{commit.hash}:{source_subdir}", timeout=10
-                ).strip()
-            else:
-                # Full tree (standalone)
-                tree_sha = _run_git(repo_path, "rev-parse", f"{commit.hash}^{{tree}}", timeout=10).strip()
-        except GitCommandError:
-            # Fall back to full tree if subdir doesn't exist
-            tree_sha = _run_git(repo_path, "rev-parse", f"{commit.hash}^{{tree}}", timeout=10).strip()
-        tree_map[commit.hash] = tree_sha
-    return tree_map
-
-
-def get_commits_for_range(
-    repo_path: str | Path,
-    from_ref: str,
-    to_ref: str,
-    include_files: bool = False,
-) -> list[CommitInfo]:
-    """Get commits in a ref range (exclusive of from_ref, inclusive of to_ref).
-
-    Equivalent to ``git log from_ref..to_ref`` in oldest-first order.
-
-    Args:
-        repo_path: Path to the git repository.
-        from_ref: Exclusive lower bound (tag, branch, or SHA).
-        to_ref: Inclusive upper bound (tag, branch, or SHA).
-        include_files: Attach per-commit file lists.
-    """
-    output = _run_git(
-        repo_path,
-        "log",
-        "--no-merges",
-        "--format=%H\t%as\t%at\t%s",
-        f"{from_ref}..{to_ref}",
-    )
-    commits: list[CommitInfo] = []
-    for line in output.strip().splitlines():
-        parts = line.split("\t", 3)
-        if len(parts) >= 3:
-            commits.append(
-                CommitInfo(
-                    hash=parts[0],
-                    date=parts[1],
-                    subject=parts[3] if len(parts) > 3 else "",
-                    timestamp=int(parts[2]),
-                )
-            )
-    commits.reverse()
-    if include_files and commits:
-        commits = _attach_commit_files_from_range(repo_path, commits, from_ref, to_ref)
-    return commits
-
-
-def _attach_commit_files_from_range(
-    repo_path: str | Path,
-    commits: list[CommitInfo],
-    from_ref: str,
-    to_ref: str,
-) -> list[CommitInfo]:
-    """Attach per-commit file lists for a ref range."""
-    output = _run_git(
-        repo_path,
-        "log",
-        "--no-merges",
-        "--format=%H",
-        "--name-only",
-        f"{from_ref}..{to_ref}",
-    )
-    hash_files: dict[str, list[str]] = {}
-    current_hash: str | None = None
-    for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
-            current_hash = stripped
-            hash_files[current_hash] = []
-        elif current_hash is not None:
-            hash_files[current_hash].append(stripped)
-    return [
-        CommitInfo(
-            hash=c.hash,
-            date=c.date,
-            subject=c.subject,
-            timestamp=c.timestamp,
-            files=hash_files.get(c.hash, []),
-        )
-        for c in commits
-    ]
-
-
-def deduplicate_by_tree(
-    commits: list[CommitInfo],
-    tree_map: dict[str, str],
-) -> list[CommitInfo]:
-    """Deduplicate commits by tree SHA, keeping earliest of each unique state.
-
-    Returns commits in chronological order with unique tree states only.
-
-    Args:
-        commits: List of commits (should be sorted chronologically).
-        tree_map: Dict mapping commit hash → tree SHA.
-    """
-    # Map tree SHA → earliest commit with that state
-    tree_to_commit: dict[str, CommitInfo] = {}
-    for commit in commits:
-        tree_sha = tree_map.get(commit.hash)
-        if tree_sha and tree_sha not in tree_to_commit:
-            tree_to_commit[tree_sha] = commit
-
-    # Return unique commits in chronological order
-    unique_commits = list(tree_to_commit.values())
-    unique_commits.sort(key=lambda c: c.timestamp if c.timestamp else 0)
-    return unique_commits

@@ -6,36 +6,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import sys
 from typing import Any
 
 import click
 from rich.console import Console
-import yaml
 
-from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.changelog import (
     generate_analyzed,
     generate_draft,
     generate_prompt,
-    update_stats,
     write_changelog,
 )
-from repogerbil.core.classify import classify_commit
 from repogerbil.core.config import load_settings
-from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
-from repogerbil.core.diff import get_diff_content
 from repogerbil.core.errors import RepogerbilError
-from repogerbil.core.git import (
-    get_active_dates,
-    get_commits_for_date,
-    get_diff_stats,
-)
-from repogerbil.core.provenance import describe_resolution, resolve_provenance
-from repogerbil.core.verify import count_accounted_files
-
-_PREFIX_RE = re.compile(r"^(\w+)(?:\([^)]*\))?[!]?:\s")
+from repogerbil.core.git import get_diff_stats
+from repogerbil.core.provenance import resolve_provenance
 
 
 @click.group()
@@ -63,74 +49,6 @@ def main() -> None:
         console = Console(stderr=True)
         console.print(f"[bold red]Unexpected Error:[/] {str(e) or type(e).__name__}")
         sys.exit(1)
-
-
-# Register optional vectordb commands
-try:
-    from repogerbil.cli.commands.vectordb_cmds import index, related, search  # pragma: no cover
-
-    cli.add_command(index)  # pragma: no cover
-    cli.add_command(search)  # pragma: no cover
-    cli.add_command(related)  # pragma: no cover
-except ImportError:  # pragma: no cover
-    pass
-
-# Register distill/snapshot commands
-from repogerbil.cli.commands.distill_cmds import (  # noqa: E402
-    distill_ecosystem,
-    export_cadence,
-    multi_snapshot,
-    preview,
-    snapshot,
-)
-
-cli.add_command(snapshot)
-cli.add_command(multi_snapshot)
-cli.add_command(export_cadence)
-cli.add_command(distill_ecosystem)
-cli.add_command(preview)
-
-# Register lint command
-from repogerbil.cli.commands.lint_cmd import lint  # noqa: E402
-
-cli.add_command(lint)
-
-# Register preflight command
-from repogerbil.cli.commands.preflight_cmd import preflight_cmd  # noqa: E402
-
-cli.add_command(preflight_cmd)
-
-# Register changelog-span command
-from repogerbil.cli.commands.changelog_span_cmd import changelog_span_cmd  # noqa: E402
-
-cli.add_command(changelog_span_cmd)
-
-# Register append command (forward-only jsonl catch-up)
-from repogerbil.cli.commands.append_cmd import append_cmd  # noqa: E402
-
-cli.add_command(append_cmd)
-
-# Register realign command (legacy jsonl record → current local hash)
-from repogerbil.cli.commands.realign_cmd import realign_cmd  # noqa: E402
-
-cli.add_command(realign_cmd)
-
-# Register plugin commands
-from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
-
-cli.add_command(plugin)
-
-
-@cli.command()
-@click.argument("repo_path", type=click.Path(exists=True))
-def status(repo_path: str) -> None:
-    """Show repository status and what needs work."""
-    path = Path(repo_path)
-    dates = get_active_dates(path)
-    click.echo(f"Repository: {path.name}")
-    click.echo(f"Active dates: {len(dates)}")
-    if dates:
-        click.echo(f"Date range: {min(dates)} to {max(dates)}")
 
 
 @cli.command()
@@ -210,6 +128,8 @@ def _handle_prompt_mode(
     out: Path,
 ) -> None:
     """Handle --prompt flag: generate LLM prompt with optional diffs."""
+    from repogerbil.core.diff import get_diff_content
+
     diff_content: dict[str, str] = {}
     if settings.backfill_depth == "thorough":  # pragma: no cover — requires thorough config in CWD
         diff_content = get_diff_content(path, commits[0].hash, commits[-1].hash)
@@ -221,470 +141,102 @@ def _handle_prompt_mode(
     click.echo(f"Wrote {prompt_path}")
 
 
-@cli.command(name="fix-stats")
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--since", help="Only fix dates >= this (YYYY-MM-DD)")
-@click.option(
-    "--extra-source",
-    "extra_sources",
-    multiple=True,
-    type=click.Path(),
-    help="Additional source repos or worktrees to probe",
+# Re-export helpers that tests import directly from this module
+from repogerbil.cli.commands.verify_cmds import _report_verification as _report_verification  # noqa: E402
+
+# Register optional vectordb commands
+try:
+    from repogerbil.cli.commands.vectordb_cmds import index, related, search  # pragma: no cover
+
+    cli.add_command(index)  # pragma: no cover
+    cli.add_command(search)  # pragma: no cover
+    cli.add_command(related)  # pragma: no cover
+except ImportError:  # pragma: no cover
+    pass
+
+# Register distill/snapshot commands
+from repogerbil.cli.commands.distill_cmds import (  # noqa: E402
+    distill_ecosystem,
+    export_cadence,
+    multi_snapshot,
+    preview,
+    snapshot,
 )
-def fix_stats(changelog_dir: str, repo_path: str, since: str | None, extra_sources: tuple[str, ...]) -> None:
-    """Fix stats in existing changelogs to match git truth."""
-    cl_dir = Path(changelog_dir)
-    rp = Path(repo_path)
-    repo_name = rp.name
-    extra_paths = [Path(p) for p in extra_sources]
-    fixed = 0
 
-    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
-        date_str = "-".join(yaml_file.name.split("-")[:3])
-        if since and date_str < since:
-            continue
-        resolution = resolve_provenance(
-            repo_name,
-            date_str,
-            rp,
-            extra_sources=extra_paths,
-            include_files=False,
-        )
-        commits = resolution.commits
-        if not commits:  # pragma: no cover — changelog date with no git commits
-            continue
-        stats = resolution.stats or get_diff_stats(rp, commits[0].hash, commits[-1].hash)
-        if update_stats(yaml_file, stats, len(commits)):
-            click.echo(f"Fixed {repo_name}/{date_str}: {len(commits)} commits, {stats.files_changed} files")
-            fixed += 1
+cli.add_command(snapshot)
+cli.add_command(multi_snapshot)
+cli.add_command(export_cadence)
+cli.add_command(distill_ecosystem)
+cli.add_command(preview)
 
-    click.echo(f"{fixed} files updated")
+# Register distill command
+from repogerbil.cli.commands.distill_cmd import distill  # noqa: E402
 
+cli.add_command(distill)
 
-@cli.command()
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--since", help="Only verify dates >= this (YYYY-MM-DD)")
-@click.option("--tolerance", type=int, default=None, help="% tolerance (default: from config)")
-@click.option(
-    "--extra-source",
-    "extra_sources",
-    multiple=True,
-    type=click.Path(),
-    help="Additional source repos or worktrees to probe",
-)
-def verify(
-    changelog_dir: str,
-    repo_path: str,
-    since: str | None,
-    tolerance: int | None,
-    extra_sources: tuple[str, ...],
-) -> None:
-    """Verify changelog stats against git truth."""
-    cl_dir = Path(changelog_dir)
-    rp = Path(repo_path)
-    repo_name = rp.name
-    settings = load_settings(repo=repo_name)
-    tol = tolerance if tolerance is not None else settings.tolerance
-    extra_paths = [Path(p) for p in extra_sources]
+# Register lint command
+from repogerbil.cli.commands.lint_cmd import lint  # noqa: E402
 
-    stat_issues, coverage_issues, checked = _run_verification(cl_dir, rp, repo_name, since, tol, extra_paths)
-    _report_verification(stat_issues, coverage_issues, checked)
+cli.add_command(lint)
 
+# Register preflight command
+from repogerbil.cli.commands.preflight_cmd import preflight_cmd  # noqa: E402
 
-def _run_verification(
-    cl_dir: Path,
-    rp: Path,
-    repo_name: str,
-    since: str | None,
-    tol: int,
-    extra_sources: list[Path] | None = None,
-) -> tuple[list[str], list[str], int]:
-    """Run verification across all changelog files."""
-    stat_issues: list[str] = []
-    coverage_issues: list[str] = []
-    checked = 0
+cli.add_command(preflight_cmd)
 
-    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):  # pragma: no cover — integration
-        date_str = "-".join(yaml_file.name.split("-")[:3])
-        if since and date_str < since:
-            continue
-        resolution = resolve_provenance(
-            repo_name,
-            date_str,
-            rp,
-            extra_sources=extra_sources or [],
-            include_files=True,
-        )
-        if not resolution.commits:
-            continue
-        checked += 1
-        stats = resolution.stats
-        if stats is None:
-            continue
-        data = yaml.safe_load(yaml_file.read_text())
-        if data is None:
-            continue
-        actual_files = stats.files_changed
-        reported_files = int((data.get("stats") or {}).get("files_changed", 0))
-        if abs(reported_files - actual_files) > tol:
-            stat_issues.append(f"  {repo_name}/{date_str}: {reported_files} reported vs {actual_files} actual")
-        if data and actual_files > 0:
-            accounted = count_accounted_files(data)
-            coverage = accounted / actual_files * 100
-            if coverage < (100 - tol):
-                coverage_issues.append(
-                    f"  {repo_name}/{date_str}: {actual_files} files, {accounted} accounted ({coverage:.0f}%)"
-                )
+# Register changelog-span command
+from repogerbil.cli.commands.changelog_span_cmd import changelog_span_cmd  # noqa: E402
 
-    return stat_issues, coverage_issues, checked
+cli.add_command(changelog_span_cmd)
+
+# Register append command (forward-only jsonl catch-up)
+from repogerbil.cli.commands.append_cmd import append_cmd  # noqa: E402
+
+cli.add_command(append_cmd)
+
+# Register realign command (legacy jsonl record → current local hash)
+from repogerbil.cli.commands.realign_cmd import realign_cmd  # noqa: E402
+
+cli.add_command(realign_cmd)
+
+# Register plugin commands
+from repogerbil.cli.commands.plugin_cmd import plugin  # noqa: E402
+
+cli.add_command(plugin)
+
+# Register changelog helper commands
+from repogerbil.cli.commands.changelog_cmds import fix_stats, status  # noqa: E402
+
+cli.add_command(status)
+cli.add_command(fix_stats)
+
+# Register verify command
+from repogerbil.cli.commands.verify_cmds import verify  # noqa: E402
+
+cli.add_command(verify)
+
+# Register audit command
+from repogerbil.cli.commands.audit_cmds import audit  # noqa: E402
+
+cli.add_command(audit)
+
+# Register summary and missing commands
+from repogerbil.cli.commands.summary_cmds import missing, summary  # noqa: E402
+
+cli.add_command(summary)
+cli.add_command(missing)
+
+# Register enrich command
+from repogerbil.cli.commands.enrich_cmds import enrich  # noqa: E402
+
+cli.add_command(enrich)
+
+# Register backfill and probe commands
+from repogerbil.cli.commands.backfill_cmds import backfill, probe  # noqa: E402
+
+cli.add_command(backfill)
+cli.add_command(probe)
 
 
-def _report_verification(
-    stat_issues: list[str], coverage_issues: list[str], checked: int
-) -> None:  # pragma: no cover
-    """Report verification results."""
-    if stat_issues:
-        click.echo("Stats mismatches:")
-        for line in stat_issues:
-            click.echo(line)
-    if coverage_issues:
-        click.echo("Coverage gaps:")
-        for line in coverage_issues:
-            click.echo(line)
-    if not stat_issues and not coverage_issues:
-        click.echo(f"All good ({checked} checked)")
-    else:
-        click.echo(f"{len(stat_issues)} stat issues, {len(coverage_issues)} coverage gaps ({checked} checked)")
-
-
-@cli.command()
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
-@click.option("--since", help="Only distill dates >= this (YYYY-MM-DD)")
-@click.option("--target-branch", default=None, help="Target branch name")
-@click.option("--dry-run", is_flag=True, help="Preview only")
-@click.option(
-    "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
-)
-def distill(
-    repo_path: str,
-    cadence: str | None,
-    since: str | None,
-    target_branch: str | None,
-    dry_run: bool,
-    changelog_dir: str | None,
-) -> None:
-    """Distill commits into daily/weekly consolidated commits."""
-    path = Path(repo_path)
-    settings = load_settings(repo=path.name)
-    cad = cadence or settings.cadence
-    branch = target_branch or settings.target_branch
-
-    all_commits = _collect_commits(path, since)
-    if not all_commits:
-        click.echo("No commits found")
-        return
-
-    groups = group_by_cadence(all_commits, cad)
-    click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
-
-    changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
-
-    if dry_run:
-        for p in generate_consolidation_preview(groups):
-            click.echo(f"  {p['date']}: {p['commit_count']} commits, {p['files_affected']} files")
-        return
-
-    result = consolidate(
-        path,
-        groups,
-        target_branch=branch,
-        changelog_messages=changelog_messages,
-        preserve_timestamps=settings.preserve_timestamps,
-        create_backup=settings.create_backup,
-    )
-    click.echo(f"Consolidated to {result.target_branch}")
-    if result.backup_branch:  # pragma: no branch — backup always on unless configured off
-        click.echo(f"Backup: {result.backup_branch}")
-    if result.backup_tag:  # pragma: no branch — tag always on unless configured off
-        click.echo(f"Tag: {result.backup_tag}")
-
-
-from repogerbil.cli.commands.distill_cmds import _collect_commits, _load_changelog_messages  # noqa: E402
-
-
-@cli.command()
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--since", help="Only check commits since this date")
-@click.option("--show-bad", is_flag=True, help="List unclassifiable messages")
-def audit(repo_path: str, since: str | None, show_bad: bool) -> None:
-    """Audit commit message quality (prefix adoption)."""
-    path = Path(repo_path)
-    total, prefixed, verb_ok, ambiguous, bad_msgs = _audit_commits(path, since)
-
-    classifiable = prefixed + verb_ok
-    pct = (classifiable / total * 100) if total else 0
-    click.echo(
-        f"{path.name}: {total} commits, {prefixed} prefixed, "
-        f"{verb_ok} verb, {ambiguous} ambiguous ({pct:.0f}% classifiable)"
-    )
-
-    if show_bad and bad_msgs:
-        click.echo("Ambiguous commits:")
-        for msg in bad_msgs[:20]:
-            click.echo(f"  {msg}")
-        if len(bad_msgs) > 20:  # pragma: no cover — only with >20 ambiguous commits
-            click.echo(f"  ... and {len(bad_msgs) - 20} more")
-
-
-def _audit_commits(
-    path: Path,
-    since: str | None,
-) -> tuple[int, int, int, int, list[str]]:
-    """Count prefix adoption across commits."""
-    dates = sorted(get_active_dates(path))
-    if since:
-        dates = [d for d in dates if d >= since]
-
-    total = prefixed = verb_ok = ambiguous = 0
-    bad_msgs: list[str] = []
-
-    for date_str in dates:
-        for c in get_commits_for_date(path, date_str):
-            if c.subject.startswith("Merge"):  # pragma: no cover — needs merge commits in test
-                continue
-            total += 1
-            if _PREFIX_RE.match(c.subject):
-                prefixed += 1
-            elif classify_commit(c.subject).needs_review:
-                ambiguous += 1
-                bad_msgs.append(c.subject)
-            else:
-                verb_ok += 1  # pragma: no cover — needs verb-classifiable commit in test
-
-    return total, prefixed, verb_ok, ambiguous, bad_msgs
-
-
-@cli.command()
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.option("--year", type=int, required=True, help="ISO year")
-@click.option("--week", type=int, required=True, help="ISO week number")
-@click.option("--output-dir", type=click.Path(), default=".", help="Where to write the summary")
-@click.option("--prompt", "prompt_mode", is_flag=True, help="Output LLM prompt instead of markdown")
-@click.option("--force", is_flag=True, help="Overwrite existing file")
-def summary(
-    changelog_dir: str,
-    year: int,
-    week: int,
-    output_dir: str,
-    prompt_mode: bool,
-    force: bool,
-) -> None:
-    """Generate a weekly summary from changelogs."""
-    from repogerbil.core.summary import (
-        collect_week_data,
-        generate_summary_markdown,
-        generate_summary_prompt,
-    )
-
-    data = collect_week_data(Path(changelog_dir), year, week)
-    if not data.repos:
-        click.echo(f"No changelogs found for {data.week_label}")
-        return
-
-    if prompt_mode:
-        text = generate_summary_prompt(data)
-        out_path = Path(output_dir) / f"{data.week_label}-prompt.md"
-    else:
-        text = generate_summary_markdown(data)
-        out_path = Path(output_dir) / f"{data.week_label}.md"
-
-    if out_path.exists() and not force:
-        click.echo(f"Exists: {out_path.name} (use --force to overwrite)")
-        return
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(text)
-    click.echo(f"Wrote {out_path} ({len(data.repos)} repos, {data.total_commits} commits)")
-
-
-@cli.command()
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.option("--config", "config_path", type=click.Path(), default=None, help="Path to .repogerbil.toml")
-@click.option(
-    "--extra-source",
-    "extra_sources",
-    multiple=True,
-    type=click.Path(),
-    help="Additional source repos or worktrees to probe",
-)
-def missing(changelog_dir: str, config_path: str | None, extra_sources: tuple[str, ...]) -> None:
-    """Show missing changelog dates across all tracked repos."""
-    from repogerbil.core.audit import find_missing
-
-    cfg_path = Path(config_path) if config_path else None
-    settings = load_settings(config_path=cfg_path)
-
-    if not settings.tracked:
-        click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
-        return
-
-    results = find_missing(
-        settings.tracked,
-        Path(changelog_dir),
-        repo_overrides=settings.repos,
-        extra_sources=[Path(p) for p in extra_sources],
-    )
-    if not results:  # pragma: no cover
-        click.echo("All reports up to date.")
-    else:
-        for m in results:
-            click.echo(f"{m.repo}/{m.date}")
-        click.echo(f"\n{len(results)} missing")
-
-
-@cli.command()
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--since", help="Only enrich dates >= this (YYYY-MM-DD)")
-@click.option("--depth", type=click.Choice(["file", "package", "cross-repo"]), default=None)
-def enrich(changelog_dir: str, repo_path: str, since: str | None, depth: str | None) -> None:
-    """Add per-section stats and impact analysis to existing changelogs."""
-    from repogerbil.core.enrich import enrich_changelog
-
-    cl_dir = Path(changelog_dir)
-    rp = Path(repo_path)
-    repo_name = rp.name
-    settings = load_settings(repo=repo_name)
-    enrich_depth = depth or settings.enrich_depth
-    enriched = 0
-
-    for yaml_file in sorted(cl_dir.glob(f"*-{repo_name}-changelog.yaml")):
-        date_str = "-".join(yaml_file.name.split("-")[:3])
-        if since and date_str < since:  # pragma: no cover
-            continue
-        if enrich_changelog(yaml_file, rp, depth=enrich_depth):  # pragma: no branch
-            click.echo(f"Enriched {repo_name}/{date_str}")
-            enriched += 1
-
-    click.echo(f"{enriched} files enriched")
-
-
-@cli.command()
-@click.argument("changelog_dir", type=click.Path(exists=True))
-@click.option("--config", "config_path", type=click.Path(), default=None)
-@click.option("--since", help="Only backfill dates >= this (YYYY-MM-DD)")
-@click.option(
-    "--prompt", "prompt_mode", is_flag=True, help="Write LLM prompt files instead of YAML changelogs"
-)
-@click.option(
-    "--extra-source",
-    "extra_sources",
-    multiple=True,
-    type=click.Path(),
-    help="Additional source repos or worktrees to probe",
-)
-def backfill(
-    changelog_dir: str,
-    config_path: str | None,
-    since: str | None,
-    prompt_mode: bool,
-    extra_sources: tuple[str, ...],
-) -> None:
-    """Generate changelogs for all missing dates across tracked repos."""
-    from repogerbil.core.audit import find_missing
-
-    cfg_path = Path(config_path) if config_path else None
-    settings = load_settings(config_path=cfg_path)
-
-    if not settings.tracked:
-        click.echo("No tracked repos configured. Add [tracked] to .repogerbil.toml")
-        return
-
-    extra_paths = [Path(p) for p in extra_sources]
-    results = find_missing(
-        settings.tracked,
-        Path(changelog_dir),
-        repo_overrides=settings.repos,
-        extra_sources=extra_paths,
-    )
-    if since:  # pragma: no cover
-        results = [m for m in results if m.date >= since]
-
-    if not results:  # pragma: no cover
-        click.echo("Nothing to backfill.")
-        return
-
-    action = "prompts" if prompt_mode else "changelogs"
-    click.echo(f"Backfilling {len(results)} missing {action}...")
-    generated = 0
-    out = Path(changelog_dir)
-
-    for m in results:
-        repo_path = Path(settings.tracked[m.repo])
-        repo_settings = load_settings(repo=m.repo, config_path=cfg_path)
-        resolution = resolve_provenance(
-            m.repo,
-            m.date,
-            repo_path,
-            extra_sources=extra_paths,
-            message_depth=repo_settings.message_depth,
-            include_files=True,
-        )
-        commits = resolution.commits
-        if not commits:  # pragma: no cover — date from find_missing always has commits
-            continue
-
-        stats = resolution.stats or get_diff_stats(repo_path, commits[0].hash, commits[-1].hash)
-
-        if prompt_mode:
-            prompt_text = generate_prompt(m.repo, m.date, commits, stats, {})
-            prompt_path = out / m.repo / f"{m.date}-{m.repo}-prompt.md"
-            prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            prompt_path.write_text(prompt_text)
-        else:
-            data = generate_analyzed(m.repo, m.date, commits, stats, repo_settings)
-            write_changelog(m.repo, m.date, data, out)
-
-        click.echo(f"  {m.repo}/{m.date}: {len(commits)} commits")
-        generated += 1
-
-    click.echo(f"\n{generated} {action} generated")
-
-
-@cli.command()
-@click.argument("repo_path", type=click.Path(exists=True))
-@click.option("--date", required=True, help="Date (YYYY-MM-DD)")
-@click.option(
-    "--extra-source",
-    "extra_sources",
-    multiple=True,
-    type=click.Path(),
-    help="Additional source repos or worktrees to probe",
-)
-@click.option("--message-depth", type=click.Choice(["subject", "refs", "full"]), default=None)
-@click.option("--files/--no-files", default=False, help="Include file lists when probing")
-def probe(
-    repo_path: str,
-    date: str,
-    extra_sources: tuple[str, ...],
-    message_depth: str | None,
-    files: bool,
-) -> None:
-    """Probe candidate sources for a repo/date pair."""
-    path = Path(repo_path)
-    settings = load_settings(repo=path.name)
-    depth = message_depth or settings.message_depth
-    resolution = resolve_provenance(
-        path.name,
-        date,
-        path,
-        extra_sources=[Path(p) for p in extra_sources],
-        message_depth=depth,
-        include_files=files,
-    )
-
-    for line in describe_resolution(resolution):
-        click.echo(line)
+if __name__ == "__main__":
+    cli()

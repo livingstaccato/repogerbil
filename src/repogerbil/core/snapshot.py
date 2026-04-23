@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import random
-import subprocess
 import sys
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -330,15 +329,7 @@ def _commit_with_timestamp(
         env = dict(os.environ)
         env["GIT_AUTHOR_DATE"] = date_str
         env["GIT_COMMITTER_DATE"] = date_str
-        result = subprocess.run(  # noqa: S603
-            ["git", *cmd],  # noqa: S607
-            cwd=str(dest_path),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=env,
-        )
-        new_commit = result.stdout.strip()
+        new_commit = _run_git(dest_path, *cmd, timeout=30, env=env).strip()
     else:
         new_commit = _run_git(dest_path, *cmd, timeout=30).strip()
 
@@ -444,12 +435,7 @@ def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:
     """Add a source repo as a remote and fetch all refs."""
     source_uri = source_path.resolve().as_uri()
     _run_git(dest_path, "remote", "add", remote_name, source_uri)
-    subprocess.run(  # noqa: S603
-        ["git", "fetch", remote_name, f"+refs/*:refs/fetch-{remote_name}/*"],  # noqa: S607
-        cwd=str(dest_path),
-        capture_output=True,
-        timeout=300,
-    )
+    _run_git(dest_path, "fetch", remote_name, f"+refs/*:refs/fetch-{remote_name}/*", timeout=300)
 
 
 def _build_snapshot_message(

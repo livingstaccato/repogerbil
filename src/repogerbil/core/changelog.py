@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import re
 from typing import Any
@@ -409,16 +410,7 @@ def _apply_file_rules(
             modified.append(commit)
             continue
         result = classify_files(commit.files, file_rules)
-        modified.append(
-            CommitInfo(
-                hash=commit.hash,
-                date=commit.date,
-                subject=commit.subject,
-                files=result.meaningful,
-                body=commit.body,
-                refs=commit.refs,
-            )
-        )
+        modified.append(replace(commit, files=result.meaningful))
         all_bulk.extend(result.bulk_entries)
 
     # Merge bulk entries by category+reason

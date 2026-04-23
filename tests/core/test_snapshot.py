@@ -316,7 +316,12 @@ class TestCreateSnapshot:
         original_run_git = _run_git
         call_count: list[int] = [0]
 
-        def mock_run_git(repo_path: str | Path, *args: str, timeout: int = 60) -> str:
+        def mock_run_git(
+            repo_path: str | Path,
+            *args: str,
+            timeout: int = 60,
+            env: dict[str, str] | None = None,
+        ) -> str:
             call_count[0] += 1
             # Fail on first rev-parse with subdir (HASH:subdir)
             if len(args) >= 2 and ":" in str(args[1]):
@@ -325,7 +330,7 @@ class TestCreateSnapshot:
                     returncode=128,
                     stderr="path 'nonexistent' does not exist",
                 )
-            return original_run_git(repo_path, *args, timeout=timeout)
+            return original_run_git(repo_path, *args, timeout=timeout, env=env)
 
         monkeypatch.setattr("repogerbil.core.snapshot._run_git", mock_run_git)
         result = create_snapshot(source, dest, groups, source_subdir="nonexistent")

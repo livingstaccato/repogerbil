@@ -51,10 +51,10 @@ class RealignResult:
 
     jsonl_path: str
     total_records: int
-    already_verified: int   # hash already in local git, unchanged
-    realigned: int          # matched to a new local hash
-    unalignable: int        # no candidate found, unchanged
-    exact_matches: int      # of realigned, how many had exact (date, fileset)
+    already_verified: int  # hash already in local git, unchanged
+    realigned: int  # matched to a new local hash
+    unalignable: int  # no candidate found, unchanged
+    exact_matches: int  # of realigned, how many had exact (date, fileset)
 
 
 def _scan_local_commits(repo_path: Path) -> list[_LocalCommit]:
@@ -72,9 +72,7 @@ def _scan_local_commits(repo_path: Path) -> list[_LocalCommit]:
             continue
         timestamps[parts[0]] = (parts[1], ts)
 
-    files_raw = _run_git(
-        repo_path, "log", "--all", "--no-merges", "--format=%H", "--name-only", timeout=120
-    )
+    files_raw = _run_git(repo_path, "log", "--all", "--no-merges", "--format=%H", "--name-only", timeout=120)
     files_map: dict[str, set[str]] = defaultdict(set)
     current: str | None = None
     for line in files_raw.splitlines():
@@ -88,9 +86,7 @@ def _scan_local_commits(repo_path: Path) -> list[_LocalCommit]:
 
     commits: list[_LocalCommit] = []
     for h, (d, ts) in timestamps.items():
-        commits.append(
-            _LocalCommit(hash=h, date=d, timestamp=ts, files=frozenset(files_map.get(h, set())))
-        )
+        commits.append(_LocalCommit(hash=h, date=d, timestamp=ts, files=frozenset(files_map.get(h, set()))))
     return commits
 
 
@@ -98,8 +94,8 @@ def _hash_exists(repo_path: Path, commit_hash: str) -> bool:
     """Return True if ``commit_hash`` resolves to a commit object locally."""
     import subprocess
 
-    r = subprocess.run(
-        ["git", "-C", str(repo_path), "cat-file", "-e", f"{commit_hash}^{{commit}}"],
+    r = subprocess.run(  # noqa: S603  # git args are controlled (repo_path, hash from our own DB)
+        ["git", "-C", str(repo_path), "cat-file", "-e", f"{commit_hash}^{{commit}}"],  # noqa: S607  # rely on PATH-resolved git
         capture_output=True,
     )
     return r.returncode == 0
@@ -137,9 +133,7 @@ def _pick_best(
         if score == 0 and rec_files:
             continue
         try:
-            date_distance = abs(
-                (date_type.fromisoformat(c.date) - date_type.fromisoformat(rec_date)).days
-            )
+            date_distance = abs((date_type.fromisoformat(c.date) - date_type.fromisoformat(rec_date)).days)
         except ValueError:
             date_distance = 9999
         scored.append((-score, date_distance, c.timestamp, c.hash, c))
@@ -218,9 +212,7 @@ def realign_jsonl(
 
             rec_date = rec.get("date", "")
             rec_files = frozenset(
-                c.get("file", "")
-                for c in rec.get("changes", [])
-                if isinstance(c, dict) and c.get("file")
+                c.get("file", "") for c in rec.get("changes", []) if isinstance(c, dict) and c.get("file")
             )
             match, is_exact = _find_match(commits_by_date, rec_date, rec_files)
             if match is None:

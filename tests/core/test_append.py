@@ -9,8 +9,6 @@ import json
 from pathlib import Path
 import subprocess
 
-import pytest
-
 from repogerbil.core.append import (
     append_new_commits,
     build_record,
@@ -48,8 +46,10 @@ class TestReadRecordedHashes:
     def test_reads_hashes(self, tmp_path: Path) -> None:
         jsonl = tmp_path / "r.jsonl"
         jsonl.write_text(
-            json.dumps({"hash": "a" * 40, "date": "2026-01-01"}) + "\n"
-            + json.dumps({"hash": "b" * 40, "date": "2026-01-02"}) + "\n"
+            json.dumps({"hash": "a" * 40, "date": "2026-01-01"})
+            + "\n"
+            + json.dumps({"hash": "b" * 40, "date": "2026-01-02"})
+            + "\n"
         )
         assert read_recorded_hashes(jsonl) == {"a" * 40, "b" * 40}
 
@@ -57,9 +57,11 @@ class TestReadRecordedHashes:
         jsonl = tmp_path / "r.jsonl"
         jsonl.write_text(
             "not json\n"
-            + json.dumps({"hash": "a" * 40}) + "\n"
+            + json.dumps({"hash": "a" * 40})
+            + "\n"
             + "\n"  # blank
-            + json.dumps({"date": "2026-01-01"}) + "\n"  # no hash
+            + json.dumps({"date": "2026-01-01"})
+            + "\n"  # no hash
         )
         assert read_recorded_hashes(jsonl) == {"a" * 40}
 
@@ -219,9 +221,12 @@ class TestReadLatestDate:
     def test_returns_max_date(self, tmp_path: Path) -> None:
         jsonl = tmp_path / "r.jsonl"
         jsonl.write_text(
-            json.dumps({"hash": "a", "date": "2026-01-01"}) + "\n"
-            + json.dumps({"hash": "b", "date": "2026-04-20"}) + "\n"
-            + json.dumps({"hash": "c", "date": "2026-03-15"}) + "\n"
+            json.dumps({"hash": "a", "date": "2026-01-01"})
+            + "\n"
+            + json.dumps({"hash": "b", "date": "2026-04-20"})
+            + "\n"
+            + json.dumps({"hash": "c", "date": "2026-03-15"})
+            + "\n"
         )
         assert read_latest_date(jsonl) == "2026-04-20"
 
@@ -234,6 +239,7 @@ class TestDefaultDateCutoff:
         _init_repo(repo)
         # Commit with committer-date in the past (before jsonl's latest date).
         import os
+
         env = os.environ.copy()
         env["GIT_COMMITTER_DATE"] = "2025-01-01T12:00:00"
         env["GIT_AUTHOR_DATE"] = "2025-01-01T12:00:00"
@@ -247,9 +253,7 @@ class TestDefaultDateCutoff:
 
         jsonl = tmp_path / "r.summaries.jsonl"
         # Plant a record whose date sits between the two commits.
-        jsonl.write_text(
-            json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n"
-        )
+        jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n")
 
         result = append_new_commits(repo, jsonl)
         # The 2025-01-01 commit is before the 2025-06-01 cutoff and is skipped.

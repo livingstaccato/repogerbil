@@ -20,6 +20,23 @@ def get_active_dates(repo_path: str | Path) -> set[str]:
     return set(output.strip().splitlines()) if output.strip() else set()
 
 
+def resolve_head_branch(repo_path: str | Path) -> str:
+    """Return the current local branch name pointed to by HEAD.
+
+    Raises:
+        GitCommandError: If HEAD is detached or branch resolution fails.
+    """
+    try:
+        branch = _run_git(repo_path, "symbolic-ref", "--short", "HEAD", timeout=10).strip()
+    except GitCommandError as e:
+        msg = f"Unable to resolve source branch from HEAD in {repo_path}."
+        raise GitCommandError(msg, returncode=e.returncode, stderr=e.stderr) from e
+    if not branch:
+        msg = f"Unable to resolve source branch from HEAD in {repo_path}."
+        raise GitCommandError(msg, returncode=1, stderr="empty branch name")
+    return branch
+
+
 def get_hidden_ref_hashes(repo_path: str | Path) -> list[str]:
     """Return commit hashes for unreachable objects in the repository."""
     try:

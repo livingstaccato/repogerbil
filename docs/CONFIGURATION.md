@@ -51,6 +51,7 @@ llm_model = "qwen3-coder-next:q8_0"
 llm_temperature = 0.0
 llm_timeout_seconds = 120.0
 llm_concurrency = 1
+llm_refine = false                     # auto-enable snapshot LLM refinement when true
 
 # File rules — control how files are handled during --analyze
 [[file_rules]]
@@ -96,6 +97,7 @@ All settings can be overridden via environment variables with the `REPOGERBIL_` 
 REPOGERBIL_CADENCE=weekly
 REPOGERBIL_TOLERANCE=30
 REPOGERBIL_BACKFILL_DEPTH=thorough
+REPOGERBIL_LLM_REFINE=true
 ```
 
 ## File Rule Actions

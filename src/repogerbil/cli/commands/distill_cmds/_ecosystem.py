@@ -12,6 +12,8 @@ import click
 
 from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.config import load_settings
+from repogerbil.core.errors import GitCommandError
+from repogerbil.core.git import resolve_head_branch
 
 from ._helpers import _collect_commits, _find_source_repo, _load_changelog_messages
 
@@ -38,13 +40,17 @@ def _build_ecosystem_targets(
             continue
 
         # Collect commits from source (same as snapshot command)
-        branch = None if all_branches else "main"
+        try:
+            branch = None if all_branches else resolve_head_branch(source_path)
+        except GitCommandError:
+            click.echo(f"⚠ {name:35s} unable to resolve HEAD branch")
+            continue
         all_commits = _collect_commits(source_path, since=None, branch=branch)
         if not all_commits:
             click.echo(f"⚠ {name:35s} no commits found")
             continue
 
-        all_commits.sort(key=lambda c: c.date)
+        all_commits.sort(key=lambda c: (c.timestamp, c.hash))
         groups = group_by_cadence(all_commits, settings.cadence or "daily")
 
         # Load changelog messages
@@ -58,7 +64,7 @@ def _build_ecosystem_targets(
                 dest_path=dest_base_path / name,
                 groups=groups,
                 changelog_messages=changelog_messages,
-                source_branch="main",
+                source_branch=branch or "",
             )
         )
 

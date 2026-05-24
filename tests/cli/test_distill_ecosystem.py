@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from repogerbil.cli.commands.distill_cmds import _find_source_repo
 from repogerbil.cli.main import cli
+from repogerbil.core.errors import GitCommandError
 
 
 def _init_test_repo(repo_path: Path, commits: list[str]) -> None:
@@ -401,3 +403,34 @@ class TestDistillEcosystem:
         assert result.exit_code == 0
         assert (dest_base / "repo1").exists()
         assert not (dest_base / "repo2").exists()
+
+    def test_branch_resolution_failure_skips_repo(self, tmp_path: Path) -> None:
+        source_base = tmp_path / "source"
+        report_base = tmp_path / "reports"
+        dest_base = tmp_path / "dest"
+        source_base.mkdir()
+        report_base.mkdir(parents=True, exist_ok=True)
+        _init_test_repo(source_base / "repo1", ["Commit"])
+        _make_changelog_yaml(report_base / "repo1", "2026-04-05", "Title", "instantiate")
+
+        with patch(
+            "repogerbil.cli.commands.distill_cmds._ecosystem.resolve_head_branch",
+            side_effect=GitCommandError("no-branch", returncode=1, stderr="no-branch"),
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "distill-ecosystem",
+                    "--source-base",
+                    str(source_base),
+                    "--report-base",
+                    str(report_base),
+                    "--dest-base",
+                    str(dest_base),
+                    "--min-changelogs",
+                    "1",
+                ],
+            )
+        assert result.exit_code == 0
+        assert "unable to resolve HEAD branch" in result.output
+        assert "No valid targets to distill" in result.output

@@ -205,6 +205,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
     llm_timeout_seconds: float = Field(default=120.0, gt=0.0)
     llm_concurrency: int = Field(default=1, ge=1)
+    llm_refine: bool = False
 
     @field_validator("cadence")
     @classmethod

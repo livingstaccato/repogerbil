@@ -237,11 +237,14 @@ def test_settings_has_llm_defaults() -> None:
     assert s.llm_temperature == 0.0
     assert s.llm_timeout_seconds == 120.0
     assert s.llm_concurrency == 1
+    assert s.llm_refine is False
 
 
 def test_settings_llm_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPOGERBIL_LLM_MODEL", "gemma4:27b")
     monkeypatch.setenv("REPOGERBIL_LLM_CONCURRENCY", "4")
+    monkeypatch.setenv("REPOGERBIL_LLM_REFINE", "true")
     s = Settings()
     assert s.llm_model == "gemma4:27b"
     assert s.llm_concurrency == 4
+    assert s.llm_refine is True

@@ -18,6 +18,7 @@ from ._commits import (
     get_commits_for_path,
     get_hidden_ref_dates,
     get_hidden_ref_hashes,
+    resolve_head_branch,
 )
 from ._runner import _run_git, parse_shortstat
 from ._stats import get_diff_stats
@@ -41,4 +42,5 @@ __all__ = [
     "get_hidden_ref_hashes",
     "parse_shortstat",
     "resolve_commit_trees",
+    "resolve_head_branch",
 ]

@@ -140,7 +140,7 @@ markers = [
     "integration: tests requiring git operations",
     "slow: tests taking >1s",
 ]
-norecursedirs = [".git", "build", "dist", "*.egg-info", ".venv"]
+norecursedirs = [".git", "build", "dist", "*.egg-info", ".venv", ".hypothesis"]
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 

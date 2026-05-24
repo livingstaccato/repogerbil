@@ -90,6 +90,8 @@ plugins/
 
 7. **No source Python file over 500 lines** — enforced for `src/` by `scripts/check_max_loc.py` via `make max-loc` / `make quality`.
 
+8. **Reproducibility-first defaults** — non-LLM paths are deterministic for identical inputs/config. LLM commit-message refinement is the only intentionally non-deterministic surface.
+
 ## Data Flow
 
 ```

@@ -6,6 +6,9 @@
 from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
+from unittest.mock import patch
+
+import pytest
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.consolidate import (
@@ -257,3 +260,69 @@ class TestConsolidateReal:
             check=True,
         ).stdout.strip()
         assert log_output == "chore: add f3"
+
+    def test_failure_restores_original_branch_and_removes_target(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        from repogerbil.core.git import get_commits_for_date
+
+        apr7 = get_commits_for_date(repo, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        start_branch = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        with (
+            patch("repogerbil.core.consolidate._consolidate_group", side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            consolidate(repo, groups, target_branch="should-not-survive")
+
+        current_branch = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert current_branch == start_branch
+        branches = subprocess.run(
+            ["git", "branch", "--list", "should-not-survive"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert branches == ""
+
+    def test_failure_before_target_creation_skips_delete_branch(self, tmp_path: Path) -> None:
+        from repogerbil.core.git import _run_git as git_run
+
+        repo = _init_repo(tmp_path)
+        from repogerbil.core.git import get_commits_for_date
+
+        apr7 = get_commits_for_date(repo, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+
+        def fail_before_target(
+            repo_path: Path,
+            *args: str,
+            timeout: int = 60,
+            env: dict[str, str] | None = None,
+        ) -> str:
+            if args[:3] == ("rev-list", "--parents", "-n"):
+                raise RuntimeError("boom-early")
+            return git_run(repo_path, *args, timeout=timeout, env=env)
+
+        with (
+            patch("repogerbil.core.consolidate._run_git", side_effect=fail_before_target),
+            pytest.raises(RuntimeError, match="boom-early"),
+        ):
+            consolidate(repo, groups, create_backup=False, target_branch="never-created")

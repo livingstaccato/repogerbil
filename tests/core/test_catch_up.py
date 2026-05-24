@@ -444,6 +444,31 @@ class TestSignatures:
         result = record_missing_commits(repo, jsonl)
         assert result.new_entries == 0
 
+    def test_same_day_signature_dedup_branch_covered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exercise same-day signature skip path in the main loop."""
+        from repogerbil.core import catch_up as catch_up_mod
+
+        jsonl = tmp_path / "r.summaries.jsonl"
+        jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2026-05-24"}) + "\n")
+        commit = CommitInfo(
+            hash="a" * 40,
+            date="2026-05-24",
+            subject="feat: one",
+            body="",
+            files=["a.py"],
+            timestamp=1,
+        )
+        monkeypatch.setattr(catch_up_mod, "_scan_head_commits", lambda *args, **kwargs: [commit])
+        monkeypatch.setattr(
+            catch_up_mod, "_read_signatures_for_date", lambda *args, **kwargs: {_commit_signature(commit)}
+        )
+
+        result = catch_up_mod.record_missing_commits(tmp_path, jsonl)
+        assert result.new_entries == 0
+        assert result.skipped_dedup == 1
+
     def test_same_day_new_commit_not_missed(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()

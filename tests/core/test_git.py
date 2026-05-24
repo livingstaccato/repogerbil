@@ -23,6 +23,7 @@ from repogerbil.core.git import (
     get_hidden_ref_dates,
     get_hidden_ref_hashes,
     parse_shortstat,
+    resolve_head_branch,
 )
 
 
@@ -117,6 +118,24 @@ class TestGetActiveDates:
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
         dates = get_active_dates(repo)
         assert dates == set()
+
+
+class TestResolveHeadBranch:
+    def test_returns_current_branch(self, git_repo: Path) -> None:
+        branch = resolve_head_branch(git_repo)
+        assert branch != ""
+
+    def test_detached_head_raises(self, git_repo: Path) -> None:
+        subprocess.run(["git", "checkout", "--detach"], cwd=git_repo, capture_output=True, check=True)
+        with pytest.raises(GitCommandError, match="Unable to resolve source branch"):
+            resolve_head_branch(git_repo)
+
+    def test_empty_branch_name_raises(self) -> None:
+        with (
+            patch("repogerbil.core.git._commits._run_git", return_value="  \n"),
+            pytest.raises(GitCommandError, match="Unable to resolve source branch"),
+        ):
+            resolve_head_branch(".")
 
 
 class TestGetCommitsForDate:

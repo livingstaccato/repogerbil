@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -53,27 +54,40 @@ def consolidate(
             commits_consolidated=total_commits,
         )
 
+    original_branch = _run_git(repo_path, "symbolic-ref", "--short", "HEAD", timeout=10).strip()
+    target_created = False
     if create_backup:
         _run_git(repo_path, "branch", backup_branch, source_branch)
         _run_git(repo_path, "tag", backup_tag, source_branch)
 
-    # Find base: parent of first commit, or root if first commit
-    first_hash = groups[0].commits[0].hash
-    parent_check = _run_git(repo_path, "rev-list", "--parents", "-n", "1", first_hash, timeout=10).strip()
-    parents = parent_check.split()
+    try:
+        # Find base: parent of first commit, or root if first commit
+        first_hash = groups[0].commits[0].hash
+        parent_check = _run_git(repo_path, "rev-list", "--parents", "-n", "1", first_hash, timeout=10).strip()
+        parents = parent_check.split()
 
-    if len(parents) > 1:
-        base = parents[1]  # Parent hash
-        _run_git(repo_path, "checkout", "-b", target_branch, base)
+        if len(parents) > 1:
+            base = parents[1]  # Parent hash
+            _run_git(repo_path, "checkout", "-b", target_branch, base)
+        else:
+            # Root commit — create orphan branch
+            _run_git(repo_path, "checkout", "--orphan", target_branch)
+            _run_git(repo_path, "rm", "-rf", ".", timeout=10)
+        target_created = True
+
+        for group in groups:
+            _consolidate_group(repo_path, group, changelog_messages, preserve_timestamps)
+    except Exception:
+        with contextlib.suppress(Exception):
+            _run_git(repo_path, "cherry-pick", "--abort", timeout=10)
+        with contextlib.suppress(Exception):
+            _run_git(repo_path, "checkout", original_branch, timeout=10)
+        if target_created:
+            with contextlib.suppress(Exception):
+                _run_git(repo_path, "branch", "-D", target_branch, timeout=10)
+        raise
     else:
-        # Root commit — create orphan branch
-        _run_git(repo_path, "checkout", "--orphan", target_branch)
-        _run_git(repo_path, "rm", "-rf", ".", timeout=10)
-
-    for group in groups:
-        _consolidate_group(repo_path, group, changelog_messages, preserve_timestamps)
-
-    _run_git(repo_path, "checkout", source_branch)
+        _run_git(repo_path, "checkout", source_branch)
 
     return ConsolidationResult(
         target_branch=target_branch,

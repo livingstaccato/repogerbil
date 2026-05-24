@@ -12,12 +12,16 @@ import click
 from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
+from repogerbil.core.git import resolve_head_branch
 
 
 @click.command()
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
 @click.option("--since", help="Only distill dates >= this (YYYY-MM-DD)")
+@click.option(
+    "--source-branch", default=None, help="Source branch to read from (default: current HEAD branch)"
+)
 @click.option("--target-branch", default=None, help="Target branch name")
 @click.option("--dry-run", is_flag=True, help="Preview only")
 @click.option(
@@ -27,6 +31,7 @@ def distill(
     repo_path: str,
     cadence: str | None,
     since: str | None,
+    source_branch: str | None,
     target_branch: str | None,
     dry_run: bool,
     changelog_dir: str | None,
@@ -38,8 +43,9 @@ def distill(
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
     branch = target_branch or settings.target_branch
+    source = source_branch or resolve_head_branch(path)
 
-    all_commits = _collect_commits(path, since)
+    all_commits = _collect_commits(path, since, branch=source)
     if not all_commits:
         click.echo("No commits found")
         return
@@ -58,6 +64,7 @@ def distill(
         path,
         groups,
         target_branch=branch,
+        source_branch=source,
         changelog_messages=changelog_messages,
         preserve_timestamps=settings.preserve_timestamps,
         create_backup=settings.create_backup,

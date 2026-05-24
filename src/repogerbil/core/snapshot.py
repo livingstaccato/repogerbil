@@ -9,6 +9,7 @@ from collections import defaultdict
 import contextlib
 from dataclasses import dataclass
 from datetime import date as date_type, datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -404,6 +405,8 @@ def _compute_window_timestamps(
     Returns:
         List of ISO8601 timestamp strings, one per input group, in input order.
     """
+    if seed is None:
+        seed = _default_window_seed(groups, window_start_hm, window_end_hm, timezone)
     rng = random.Random(seed)  # noqa: S311 — not security-sensitive, used for commit timestamp jitter
     tz = ZoneInfo(timezone)
     sh, sm = map(int, window_start_hm.split(":"))
@@ -429,6 +432,24 @@ def _compute_window_timestamps(
             timestamps[idx] = ts
 
     return timestamps  # type: ignore[return-value]  # all slots filled by construction
+
+
+def _default_window_seed(
+    groups: list[TimeGroup],
+    window_start_hm: str,
+    window_end_hm: str,
+    timezone: str,
+) -> int:
+    """Build a deterministic RNG seed from stable snapshot inputs."""
+    chunks = [window_start_hm, window_end_hm, timezone]
+    for group in groups:
+        chunks.append(group.period_start.isoformat())
+        chunks.append(group.period_end.isoformat())
+        chunks.append(str(len(group.files_affected)))
+        for commit in group.commits:
+            chunks.append(commit.hash)
+    digest = hashlib.sha256("|".join(chunks).encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
 
 
 def _fetch_source(dest_path: Path, remote_name: str, source_path: Path) -> None:

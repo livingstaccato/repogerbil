@@ -201,6 +201,12 @@ Windows crossing midnight are supported (`23:00`–`01:00`).
 - **Analyze** (`--analyze`): Complete changelog with real titles, summaries, grouped sections
 - **Prompt** (`--prompt`): LLM-ready markdown with diffs for external analysis
 
+## Reproducibility
+
+- Non-LLM workflows are deterministic and reproducible for the same inputs/config.
+- Snapshot time-window jitter is deterministic by default (stable seeded output).
+- LLM-generated commit messages are the only intentionally non-deterministic surface.
+
 ## Vector Database
 
 With `pip install repogerbil[vectordb]`, changelogs are indexed into 4 ChromaDB collections:
@@ -239,6 +245,7 @@ llm_model = "qwen3-coder-next:q8_0"
 llm_temperature = 0.0
 llm_timeout_seconds = 120.0
 llm_concurrency = 1
+llm_refine = false               # when true, snapshot/multi-snapshot auto-enable LLM refinement
 
 [[file_rules]]
 pattern = "*.lock"

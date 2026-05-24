@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 
 from click.testing import CliRunner
+import pytest
 import yaml
 
 from repogerbil.cli.main import cli
@@ -40,6 +41,27 @@ def _init_test_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True,
         env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+    )
+    return repo
+
+
+def _init_test_repo_on_master(tmp_path: Path) -> Path:
+    """Create a minimal repo with default branch set to master."""
+    repo = tmp_path / "repo-master"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "master"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    (repo / "f.py").write_text("x\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: initial"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
     )
     return repo
 
@@ -150,6 +172,13 @@ class TestSnapshot:
         dest = tmp_path / "snap"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
         assert result.exit_code == 0
+        assert "Snapshot created" in result.output
+
+    def test_snapshot_auto_detects_non_main_source_branch(self, tmp_path: Path) -> None:
+        repo = _init_test_repo_on_master(tmp_path)
+        dest = tmp_path / "snap-master"
+        result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
+        assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
 
     def test_snapshot_with_extra_source(self, tmp_path: Path) -> None:
@@ -407,6 +436,14 @@ class TestPreview:
         assert "groups" in result.output
 
 
+class TestDistill:
+    def test_distill_auto_detects_non_main_source_branch(self, tmp_path: Path) -> None:
+        repo = _init_test_repo_on_master(tmp_path)
+        result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "groups" in result.output
+
+
 class TestDeriveCommitType:
     def test_known_categories_map_to_conventional_types(self) -> None:
         from repogerbil.cli.commands.distill_cmds import _derive_commit_type
@@ -567,6 +604,26 @@ class TestSnapshotLLMRefine:
             ),
         ):
             result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--llm-refine"])
+        assert result.exit_code == 0, result.output
+        assert "Snapshot created" in result.output
+
+    def test_llm_refine_auto_from_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import patch
+
+        repo = _init_test_repo(tmp_path)
+        dest = tmp_path / "snap-llm-auto"
+        monkeypatch.setenv("REPOGERBIL_LLM_REFINE", "true")
+        from repogerbil.llm.generator import GeneratedMessage
+
+        with patch(
+            "repogerbil.llm.generator.MessageGenerator.generate",
+            return_value=GeneratedMessage(
+                message="instantiate(core): base type definitions introduced",
+                body="The core module now has base type definitions.",
+                changes=[{"file": "src/core/api.py", "description": "introduce base types"}],
+            ),
+        ):
+            result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
         assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
 

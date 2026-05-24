@@ -13,7 +13,7 @@ import click
 from repogerbil.core.cadence import group_by_cadence, groups_to_json
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import generate_consolidation_preview
-from repogerbil.core.git import get_commits_for_path
+from repogerbil.core.git import get_commits_for_path, resolve_head_branch
 
 from ._helpers import _collect_commits, _load_changelog_messages
 
@@ -53,7 +53,7 @@ def _collect_snapshot_commits(
 
     for extra in extra_sources:
         all_commits.extend(_collect_commits(Path(extra), since))
-    all_commits.sort(key=lambda c: c.date)
+    all_commits.sort(key=lambda c: (c.timestamp, c.hash))
     return all_commits
 
 
@@ -140,7 +140,9 @@ def _print_preview_row(preview_data: dict[str, Any]) -> None:
     help="Grouping cadence: hourly, daily, weekly, or gap:NNm/gap:NNh (e.g., gap:30m)",
 )
 @click.option("--since", help="Only include dates >= this (YYYY-MM-DD)")
-@click.option("--source-branch", default="main", help="Source branch to read from")
+@click.option(
+    "--source-branch", default=None, help="Source branch to read from (default: current HEAD branch)"
+)
 @click.option(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
@@ -159,7 +161,11 @@ def _print_preview_row(preview_data: dict[str, Any]) -> None:
     default=None,
     help="For monorepo sources: subdirectory to extract and use its tree state",
 )
-@click.option("--llm-refine", is_flag=True, help="Use Ollama LLM to generate narrative commit messages")
+@click.option(
+    "--llm-refine/--no-llm-refine",
+    default=None,
+    help="Use Ollama LLM for commit messages (default: auto from config)",
+)
 @click.option(
     "--exclude-path",
     "exclude_paths",
@@ -185,14 +191,14 @@ def snapshot(
     dest_path: str,
     cadence: str | None,
     since: str | None,
-    source_branch: str,
+    source_branch: str | None,
     changelog_dir: str | None,
     commit_time: str | None,
     timezone: str | None,
     extra_sources: tuple[str, ...] = (),
     all_branches: bool = False,
     source_subdir: str | None = None,
-    llm_refine: bool = False,
+    llm_refine: bool | None = None,
     exclude_paths: tuple[str, ...] = (),
     time_window_start: str | None = None,
     time_window_end: str | None = None,
@@ -205,9 +211,11 @@ def snapshot(
     dest = Path(dest_path)
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
+    resolved_source_branch = source_branch or resolve_head_branch(path)
+    use_llm = settings.llm_refine if llm_refine is None else llm_refine
 
     all_commits = _collect_snapshot_commits(
-        path, since, source_branch, extra_sources, all_branches, source_subdir
+        path, since, resolved_source_branch, extra_sources, all_branches, source_subdir
     )
     if not all_commits:
         click.echo("No commits found")
@@ -218,13 +226,13 @@ def snapshot(
 
     changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
 
-    llm_generator = _build_llm_generator(settings) if llm_refine else None
+    llm_generator = _build_llm_generator(settings) if use_llm else None
 
     result = create_snapshot(
         source_path=path,
         dest_path=dest,
         groups=groups,
-        source_branch=source_branch,
+        source_branch=resolved_source_branch,
         progress=True,
         changelog_messages=changelog_messages,
         preserve_timestamps=settings.preserve_timestamps,
@@ -250,7 +258,11 @@ def snapshot(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
 @click.option("--dry-run", is_flag=True, help="Preview only, no git changes")
-@click.option("--llm-refine", is_flag=True, default=False, help="Refine commit messages with local Ollama LLM")
+@click.option(
+    "--llm-refine/--no-llm-refine",
+    default=None,
+    help="Refine commit messages with local Ollama LLM (default: auto from config)",
+)
 @click.option(
     "--exclude-path",
     "exclude_paths",
@@ -265,7 +277,7 @@ def multi_snapshot(
     since: str | None,
     changelog_dir: str | None,
     dry_run: bool,
-    llm_refine: bool,
+    llm_refine: bool | None,
     exclude_paths: tuple[str, ...],
 ) -> None:
     """Create a new repo merging multiple source repos into daily commits."""
@@ -277,12 +289,13 @@ def multi_snapshot(
     since_date = date_type.fromisoformat(since) if since else None
     cl_dir = Path(changelog_dir) if changelog_dir else None
     settings = load_settings()
+    use_llm = settings.llm_refine if llm_refine is None else llm_refine
 
     if dry_run:
         _preview_multi_snapshot(source_repos, since_date)
         return
 
-    llm_generator = _build_llm_generator(settings) if llm_refine else None
+    llm_generator = _build_llm_generator(settings) if use_llm else None
 
     result = create_multi_snapshot(
         source_repos=source_repos,

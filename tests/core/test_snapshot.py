@@ -878,6 +878,12 @@ class TestSpreadTimestamps:
         ts2 = _compute_window_timestamps(groups, "20:00", "00:00", "America/Los_Angeles", seed=42)
         assert ts1 == ts2
 
+    def test_deterministic_without_seed(self) -> None:
+        groups = [self._make_group("2026-04-10T10:00:00", i + 1) for i in range(3)]
+        ts1 = _compute_window_timestamps(groups, "20:00", "00:00", "America/Los_Angeles")
+        ts2 = _compute_window_timestamps(groups, "20:00", "00:00", "America/Los_Angeles")
+        assert ts1 == ts2
+
     def test_window_crossing_midnight(self) -> None:
         """Window 23:00-01:00 spans midnight; all timestamps land in that range."""
         group = self._make_group("2026-04-10T22:00:00", 3)

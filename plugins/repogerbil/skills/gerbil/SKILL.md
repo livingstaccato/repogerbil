@@ -51,7 +51,8 @@ When invoked without arguments:
 | `summary` | `<cl_dir>` | `--year`, `--week`, `--output-dir`, `--prompt`, `--force` | Weekly cross-repo summary |
 | `missing` | `<cl_dir>` | `--config` | Show missing changelog dates across tracked repos |
 | `backfill` | `<cl_dir>` | `--config`, `--since` | Batch generate missing changelogs |
-| `append` | `<repo> <jsonl>` | `--since-ref`, `--since-date`, `--full-scan`, `--dry-run` | Append new HEAD commits to a `.summaries.jsonl` sidecar |
+| `catch-up` | `<repo> <jsonl>` | `--since`, `--since-date`, `--full`, `--dry-run` | Record missing HEAD commit metadata to a `.summaries.jsonl` sidecar |
+| `append` | `<repo> <jsonl>` | `--since`, `--since-date`, `--full`, `--dry-run` | Legacy alias for `catch-up` |
 | `realign` | `<repo> <jsonl>` | `--dry-run` | Re-key legacy `.summaries.jsonl` records to current local commit SHAs |
 | `lint` | `<cl_dir>` | — | Validate changelog YAML files against schema |
 | `probe` | `<repo>` | `--date`, `--cadence` | Probe candidate sources for a repo/date pair |

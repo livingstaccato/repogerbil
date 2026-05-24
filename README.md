@@ -91,8 +91,8 @@ gerbil similar src/repogerbil/cli/main.py tests/cli/test_main.py --top 5
 gerbil impact "src/repogerbil/cli/main.py" --source filepaths --top 5
 gerbil impact "retry backoff" --source diffs --top 5
 
-# Maintain LLM snapshot sidecar records after history changes
-gerbil append /path/to/repo /path/to/repo.summaries.jsonl
+# Record missing commit metadata in sidecar records after history changes
+gerbil catch-up /path/to/repo /path/to/repo.summaries.jsonl
 gerbil realign /path/to/repo /path/to/repo.summaries.jsonl
 ```
 
@@ -118,7 +118,8 @@ gerbil realign /path/to/repo /path/to/repo.summaries.jsonl
 | `summary` | Generate weekly cross-repo summary |
 | `missing` | Show missing changelog dates across tracked repos |
 | `backfill` | Batch generate changelogs for all missing dates |
-| `append` | Append new HEAD commits to a `.summaries.jsonl` sidecar |
+| `catch-up` | Record missing HEAD commit metadata to a `.summaries.jsonl` sidecar |
+| `append` | Legacy alias for `catch-up` |
 | `realign` | Re-key legacy `.summaries.jsonl` records to current local commit SHAs |
 | `lint` | Validate changelog YAML files against schema |
 | `plugin` | Export or install bundled assistant plugin files |

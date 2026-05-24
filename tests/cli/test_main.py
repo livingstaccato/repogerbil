@@ -414,6 +414,29 @@ class TestVerify:
         )
         assert mismatches
 
+    def test_collect_stat_mismatches_handles_invalid_numeric_values(self) -> None:
+        from repogerbil.cli.commands.verify_cmds import _collect_stat_mismatches
+
+        mismatches = _collect_stat_mismatches(
+            {"stats": {"files_changed": "n/a", "insertions": "oops", "deletions": "bad"}},
+            actual_files=1,
+            actual_insertions=1,
+            actual_deletions=1,
+            tolerance=0,
+        )
+        assert any("files invalid" in m for m in mismatches)
+        assert any("insertions invalid" in m for m in mismatches)
+        assert any("deletions invalid" in m for m in mismatches)
+
+    def test_safe_int_covers_supported_inputs(self) -> None:
+        from repogerbil.cli.commands.verify_cmds import _safe_int
+
+        assert _safe_int(True) == 1
+        assert _safe_int(5) == 5
+        assert _safe_int(2.9) == 2
+        assert _safe_int("7") == 7
+        assert _safe_int(object()) is None
+
     def test_verify_stats_mismatch(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
         out = tmp_path / "out"

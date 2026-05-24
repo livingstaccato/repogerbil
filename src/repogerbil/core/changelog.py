@@ -256,7 +256,7 @@ def _group_commits(
         )
         key = (forced_categories or {}).get(commit.hash) or result.category or "_unclassified"
         groups.setdefault(key, []).append(commit)
-        if result.needs_review:
+        if result.needs_review and not (forced_categories or {}).get(commit.hash):
             review.append(commit.subject)
 
     return groups, review

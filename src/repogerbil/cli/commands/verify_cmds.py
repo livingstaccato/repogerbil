@@ -105,18 +105,40 @@ def _collect_stat_mismatches(
     if not isinstance(stats_map, dict):
         stats_map = {}
 
-    reported_files = int(stats_map.get("files_changed", 0))
-    reported_insertions = int(stats_map.get("insertions", 0))
-    reported_deletions = int(stats_map.get("deletions", 0))
-
     mismatches: list[str] = []
-    if not _within_tolerance(reported_files, actual_files, tolerance):
+    reported_files = _safe_int(stats_map.get("files_changed", 0))
+    reported_insertions = _safe_int(stats_map.get("insertions", 0))
+    reported_deletions = _safe_int(stats_map.get("deletions", 0))
+
+    if reported_files is None:
+        mismatches.append(f"files invalid ({stats_map.get('files_changed')!r})")
+    elif not _within_tolerance(reported_files, actual_files, tolerance):
         mismatches.append(f"files {reported_files} vs {actual_files}")
-    if not _within_tolerance(reported_insertions, actual_insertions, tolerance):
+    if reported_insertions is None:
+        mismatches.append(f"insertions invalid ({stats_map.get('insertions')!r})")
+    elif not _within_tolerance(reported_insertions, actual_insertions, tolerance):
         mismatches.append(f"insertions {reported_insertions} vs {actual_insertions}")
-    if not _within_tolerance(reported_deletions, actual_deletions, tolerance):
+    if reported_deletions is None:
+        mismatches.append(f"deletions invalid ({stats_map.get('deletions')!r})")
+    elif not _within_tolerance(reported_deletions, actual_deletions, tolerance):
         mismatches.append(f"deletions {reported_deletions} vs {actual_deletions}")
     return mismatches
+
+
+def _safe_int(value: object) -> int | None:
+    """Convert mixed YAML scalar values to int safely."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _report_verification(

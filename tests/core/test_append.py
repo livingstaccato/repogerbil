@@ -12,7 +12,9 @@ import subprocess
 import pytest
 
 from repogerbil.core.append import (
-    _day_after,
+    _commit_signature,
+    _read_signatures_for_date,
+    _record_signature,
     append_new_commits,
     build_record,
     count_jsonl_entries,
@@ -136,7 +138,7 @@ class TestAppendNewCommits:
 
         second = append_new_commits(repo, jsonl)
         assert second.new_entries == 0
-        assert second.skipped_dedup == 0
+        assert second.skipped_dedup == 1
         assert count_jsonl_entries(jsonl) == 1
 
     def test_append_adds_only_new_commits(self, tmp_path: Path) -> None:
@@ -291,9 +293,7 @@ class TestDefaultDateCutoff:
         rec = json.loads(jsonl.read_text().splitlines()[-1])
         assert rec["subjects"] == ["feat: new"]
 
-    def test_default_cutoff_uses_day_after_latest(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_default_cutoff_uses_latest_date(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from repogerbil.core import append as append_mod
 
         seen: dict[str, str | None] = {"since_date": None}
@@ -313,7 +313,7 @@ class TestDefaultDateCutoff:
         jsonl = tmp_path / "r.summaries.jsonl"
         jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n")
         append_mod.append_new_commits(repo, jsonl)
-        assert seen["since_date"] == "2025-06-02"
+        assert seen["since_date"] == "2025-06-01"
 
     def test_full_scan_flag_bypasses_date_cutoff(self, tmp_path: Path) -> None:
         from repogerbil.core import append as append_mod
@@ -340,7 +340,7 @@ class TestDefaultDateCutoff:
         finally:
             monkeypatch.undo()
 
-        assert seen[0] == "2100-01-01"
+        assert seen[0] == "2099-12-31"
         assert seen[1] is None
 
 
@@ -362,9 +362,97 @@ class TestSchemaCompat:
             assert set(ch.keys()) == {"file", "description"}
 
 
-class TestDayAfter:
-    def test_day_after_valid(self) -> None:
-        assert _day_after("2026-05-24") == "2026-05-25"
+class TestSignatures:
+    def test_record_signature_and_commit_signature_match(self) -> None:
+        commit = CommitInfo(
+            hash="a" * 40,
+            date="2026-05-24",
+            subject="feat: one",
+            body="body",
+            files=["b.py", "a.py", "a.py"],
+            timestamp=1,
+        )
+        rec = build_record(commit)
+        assert _record_signature(rec) == _commit_signature(commit)
 
-    def test_day_after_invalid_returns_input(self) -> None:
-        assert _day_after("invalid-date") == "invalid-date"
+    def test_read_signatures_for_date(self, tmp_path: Path) -> None:
+        jsonl = tmp_path / "r.summaries.jsonl"
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "hash": "a" * 40,
+                    "date": "2026-05-24",
+                    "subjects": ["feat: one"],
+                    "body": 123,
+                    "changes": [{"file": "a.py", "description": ""}],
+                }
+            )
+            + "\n"
+            + "\n"
+            + "{not-json}\n"
+            + json.dumps({"hash": "b" * 40, "date": "2026-05-25", "subjects": ["feat: two"], "changes": []})
+            + "\n"
+        )
+        sigs = _read_signatures_for_date(jsonl, "2026-05-24")
+        assert len(sigs) == 1
+
+    def test_read_signatures_for_date_missing_file(self, tmp_path: Path) -> None:
+        assert _read_signatures_for_date(tmp_path / "missing.jsonl", "2026-05-24") == set()
+
+    def test_record_signature_ignores_non_dict_changes(self) -> None:
+        rec = {
+            "subjects": ["feat: one"],
+            "body": "b",
+            "changes": ["not-a-dict", {"description": ""}, {"file": ""}, {"file": "x.py"}],
+        }
+        assert _record_signature(rec) == ("feat: one", "b", ("x.py",))
+
+    def test_same_day_signature_dedup_skips_rewritten_hash(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _commit(repo, "a.txt", "1", "feat: one")
+        commit_date = subprocess.run(
+            ["git", "show", "-s", "--format=%as", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        jsonl = tmp_path / "r.summaries.jsonl"
+        # Different hash, same date/subject/body/files signature.
+        jsonl.write_text(
+            json.dumps(
+                {
+                    "hash": "f" * 40,
+                    "date": commit_date,
+                    "subjects": ["feat: one"],
+                    "body": "",
+                    "changes": [{"file": "a.txt", "description": ""}],
+                }
+            )
+            + "\n"
+        )
+
+        result = append_new_commits(repo, jsonl)
+        assert result.new_entries == 0
+
+    def test_same_day_new_commit_not_missed(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "a.txt").write_text("1")
+        subprocess.run(["git", "add", "a.txt"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "feat: one"], cwd=repo, capture_output=True, check=True)
+        first_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        first_date = subprocess.run(
+            ["git", "show", "-s", "--format=%as", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        jsonl = tmp_path / "r.summaries.jsonl"
+        jsonl.write_text(json.dumps({"hash": first_sha, "date": first_date}) + "\n")
+
+        (repo / "b.txt").write_text("2")
+        subprocess.run(["git", "add", "b.txt"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "feat: two"], cwd=repo, capture_output=True, check=True)
+
+        result = append_new_commits(repo, jsonl)
+        assert result.new_entries == 1

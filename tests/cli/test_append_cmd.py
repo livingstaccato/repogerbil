@@ -67,4 +67,4 @@ class TestAppendCmd:
         second = CliRunner().invoke(cli, ["append", str(repo), str(jsonl)])
         assert second.exit_code == 0
         assert "appended: 0" in second.output
-        assert "skipped (already recorded): 0" in second.output
+        assert "skipped (already recorded): 1" in second.output

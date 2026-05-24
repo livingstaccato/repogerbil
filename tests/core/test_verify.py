@@ -93,6 +93,17 @@ class TestWithinTolerance:
         assert _within_tolerance(5, 0, 20) is False
 
 
+class TestSafeInt:
+    def test_safe_int_supported_inputs(self) -> None:
+        from repogerbil.core.verify import _safe_int
+
+        assert _safe_int(True) == 1
+        assert _safe_int(9) == 9
+        assert _safe_int(3.4) == 3
+        assert _safe_int("12") == 12
+        assert _safe_int(object()) is None
+
+
 class TestHasCoverageGap:
     def test_no_gap(self) -> None:
         assert has_coverage_gap({"bulk": [{"files": 10}]}, actual_files=10) is False
@@ -167,6 +178,16 @@ class TestVerifyChangelog:
         repo = _init_verify_repo(tmp_path)
         yaml_path = tmp_path / "nofc.yaml"
         yaml_path.write_text(yaml.dump({"date": "2026-04-07", "repo": "repo", "stats": {"insertions": 1}}))
+        assert verify_changelog(yaml_path, repo) is None
+
+    def test_non_numeric_files_changed_returns_none(self, tmp_path: Path) -> None:
+        repo = _init_verify_repo(tmp_path)
+        yaml_path = tmp_path / "bad-files.yaml"
+        yaml_path.write_text(
+            yaml.dump(
+                {"date": "2026-04-07", "repo": "repo", "stats": {"files_changed": "n/a", "insertions": 1}}
+            )
+        )
         assert verify_changelog(yaml_path, repo) is None
 
     def test_missing_date(self, tmp_path: Path) -> None:

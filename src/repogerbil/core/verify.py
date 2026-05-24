@@ -46,6 +46,11 @@ def verify_changelog(
     stats = data.get("stats")
     if not isinstance(stats, dict) or "files_changed" not in stats:
         return None
+    reported_files = _safe_int(stats.get("files_changed"))
+    if reported_files is None:
+        return None
+    reported_insertions = _safe_int(stats.get("insertions"))
+    reported_deletions = _safe_int(stats.get("deletions"))
 
     repo = data.get("repo", "")
     date_str = data.get("date", "")
@@ -65,17 +70,17 @@ def verify_changelog(
         repo=repo,
         date=date_str,
         stats_match=(
-            _within_tolerance(stats["files_changed"], git_stats.files_changed, tolerance)
-            and _within_tolerance(stats.get("insertions", 0), git_stats.insertions, tolerance)
-            and _within_tolerance(stats.get("deletions", 0), git_stats.deletions, tolerance)
+            _within_tolerance(reported_files, git_stats.files_changed, tolerance)
+            and _within_tolerance(reported_insertions or 0, git_stats.insertions, tolerance)
+            and _within_tolerance(reported_deletions or 0, git_stats.deletions, tolerance)
         ),
-        reported_files=stats["files_changed"],
+        reported_files=reported_files,
         actual_files=git_stats.files_changed,
         accounted_files=accounted,
         actual_insertions=git_stats.insertions,
         actual_deletions=git_stats.deletions,
-        reported_insertions=stats.get("insertions", 0),
-        reported_deletions=stats.get("deletions", 0),
+        reported_insertions=reported_insertions or 0,
+        reported_deletions=reported_deletions or 0,
     )
 
 
@@ -113,6 +118,22 @@ def _within_tolerance(reported: int, actual: int, tolerance: int) -> bool:
         return reported == 0
     pct_diff = abs(reported - actual) / actual * 100
     return pct_diff <= tolerance
+
+
+def _safe_int(value: object) -> int | None:
+    """Convert mixed YAML scalar values to int safely."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _load_yaml(path: Path) -> dict[str, Any] | None:

@@ -21,7 +21,6 @@ LLM summary was generated.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date as date_type, timedelta
 import json
 from pathlib import Path
 from typing import Any
@@ -84,12 +83,49 @@ def count_jsonl_entries(jsonl_path: Path) -> int:
         return sum(1 for line in fh if line.strip())
 
 
-def _day_after(iso_date: str) -> str:
-    """Return the next day in ISO format, or input unchanged if invalid."""
-    try:
-        return (date_type.fromisoformat(iso_date) + timedelta(days=1)).isoformat()
-    except ValueError:
-        return iso_date
+def _commit_signature(commit: CommitInfo) -> tuple[str, str, tuple[str, ...]]:
+    """Build a stable signature for same-day dedupe across rewritten history."""
+    return (commit.subject, commit.body, tuple(sorted(set(commit.files))))
+
+
+def _record_signature(rec: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] | None:
+    """Build signature from a jsonl record, or None if unparseable."""
+    subjects = rec.get("subjects")
+    if not isinstance(subjects, list):
+        return None
+    subject = subjects[0] if subjects and isinstance(subjects[0], str) else ""
+    body = rec.get("body", "")
+    if not isinstance(body, str):
+        body = ""
+    files: list[str] = []
+    for change in rec.get("changes", []):
+        if isinstance(change, dict):
+            path = change.get("file")
+            if isinstance(path, str) and path:
+                files.append(path)
+    return (subject, body, tuple(sorted(set(files))))
+
+
+def _read_signatures_for_date(jsonl_path: Path, target_date: str) -> set[tuple[str, str, tuple[str, ...]]]:
+    """Return record signatures for a specific date in jsonl."""
+    signatures: set[tuple[str, str, tuple[str, ...]]] = set()
+    if not jsonl_path.exists():
+        return signatures
+    with jsonl_path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("date") != target_date:
+                continue
+            sig = _record_signature(rec)
+            if sig is not None:
+                signatures.add(sig)
+    return signatures
 
 
 def _scan_head_commits(
@@ -216,24 +252,43 @@ def append_new_commits(
         dry_run: When ``True``, report what would be appended without writing.
 
     Default behavior when none of ``since_ref``/``since_date``/``full_scan``
-    are set: one day after the latest date found in ``jsonl_path`` is used as
-    a git ``--since=`` cutoff. This avoids re-recording rewritten-history
-    commits that share the same date as previously recorded entries.
+    are set: the latest date found in ``jsonl_path`` is used as a git
+    ``--since=`` cutoff. Commits on that latest date are deduplicated by both
+    hash and a content signature (subject/body/files), which avoids re-adding
+    rewritten-history duplicates while still allowing new same-day commits.
     """
     hashes, latest_date = _read_recorded(jsonl_path)
     existing = len(hashes)
 
     effective_date = since_date
     if effective_date is None and since_ref is None and not full_scan:
-        effective_date = _day_after(latest_date) if latest_date else None
+        effective_date = latest_date
+
+    same_day_signatures: set[tuple[str, str, tuple[str, ...]]] = set()
+    if (
+        latest_date
+        and since_date is None
+        and since_ref is None
+        and not full_scan
+        and effective_date == latest_date
+    ):
+        same_day_signatures = _read_signatures_for_date(jsonl_path, latest_date)
 
     commits = _scan_head_commits(
         repo_path,
         since_ref=since_ref,
         since_date=effective_date,
     )
-    new_commits = [c for c in commits if c.hash not in hashes]
-    skipped = len(commits) - len(new_commits)
+    new_commits: list[CommitInfo] = []
+    skipped = 0
+    for commit in commits:
+        if commit.hash in hashes:
+            skipped += 1
+            continue
+        if latest_date and commit.date == latest_date and _commit_signature(commit) in same_day_signatures:
+            skipped += 1
+            continue
+        new_commits.append(commit)
 
     if not dry_run and new_commits:
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)

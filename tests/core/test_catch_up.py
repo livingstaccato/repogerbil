@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for forward-only jsonl append."""
+"""Tests for forward-only JSONL metadata catch-up."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from repogerbil.core.append import (
+from repogerbil.core.catch_up import (
     _commit_signature,
     _read_signatures_for_date,
     _record_signature,
@@ -20,6 +20,7 @@ from repogerbil.core.append import (
     count_jsonl_entries,
     read_latest_date,
     read_recorded_hashes,
+    record_missing_commits,
 )
 from repogerbil.core.git import CommitInfo
 
@@ -108,7 +109,7 @@ class TestBuildRecord:
         assert build_record(c)["subjects"] == []
 
 
-class TestAppendNewCommits:
+class TestRecordMissingCommits:
     def test_fresh_repo_creates_jsonl(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -117,7 +118,7 @@ class TestAppendNewCommits:
         _commit(repo, "b.txt", "2", "fix: two")
 
         jsonl = tmp_path / "repo.summaries.jsonl"
-        result = append_new_commits(repo, jsonl)
+        result = record_missing_commits(repo, jsonl)
 
         assert result.new_entries == 2
         assert result.existing_entries == 0
@@ -133,27 +134,27 @@ class TestAppendNewCommits:
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
-        first = append_new_commits(repo, jsonl)
+        first = record_missing_commits(repo, jsonl)
         assert first.new_entries == 1
 
-        second = append_new_commits(repo, jsonl)
+        second = record_missing_commits(repo, jsonl)
         assert second.new_entries == 0
         assert second.skipped_dedup == 1
         assert count_jsonl_entries(jsonl) == 1
 
-    def test_append_adds_only_new_commits(self, tmp_path: Path) -> None:
+    def test_catch_up_adds_only_new_commits(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
-        append_new_commits(repo, jsonl)
+        record_missing_commits(repo, jsonl)
         assert count_jsonl_entries(jsonl) == 1
 
         _commit(repo, "b.txt", "2", "fix: two")
         _commit(repo, "c.txt", "3", "docs: three")
-        result = append_new_commits(repo, jsonl, full_scan=True)
+        result = record_missing_commits(repo, jsonl, full_scan=True)
         assert result.new_entries == 2
         assert count_jsonl_entries(jsonl) == 3
 
@@ -161,29 +162,29 @@ class TestAppendNewCommits:
         assert [r["subjects"][0] for r in lines] == ["feat: one", "fix: two", "docs: three"]
 
     def test_scan_skips_malformed_timestamps(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from repogerbil.core import append as append_mod
+        from repogerbil.core import catch_up as catch_up_mod
 
         def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
             if "--name-only" in args:
                 return ""
             return "a" * 40 + "\x002026-04-20\x00not-an-int\x00bad\x00body\x00END"
 
-        monkeypatch.setattr(append_mod, "_run_git", fake_run_git)
+        monkeypatch.setattr(catch_up_mod, "_run_git", fake_run_git)
 
-        assert append_mod._scan_head_commits(tmp_path) == []
+        assert catch_up_mod._scan_head_commits(tmp_path) == []
 
     def test_attach_files_ignores_lines_before_first_hash(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from repogerbil.core import append as append_mod
+        from repogerbil.core import catch_up as catch_up_mod
 
         def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
             return "orphan.txt\n" + "a" * 40 + "\ntracked.txt\n"
 
-        monkeypatch.setattr(append_mod, "_run_git", fake_run_git)
+        monkeypatch.setattr(catch_up_mod, "_run_git", fake_run_git)
         commit = CommitInfo(hash="a" * 40, date="2026-04-20", subject="feat: one", timestamp=1)
 
-        [attached] = append_mod._attach_files(tmp_path, [commit], since_ref=None)
+        [attached] = catch_up_mod._attach_files(tmp_path, [commit], since_ref=None)
         assert attached.files == ["tracked.txt"]
 
     def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
@@ -193,7 +194,7 @@ class TestAppendNewCommits:
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
-        result = append_new_commits(repo, jsonl, dry_run=True)
+        result = record_missing_commits(repo, jsonl, dry_run=True)
         assert result.new_entries == 1  # would-be count
         assert not jsonl.exists()
 
@@ -211,7 +212,7 @@ class TestAppendNewCommits:
             check=True,
         )
         jsonl = tmp_path / "r.summaries.jsonl"
-        append_new_commits(repo, jsonl)
+        record_missing_commits(repo, jsonl)
 
         rec = json.loads(jsonl.read_text().strip())
         assert rec["subjects"] == ["feat: multi"]
@@ -227,7 +228,7 @@ class TestAppendNewCommits:
         _commit(repo, "c.txt", "3", "docs: three")
         jsonl = tmp_path / "r.summaries.jsonl"
 
-        result = append_new_commits(repo, jsonl, since_ref=sha_old)
+        result = record_missing_commits(repo, jsonl, since_ref=sha_old)
         assert result.new_entries == 2  # two commits after sha_old
 
     def test_preexisting_jsonl_hashes_skipped(self, tmp_path: Path) -> None:
@@ -239,10 +240,20 @@ class TestAppendNewCommits:
         # Pre-seed jsonl with the existing commit's hash (simulates prior recording)
         jsonl.write_text(json.dumps({"hash": sha, "date": "2026-04-20"}) + "\n")
 
-        result = append_new_commits(repo, jsonl)
+        result = record_missing_commits(repo, jsonl)
         assert result.new_entries == 0
         assert result.existing_entries == 1
         assert count_jsonl_entries(jsonl) == 1
+
+    def test_legacy_append_new_commits_alias(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _commit(repo, "a.txt", "1", "feat: one")
+        jsonl = tmp_path / "r.summaries.jsonl"
+
+        result = append_new_commits(repo, jsonl)
+        assert result.new_entries == 1
 
 
 class TestReadLatestDate:
@@ -286,15 +297,15 @@ class TestDefaultDateCutoff:
         # Plant a record whose date sits between the two commits.
         jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n")
 
-        result = append_new_commits(repo, jsonl)
+        result = record_missing_commits(repo, jsonl)
         # The 2025-01-01 commit is before the 2025-06-01 cutoff and is skipped.
-        # The today commit is after and is appended.
+        # The today commit is after and is recorded.
         assert result.new_entries == 1
         rec = json.loads(jsonl.read_text().splitlines()[-1])
         assert rec["subjects"] == ["feat: new"]
 
     def test_default_cutoff_uses_latest_date(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from repogerbil.core import append as append_mod
+        from repogerbil.core import catch_up as catch_up_mod
 
         seen: dict[str, str | None] = {"since_date": None}
 
@@ -306,17 +317,17 @@ class TestDefaultDateCutoff:
             seen["since_date"] = since_date
             return []
 
-        monkeypatch.setattr(append_mod, "_scan_head_commits", fake_scan_head_commits)
+        monkeypatch.setattr(catch_up_mod, "_scan_head_commits", fake_scan_head_commits)
 
         repo = tmp_path / "repo"
         repo.mkdir()
         jsonl = tmp_path / "r.summaries.jsonl"
         jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n")
-        append_mod.append_new_commits(repo, jsonl)
+        catch_up_mod.record_missing_commits(repo, jsonl)
         assert seen["since_date"] == "2025-06-01"
 
     def test_full_scan_flag_bypasses_date_cutoff(self, tmp_path: Path) -> None:
-        from repogerbil.core import append as append_mod
+        from repogerbil.core import catch_up as catch_up_mod
 
         seen: list[str | None] = []
 
@@ -329,14 +340,14 @@ class TestDefaultDateCutoff:
             return []
 
         monkeypatch = pytest.MonkeyPatch()
-        monkeypatch.setattr(append_mod, "_scan_head_commits", fake_scan_head_commits)
+        monkeypatch.setattr(catch_up_mod, "_scan_head_commits", fake_scan_head_commits)
         try:
             repo = tmp_path / "repo"
             repo.mkdir()
             jsonl = tmp_path / "r.summaries.jsonl"
             jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2099-12-31"}) + "\n")
-            append_mod.append_new_commits(repo, jsonl)
-            append_mod.append_new_commits(repo, jsonl, full_scan=True)
+            catch_up_mod.record_missing_commits(repo, jsonl)
+            catch_up_mod.record_missing_commits(repo, jsonl, full_scan=True)
         finally:
             monkeypatch.undo()
 
@@ -353,7 +364,7 @@ class TestSchemaCompat:
         _init_repo(repo)
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
-        append_new_commits(repo, jsonl)
+        record_missing_commits(repo, jsonl)
         rec = json.loads(jsonl.read_text().strip())
         assert set(rec.keys()) == {"hash", "date", "subjects", "body", "changes"}
         assert isinstance(rec["subjects"], list)
@@ -430,7 +441,7 @@ class TestSignatures:
             + "\n"
         )
 
-        result = append_new_commits(repo, jsonl)
+        result = record_missing_commits(repo, jsonl)
         assert result.new_entries == 0
 
     def test_same_day_new_commit_not_missed(self, tmp_path: Path) -> None:
@@ -454,5 +465,5 @@ class TestSignatures:
         subprocess.run(["git", "add", "b.txt"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "feat: two"], cwd=repo, capture_output=True, check=True)
 
-        result = append_new_commits(repo, jsonl)
+        result = record_missing_commits(repo, jsonl)
         assert result.new_entries == 1

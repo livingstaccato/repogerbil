@@ -65,7 +65,16 @@ class TestIndexChangelogs:
         assert store.changelog_count == 2
         assert store.change_count == 2
 
-    def test_skips_todo_titles(self, tmp_path: Path, store: VectorStore) -> None:
+    def test_skips_draft_placeholder_titles(self, tmp_path: Path, store: VectorStore) -> None:
+        cl_dir = tmp_path / "changelogs"
+        _write_changelog(
+            cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml", "repo-a", "2026-04-07", "Draft: summarize"
+        )
+
+        count = index_changelogs(store, cl_dir)
+        assert count == 0
+
+    def test_skips_legacy_todo_placeholder_titles(self, tmp_path: Path, store: VectorStore) -> None:
         cl_dir = tmp_path / "changelogs"
         _write_changelog(
             cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml", "repo-a", "2026-04-07", "TODO: summarize"
@@ -258,7 +267,7 @@ class TestFindLowQuality:
         from repogerbil.core.search import find_low_quality
 
         cl_dir = tmp_path / "changelogs"
-        # Write a low-quality changelog (TODO title, no files)
+        # Write a low-quality changelog (draft placeholder title, no files)
         repo_dir = cl_dir / "repo-bad"
         repo_dir.mkdir(parents=True)
         (repo_dir / "2026-04-07-repo-bad-changelog.yaml").write_text(
@@ -337,8 +346,8 @@ class TestComputeQuality:
         from repogerbil.core.search import _compute_quality
 
         data = {
-            "title": "TODO: summarize",
-            "summary": "TODO: write",
+            "title": "Draft: summarize",
+            "summary": "Draft: write",
             "stats": {"files_changed": 100},
             "review": ["a", "b", "c"],
             "changes": [],

@@ -48,8 +48,8 @@ class TestGenerateDraft:
 
         assert result["date"] == "2026-04-07"
         assert result["repo"] == "myrepo"
-        assert "TODO" in result["title"]
-        assert "TODO" in result["summary"]
+        assert result["title"].startswith("Draft:")
+        assert result["summary"].startswith("Draft:")
         assert result["stats"]["commits"] == 2
         assert result["stats"]["files_changed"] == 10
         assert isinstance(result["changes"], list)
@@ -72,13 +72,13 @@ class TestGenerateAnalyzed:
     def test_real_title(self) -> None:
         commits = _make_commits("feat: add planet harvest pipeline")
         result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
-        assert "TODO" not in result["title"]
+        assert not result["title"].startswith("Draft:")
         assert "planet harvest" in result["title"].lower()
 
     def test_real_summary(self) -> None:
         commits = _make_commits("feat: add A", "fix: fix B")
         result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
-        assert "TODO" not in result["summary"]
+        assert not result["summary"].startswith("Draft:")
         assert "files changed" in result["summary"]
 
     def test_file_rules_create_bulk(self) -> None:

@@ -29,15 +29,15 @@ def generate_draft(
     stats: DiffStats,
     settings: Settings,
 ) -> dict[str, Any]:
-    """Generate a skeleton changelog with TODO placeholders."""
+    """Generate a skeleton changelog with draft placeholders."""
     groups, review = _group_commits(commits, settings)
     changes = _build_changes(groups, settings)
 
     result: dict[str, Any] = {
         "date": date_str,
         "repo": repo,
-        "title": f"TODO: summarize {len(commits)} commits",
-        "summary": f"TODO: write summary ({stats.files_changed} files, "
+        "title": f"Draft: summarize {len(commits)} commits",
+        "summary": f"Draft: write summary ({stats.files_changed} files, "
         f"+{stats.insertions}/-{stats.deletions})",
         "stats": _stats_dict(stats, len(commits)),
     }

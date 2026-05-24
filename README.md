@@ -197,7 +197,7 @@ Windows crossing midnight are supported (`23:00`–`01:00`).
 
 ## Changelog Modes
 
-- **Draft** (default): Skeleton with TODO placeholders, commit subjects as points
+- **Draft** (default): Skeleton with `Draft:` placeholders, commit subjects as points
 - **Analyze** (`--analyze`): Complete changelog with real titles, summaries, grouped sections
 - **Prompt** (`--prompt`): LLM-ready markdown with diffs for external analysis
 

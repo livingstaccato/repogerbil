@@ -8,9 +8,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
+
+_DRAFT_PLACEHOLDER_RE = re.compile(r"^(TODO|Draft)\s*:", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -182,7 +185,7 @@ def _collect_repo_week(repo_dir: Path, week_dates: set[str]) -> RepoWeekData | N
         total_dels += stats.get("deletions", 0)
 
         title = data.get("title", "")
-        if title and not title.startswith("TODO"):
+        if title and not _is_draft_placeholder(str(title)):
             titles.append(title)
 
         for change in data.get("changes") or []:
@@ -228,6 +231,11 @@ def _generate_overview(data: WeekSummaryData) -> str:
         f"touching {data.total_files} files. "
         f"Most active: {top_names}."
     )
+
+
+def _is_draft_placeholder(text: str) -> bool:
+    """Return True when text is a draft placeholder marker."""
+    return bool(_DRAFT_PLACEHOLDER_RE.match(text.strip()))
 
 
 def _repo_highlights(repo: RepoWeekData) -> list[str]:

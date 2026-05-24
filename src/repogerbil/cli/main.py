@@ -197,10 +197,10 @@ from repogerbil.cli.commands.changelog_span_cmd import changelog_span_cmd  # noq
 cli.add_command(changelog_span_cmd)
 
 # Register sidecar metadata catch-up command (+ legacy append alias)
-from repogerbil.cli.commands.append_cmd import append_alias_cmd, append_cmd  # noqa: E402
+from repogerbil.cli.commands.catch_up_cmd import catch_up_cmd, legacy_append_alias_cmd  # noqa: E402
 
-cli.add_command(append_cmd)
-cli.add_command(append_alias_cmd)
+cli.add_command(catch_up_cmd)
+cli.add_command(legacy_append_alias_cmd)
 
 # Register realign command (legacy jsonl record → current local hash)
 from repogerbil.cli.commands.realign_cmd import realign_cmd  # noqa: E402

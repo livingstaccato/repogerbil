@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
 
 from repogerbil.core.state import StateStore
 from repogerbil.core.vectordb import VectorStore
+
+_DRAFT_PLACEHOLDER_RE = re.compile(r"^(TODO|Draft)\s*:", re.IGNORECASE)
 
 
 def index_changelogs(
@@ -178,7 +181,7 @@ def _index_single_changelog(
     summary = data.get("summary", "")
     stats = data.get("stats", {})
 
-    if title.startswith("TODO"):
+    if _is_draft_placeholder(title):
         return False
 
     categories = _extract_categories(data)
@@ -294,13 +297,13 @@ def _compute_quality(data: dict[str, Any]) -> dict[str, Any]:
     # Bulk ratio
     bulk_ratio = (bulk_files / files_changed * 100) if files_changed > 0 else 0.0
 
-    # Has real title (not TODO)
+    # Has real title (not a draft placeholder)
     title = data.get("title", "")
-    has_title = bool(title) and not title.startswith("TODO")
+    has_title = bool(title) and not _is_draft_placeholder(str(title))
 
     # Has summary
     summary = data.get("summary", "")
-    has_summary = bool(summary) and not summary.startswith("TODO")
+    has_summary = bool(summary) and not _is_draft_placeholder(str(summary))
 
     # Change section count
     change_count = len(data.get("changes") or [])
@@ -358,6 +361,11 @@ def _extract_filepaths(data: dict[str, Any]) -> list[str]:
                     if isinstance(pf, str):  # pragma: no branch
                         paths.add(pf)
     return sorted(p for p in paths if isinstance(p, str))
+
+
+def _is_draft_placeholder(text: str) -> bool:
+    """Return True when title/summary text is a draft placeholder marker."""
+    return bool(_DRAFT_PLACEHOLDER_RE.match(text.strip()))
 
 
 def _index_diffs(  # pragma: no cover — requires real git repos with multi-commit dates

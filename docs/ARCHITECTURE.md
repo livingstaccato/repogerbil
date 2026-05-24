@@ -23,7 +23,8 @@ repogerbil/
 │   ├── embeddings.py      Embedding model wrapper (sentence-transformers or hash)
 │   ├── vectordb.py        ChromaDB wrapper with 4 collections
 │   ├── search.py          High-level semantic search + indexing
-│   ├── append.py          Forward-only `.summaries.jsonl` sidecar metadata catch-up
+│   ├── catch_up.py        Forward-only `.summaries.jsonl` sidecar metadata catch-up
+│   ├── append.py          Legacy compatibility re-export for catch-up API
 │   ├── realign.py         Legacy sidecar hash realignment to current commits
 │   └── llm_runner.py      Thin external LLM command runner for changelog-span
 ├── llm/               Ollama prompt/schema/client/generator for snapshot message refinement
@@ -33,12 +34,32 @@ repogerbil/
 │       ├── distill_cmds/     snapshot, multi-snapshot, preview, export-cadence
 │       ├── preflight_cmd.py  preflight — repo inspection before distilling
 │       ├── changelog_span_cmd.py  release-span prompt/synthesis workflow
-│       ├── append_cmd.py     sidecar metadata catch-up CLI
+│       ├── catch_up_cmd.py   sidecar metadata catch-up CLI
+│       ├── append_cmd.py     legacy compatibility re-export for catch-up CLI
 │       ├── realign_cmd.py    sidecar realignment CLI
 │       └── vectordb_cmds.py  Optional vector DB commands (index, search, related, similar, impact)
 ```
 
 `core/git/` re-exports the stable git helper API from smaller internal files (`_commits.py`, `_stats.py`, `_trees.py`, `_runner.py`, and `_types.py`).
+
+## System Diagram
+
+```mermaid
+flowchart LR
+    GitRepo[(Git Repository)]
+    Core[core/* modules]
+    CLI[cli/* commands]
+    Sidecar[(.summaries.jsonl)]
+    Changelogs[(changelog YAML)]
+    VDB[(Vector DB)]
+
+    GitRepo --> Core
+    CLI --> Core
+    Core --> Sidecar
+    Core --> Changelogs
+    Changelogs --> Core
+    Core --> VDB
+```
 
 ## Plugin Layout
 
@@ -96,7 +117,7 @@ Source repo (git)
     ├─ find_missing() ──────────→ MissingDate[]
     ├─ collect_week_data() ─────→ WeekSummaryData
     │
-    ├─ append_new_commits() ────→ forward-only JSONL sidecar records
+    ├─ record_missing_commits() ─→ forward-only JSONL sidecar records
     ├─ realign_jsonl() ─────────→ current-hash JSONL sidecar records
     │
     └─ index_changelogs() ──────→ VectorStore (4 collections, 7 search facets)
@@ -122,7 +143,7 @@ Source repo (git)
 - **VectorStore** — ChromaDB wrapper: changelogs, changes, filepaths, diffs collections
 - **Embedder** — Protocol: embed(text) → list[float], embed_batch(texts) → list[list[float]]
 - **GeneratedMessage** — LLM-generated snapshot message plus body and file-level changes
-- **AppendResult** — sidecar metadata catch-up counts and latest recorded hash
+- **CatchUpResult** — sidecar metadata catch-up counts and latest recorded hash
 - **RealignResult** — sidecar realignment counts, including exact and unalignable records
 
 ## Vector DB Collections

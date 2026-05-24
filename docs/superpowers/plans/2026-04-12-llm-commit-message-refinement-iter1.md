@@ -4,6 +4,12 @@
 
 > Historical implementation plan. This file preserves the original April 2026 task plan and may name files/models from that iteration. The current user-facing docs and `Settings.llm_model` are authoritative for the implemented CLI.
 
+> Update (2026-05-24): Current follow-up work completed and verified in this repo:
+> - Renamed internal append workflow modules to catch-up terminology, with compatibility aliases kept.
+> - Reworded draft changelog placeholders from `TODO:` to `Draft:`.
+> - Updated architecture/docs and added a dedicated Mermaid system diagram.
+> - Full quality gate passed (`make quality`).
+
 **Goal:** Add `gerbil snapshot --llm-refine` flag that generates narrative commit messages using Gemma 4 via Ollama, grounded in the project's vocabulary and the actual files each group touched.
 
 **Architecture:** New `src/repogerbil/llm/` package provides schema, prompt, client, and generator layers. The generator is wired into `create_snapshot()` when `llm_refine=True`. A `FakeOllamaClient` enables full unit test coverage without a live Ollama. `HTTPOllamaClient` is coverage-carvedout (transport boundary).

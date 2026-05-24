@@ -93,7 +93,18 @@ class TestCollectWeekData:
         data = collect_week_data(cl_dir, 2026, 15)
         assert data.repos == []
 
-    def test_skips_todo_titles(self, tmp_path: Path) -> None:
+    def test_skips_draft_placeholder_titles(self, tmp_path: Path) -> None:
+        cl_dir = tmp_path / "changelogs"
+        _write_changelog(
+            cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml",
+            "2026-04-07",
+            "repo-a",
+            "Draft: summarize 3 commits",
+        )
+        data = collect_week_data(cl_dir, 2026, 15)
+        assert data.repos[0].titles == []
+
+    def test_skips_legacy_todo_placeholder_titles(self, tmp_path: Path) -> None:
         cl_dir = tmp_path / "changelogs"
         _write_changelog(
             cl_dir / "repo-a" / "2026-04-07-repo-a-changelog.yaml",

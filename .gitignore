@@ -11,3 +11,4 @@ build/
 htmlcov/
 mutants/
 .mutmut-cache/
+/.claude/scheduled_tasks.lock

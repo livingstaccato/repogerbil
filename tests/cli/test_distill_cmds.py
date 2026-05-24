@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import subprocess
 
@@ -63,6 +64,48 @@ def _init_test_repo_on_master(tmp_path: Path) -> Path:
         check=True,
         env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
     )
+    return repo
+
+
+def _init_repo_with_unmerged_feature_commit(tmp_path: Path) -> Path:
+    """Create repo with one commit on main and one unmerged commit on feature branch."""
+    repo = tmp_path / "repo-branch-scope"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+
+    (repo / "main.txt").write_text("main\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: mainline"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={
+            **env,
+            "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+            "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+        },
+    )
+
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, capture_output=True, check=True)
+    (repo / "feature.txt").write_text("feature\n")
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: branch-only"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env={
+            **env,
+            "GIT_AUTHOR_DATE": "2026-04-08T10:00:00",
+            "GIT_COMMITTER_DATE": "2026-04-08T10:00:00",
+        },
+    )
+    subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True, check=True)
     return repo
 
 
@@ -378,6 +421,35 @@ class TestExportCadence:
         result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
 
+    def test_export_defaults_to_head_branch_scope(self, tmp_path: Path) -> None:
+        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+        result = CliRunner().invoke(cli, ["export-cadence", str(repo)])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        subjects = [commit["subject"] for group in payload["groups"] for commit in group["commits"]]
+        assert "feat: mainline" in subjects
+        assert "feat: branch-only" not in subjects
+
+    def test_export_all_branches_override_includes_unmerged_commits(self, tmp_path: Path) -> None:
+        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+        result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--all-branches"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        subjects = [commit["subject"] for group in payload["groups"] for commit in group["commits"]]
+        assert "feat: mainline" in subjects
+        assert "feat: branch-only" in subjects
+
+    def test_export_all_branches_since_filters_date_path(self, tmp_path: Path) -> None:
+        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+        result = CliRunner().invoke(
+            cli,
+            ["export-cadence", str(repo), "--all-branches", "--since", "2026-04-08"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        subjects = [commit["subject"] for group in payload["groups"] for commit in group["commits"]]
+        assert subjects == ["feat: branch-only"]
+
 
 class TestPreview:
     def _init_many_commits(self, tmp_path: Path) -> Path:
@@ -434,6 +506,20 @@ class TestPreview:
         result = CliRunner().invoke(cli, ["preview", str(repo), "--cadence", "weekly"])
         assert result.exit_code == 0
         assert "groups" in result.output
+
+    def test_preview_defaults_to_head_branch_scope(self, tmp_path: Path) -> None:
+        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+        result = CliRunner().invoke(cli, ["preview", str(repo)])
+        assert result.exit_code == 0, result.output
+        assert "feat: mainline" in result.output
+        assert "feat: branch-only" not in result.output
+
+    def test_preview_all_branches_override_includes_unmerged_commits(self, tmp_path: Path) -> None:
+        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+        result = CliRunner().invoke(cli, ["preview", str(repo), "--all-branches"])
+        assert result.exit_code == 0, result.output
+        assert "feat: mainline" in result.output
+        assert "feat: branch-only" in result.output
 
 
 class TestDistill:

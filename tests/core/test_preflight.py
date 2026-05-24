@@ -4,6 +4,13 @@ from pathlib import Path
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from repogerbil.core.errors import (
+    PreflightGitLogCommandFailedError,
+    PreflightInvalidRevisionOrDateError,
+    PreflightNotAGitRepositoryError,
+)
 from repogerbil.core.preflight import PreflightReport, _count_files, scan_repo
 
 
@@ -132,22 +139,21 @@ class TestScanRepo:
 
 class TestScanRepoErrors:
     def test_non_git_dir_raises(self, tmp_path: Path) -> None:
-        """scan_repo raises NotAGitRepositoryError for a non-git directory."""
-        import subprocess
-        from unittest.mock import patch
-
-        from repogerbil.core.errors import NotAGitRepositoryError
-
+        """scan_repo raises a specific preflight not-a-repo error."""
         plain_dir = tmp_path / "notgit"
         plain_dir.mkdir()
-        with patch(
-            "repogerbil.core.preflight.subprocess.run",
-            side_effect=subprocess.CalledProcessError(128, "git"),
+        with (
+            patch(
+                "repogerbil.core.preflight.subprocess.run",
+                side_effect=subprocess.CalledProcessError(
+                    128,
+                    "git",
+                    stderr="fatal: not a git repository (or any of the parent directories): .git\n",
+                ),
+            ),
+            pytest.raises(PreflightNotAGitRepositoryError, match="category: not-a-git-repository"),
         ):
-            import pytest
-
-            with pytest.raises(NotAGitRepositoryError):
-                scan_repo(plain_dir)
+            scan_repo(plain_dir)
 
 
 class TestCountFiles:
@@ -160,3 +166,51 @@ class TestCountFiles:
         assert counts["main.py"] == 1
         assert counts["README.md"] == 1
         assert "" not in counts
+
+    def test_invalid_revision_or_date_error(self, tmp_path: Path) -> None:
+        exc = subprocess.CalledProcessError(
+            128,
+            "git",
+            stderr="fatal: invalid date format: not-a-date\n",
+        )
+        with (
+            patch("repogerbil.core.preflight.subprocess.run", side_effect=exc),
+            pytest.raises(PreflightInvalidRevisionOrDateError) as caught,
+        ):
+            _count_files(tmp_path, since="not-a-date", until=None)
+        message = str(caught.value)
+        assert "collecting file history with git log" in message
+        assert "category: invalid-revision-or-date" in message
+        assert "invalid date format" in message
+
+    def test_generic_git_log_error(self, tmp_path: Path) -> None:
+        exc = subprocess.CalledProcessError(
+            2,
+            "git",
+            stderr="fatal: unexpected failure\n",
+        )
+        with (
+            patch("repogerbil.core.preflight.subprocess.run", side_effect=exc),
+            pytest.raises(PreflightGitLogCommandFailedError) as caught,
+        ):
+            _count_files(tmp_path, since=None, until=None)
+        message = str(caught.value)
+        assert "collecting file history with git log" in message
+        assert "category: git-command-failed" in message
+        assert "unexpected failure" in message
+
+    def test_not_git_error_message_includes_context(self, tmp_path: Path) -> None:
+        exc = subprocess.CalledProcessError(
+            128,
+            "git",
+            stderr="fatal: not a git repository\n",
+        )
+        with (
+            patch("repogerbil.core.preflight.subprocess.run", side_effect=exc),
+            pytest.raises(PreflightNotAGitRepositoryError) as caught,
+        ):
+            _count_files(tmp_path, since=None, until=None)
+        message = str(caught.value)
+        assert "collecting file history with git log" in message
+        assert "category: not-a-git-repository" in message
+        assert "not a git repository" in message

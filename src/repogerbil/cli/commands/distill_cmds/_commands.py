@@ -317,19 +317,29 @@ def multi_snapshot(
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
 @click.option("--since", help="Only include dates >= this")
+@click.option(
+    "--source-branch",
+    default=None,
+    help="Source branch to read from (default: current HEAD branch)",
+)
+@click.option("--all-branches", is_flag=True, help="Include commits from all branches, not just source-branch")
 @click.option("--output", "-o", type=click.Path(), default=None, help="Output file (default: stdout)")
 def export_cadence(
     repo_path: str,
     cadence: str | None,
     since: str | None,
+    source_branch: str | None,
+    all_branches: bool,
     output: str | None,
 ) -> None:
     """Export cadence-grouped commits as JSON."""
     path = Path(repo_path)
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
+    resolved_source_branch = source_branch or resolve_head_branch(path)
+    branch = None if all_branches else resolved_source_branch
 
-    all_commits = _collect_commits(path, since)
+    all_commits = _collect_commits(path, since, branch=branch)
     if not all_commits:
         click.echo("No commits found")
         return
@@ -348,17 +358,27 @@ def export_cadence(
 @click.argument("repo_path", type=click.Path(exists=True))
 @click.option("--cadence", type=click.Choice(["hourly", "daily", "weekly"]), default=None)
 @click.option("--since", help="Only include dates >= this")
+@click.option(
+    "--source-branch",
+    default=None,
+    help="Source branch to read from (default: current HEAD branch)",
+)
+@click.option("--all-branches", is_flag=True, help="Include commits from all branches, not just source-branch")
 def preview(
     repo_path: str,
     cadence: str | None,
     since: str | None,
+    source_branch: str | None,
+    all_branches: bool,
 ) -> None:
     """Rich preview of what distillation would produce."""
     path = Path(repo_path)
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
+    resolved_source_branch = source_branch or resolve_head_branch(path)
+    branch = None if all_branches else resolved_source_branch
 
-    all_commits = _collect_commits(path, since)
+    all_commits = _collect_commits(path, since, branch=branch)
     if not all_commits:
         click.echo("No commits found")
         return

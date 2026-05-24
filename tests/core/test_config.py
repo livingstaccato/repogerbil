@@ -117,6 +117,27 @@ class TestLoadSettings:
         assert settings.message_depth == "full"
         assert settings.backfill_depth == "heuristic"
 
+    def test_explicit_config_does_not_leak_across_calls(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_a = tmp_path / "a.toml"
+        config_a.write_text('cadence = "weekly"\n')
+        config_b = tmp_path / "b.toml"
+        config_b.write_text('cadence = "hourly"\n')
+
+        empty_cwd = tmp_path / "empty"
+        empty_cwd.mkdir()
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: empty_cwd))
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path / "no-user-config"))
+
+        first = load_settings(config_path=config_a)
+        second = load_settings(config_path=config_b)
+        third = load_settings(config_path=tmp_path / "missing.toml")
+
+        assert first.cadence == "weekly"
+        assert second.cadence == "hourly"
+        assert third.cadence == "daily"
+
 
 class TestFindConfigFile:
     def test_finds_in_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

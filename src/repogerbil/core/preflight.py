@@ -11,7 +11,25 @@ from pathlib import Path
 import subprocess
 
 from repogerbil.core.artifact_patterns import ARTIFACT_RULES, ArtifactRule
-from repogerbil.core.errors import NotAGitRepositoryError
+from repogerbil.core.errors import (
+    PreflightGitLogCommandFailedError,
+    PreflightInvalidRevisionOrDateError,
+    PreflightNotAGitRepositoryError,
+)
+
+_NOT_A_REPO_HINTS = (
+    "not a git repository",
+    "outside repository",
+)
+
+_INVALID_REVISION_OR_DATE_HINTS = (
+    "bad revision",
+    "unknown revision",
+    "ambiguous argument",
+    "invalid date",
+    "malformed object name",
+    "invalid object name",
+)
 
 _SOURCE_EXTENSIONS = frozenset(
     {
@@ -110,7 +128,32 @@ def _count_files(repo: Path, since: str | None, until: str | None) -> Counter[st
             check=True,
         )
     except subprocess.CalledProcessError as exc:
-        raise NotAGitRepositoryError(repo) from exc
+        operation = "collecting file history with git log"
+        stderr = exc.stderr
+        lowered = (stderr or "").lower()
+        if any(hint in lowered for hint in _NOT_A_REPO_HINTS):
+            raise PreflightNotAGitRepositoryError(
+                repo_path=repo,
+                operation=operation,
+                command=cmd,
+                returncode=exc.returncode,
+                stderr=stderr,
+            ) from exc
+        if any(hint in lowered for hint in _INVALID_REVISION_OR_DATE_HINTS):
+            raise PreflightInvalidRevisionOrDateError(
+                repo_path=repo,
+                operation=operation,
+                command=cmd,
+                returncode=exc.returncode,
+                stderr=stderr,
+            ) from exc
+        raise PreflightGitLogCommandFailedError(
+            repo_path=repo,
+            operation=operation,
+            command=cmd,
+            returncode=exc.returncode,
+            stderr=stderr,
+        ) from exc
 
     counts: Counter[str] = Counter()
     for line in result.stdout.splitlines():

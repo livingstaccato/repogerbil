@@ -45,7 +45,7 @@ def create_snapshot(
     source_path: Path,
     dest_path: Path,
     groups: list[TimeGroup],
-    source_branch: str = "main",
+    source_branch: str | None = None,
     changelog_messages: dict[str, str] | None = None,
     preserve_timestamps: bool = True,
     commit_time: str | None = None,
@@ -59,11 +59,11 @@ def create_snapshot(
     time_window_end: str | None = None,
 ) -> SnapshotResult:
     r"""Create an independent repo with one commit per TimeGroup.
-
-    Uses git read-tree for fast, working-directory-free operations.
-    Source repos are never written to — only the destination receives writes.
+    Uses git read-tree for fast, working-directory-free operations, and writes only to destination.
 
     Args:
+        source_branch: Compatibility hint only; select branch commits before calling,
+                      because snapshot creation uses ``groups`` as-is.
         source_subdir: When set, filter primary source commits to this subdirectory
                       and use its tree state (for monorepo sources).
         exclude_paths: Regex patterns to strip matching paths from every committed tree

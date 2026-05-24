@@ -7,10 +7,17 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sys
 
 from click.testing import CliRunner
+import pytest
 
-from repogerbil.cli.main import cli
+from repogerbil.cli.main import cli, main
+from repogerbil.core.errors import (
+    PreflightGitLogCommandFailedError,
+    PreflightInvalidRevisionOrDateError,
+    PreflightNotAGitRepositoryError,
+)
 
 
 def _make_repo(tmp_path: Path, with_lock: bool = True) -> Path:
@@ -159,3 +166,61 @@ class TestPreflightCmd:
         runner = CliRunner()
         result = runner.invoke(cli, ["preflight", str(non_git)])
         assert result.exit_code != 0
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (
+                PreflightNotAGitRepositoryError(
+                    repo_path="/tmp/notgit",
+                    operation="collecting file history with git log",
+                    command=("git", "log"),
+                    returncode=128,
+                    stderr="fatal: not a git repository",
+                ),
+                "category: not-a-git-repository",
+            ),
+            (
+                PreflightInvalidRevisionOrDateError(
+                    repo_path="/tmp/repo",
+                    operation="collecting file history with git log",
+                    command=("git", "log", "--since=bad"),
+                    returncode=128,
+                    stderr="fatal: invalid date format: bad",
+                ),
+                "category: invalid-revision-or-date",
+            ),
+            (
+                PreflightGitLogCommandFailedError(
+                    repo_path="/tmp/repo",
+                    operation="collecting file history with git log",
+                    command=("git", "log"),
+                    returncode=2,
+                    stderr="fatal: unexpected failure",
+                ),
+                "category: git-command-failed",
+            ),
+        ],
+    )
+    def test_top_level_main_surfaces_specific_preflight_errors(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        error: Exception,
+        expected: str,
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        monkeypatch.setattr(
+            "repogerbil.cli.commands.preflight_cmd.scan_repo",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+        )
+        monkeypatch.setattr(sys, "argv", ["gerbil", "preflight", str(repo)])
+
+        with pytest.raises(SystemExit) as caught:
+            main()
+        assert caught.value.code == 1
+        stderr = capsys.readouterr().err
+        assert "Error:" in stderr
+        assert expected in stderr

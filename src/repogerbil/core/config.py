@@ -181,8 +181,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="REPOGERBIL_",
     )
-
-    # Class-level override for config file path (set before instantiation)
+    # Backward-compatibility shim for older tests/callers that set this attribute directly.
+    # It is intentionally not consulted by source resolution to avoid global mutable state races.
     _toml_path: ClassVar[str | Path | None] = None
 
     cadence: str = "daily"
@@ -230,12 +230,36 @@ class Settings(BaseSettings):
         file_secret_settings: Any,
     ) -> tuple[Any, ...]:
         """Add TOML config source to the settings resolution chain."""
-        toml_path = cls._toml_path or find_config_file() or ".repogerbil.toml"
         return (
             init_settings,
             env_settings,
-            TomlConfigSettingsSource(settings_cls, toml_file=toml_path),
+            TomlConfigSettingsSource(settings_cls, toml_file=find_config_file() or ".repogerbil.toml"),
         )
+
+
+def _settings_with_explicit_toml(config_path: Path) -> type[Settings]:
+    """Build a settings class that loads from one fixed TOML path.
+
+    This avoids cross-call contamination from mutable class state.
+    """
+
+    class ExplicitTomlSettings(Settings):
+        @classmethod
+        def settings_customise_sources(
+            cls,
+            settings_cls: type[BaseSettings],
+            init_settings: Any,
+            env_settings: Any,
+            dotenv_settings: Any,
+            file_secret_settings: Any,
+        ) -> tuple[Any, ...]:
+            return (
+                init_settings,
+                env_settings,
+                TomlConfigSettingsSource(settings_cls, toml_file=str(config_path)),
+            )
+
+    return ExplicitTomlSettings
 
 
 def load_settings(repo: str | None = None, config_path: Path | None = None) -> Settings:
@@ -245,15 +269,13 @@ def load_settings(repo: str | None = None, config_path: Path | None = None) -> S
         repo: Repository name for per-repo overrides.
         config_path: Explicit config file path (overrides default search).
     """
+    settings_cls: type[Settings]
     if config_path and config_path.exists():
-        Settings._toml_path = str(config_path)
+        settings_cls = _settings_with_explicit_toml(config_path)
     else:
-        Settings._toml_path = None
+        settings_cls = Settings
 
-    try:
-        settings = Settings()
-    finally:
-        Settings._toml_path = None
+    settings = settings_cls()
 
     if repo and repo in settings.repos:
         override = settings.repos[repo]

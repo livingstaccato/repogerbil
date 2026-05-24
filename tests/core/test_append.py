@@ -9,7 +9,10 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from repogerbil.core.append import (
+    _day_after,
     append_new_commits,
     build_record,
     count_jsonl_entries,
@@ -133,7 +136,7 @@ class TestAppendNewCommits:
 
         second = append_new_commits(repo, jsonl)
         assert second.new_entries == 0
-        assert second.skipped_dedup == 1
+        assert second.skipped_dedup == 0
         assert count_jsonl_entries(jsonl) == 1
 
     def test_append_adds_only_new_commits(self, tmp_path: Path) -> None:
@@ -148,12 +151,38 @@ class TestAppendNewCommits:
 
         _commit(repo, "b.txt", "2", "fix: two")
         _commit(repo, "c.txt", "3", "docs: three")
-        result = append_new_commits(repo, jsonl)
+        result = append_new_commits(repo, jsonl, full_scan=True)
         assert result.new_entries == 2
         assert count_jsonl_entries(jsonl) == 3
 
         lines = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]
         assert [r["subjects"][0] for r in lines] == ["feat: one", "fix: two", "docs: three"]
+
+    def test_scan_skips_malformed_timestamps(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from repogerbil.core import append as append_mod
+
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            if "--name-only" in args:
+                return ""
+            return "a" * 40 + "\x002026-04-20\x00not-an-int\x00bad\x00body\x00END"
+
+        monkeypatch.setattr(append_mod, "_run_git", fake_run_git)
+
+        assert append_mod._scan_head_commits(tmp_path) == []
+
+    def test_attach_files_ignores_lines_before_first_hash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from repogerbil.core import append as append_mod
+
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            return "orphan.txt\n" + "a" * 40 + "\ntracked.txt\n"
+
+        monkeypatch.setattr(append_mod, "_run_git", fake_run_git)
+        commit = CommitInfo(hash="a" * 40, date="2026-04-20", subject="feat: one", timestamp=1)
+
+        [attached] = append_mod._attach_files(tmp_path, [commit], since_ref=None)
+        assert attached.files == ["tracked.txt"]
 
     def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
@@ -262,22 +291,57 @@ class TestDefaultDateCutoff:
         rec = json.loads(jsonl.read_text().splitlines()[-1])
         assert rec["subjects"] == ["feat: new"]
 
-    def test_full_scan_flag_bypasses_date_cutoff(self, tmp_path: Path) -> None:
+    def test_default_cutoff_uses_day_after_latest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from repogerbil.core import append as append_mod
+
+        seen: dict[str, str | None] = {"since_date": None}
+
+        def fake_scan_head_commits(
+            repo_path: Path,
+            since_ref: str | None = None,
+            since_date: str | None = None,
+        ) -> list[CommitInfo]:
+            seen["since_date"] = since_date
+            return []
+
+        monkeypatch.setattr(append_mod, "_scan_head_commits", fake_scan_head_commits)
+
         repo = tmp_path / "repo"
         repo.mkdir()
-        _init_repo(repo)
-        _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
-        # Plant a jsonl with latest-date in the future.
-        jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2099-12-31"}) + "\n")
+        jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2025-06-01"}) + "\n")
+        append_mod.append_new_commits(repo, jsonl)
+        assert seen["since_date"] == "2025-06-02"
 
-        # Default: date cutoff is 2099-12-31 → no commits appended.
-        default = append_new_commits(repo, jsonl)
-        assert default.new_entries == 0
+    def test_full_scan_flag_bypasses_date_cutoff(self, tmp_path: Path) -> None:
+        from repogerbil.core import append as append_mod
 
-        # With --full: cutoff bypassed, hash dedup only.
-        full = append_new_commits(repo, jsonl, full_scan=True)
-        assert full.new_entries == 1
+        seen: list[str | None] = []
+
+        def fake_scan_head_commits(
+            repo_path: Path,
+            since_ref: str | None = None,
+            since_date: str | None = None,
+        ) -> list[CommitInfo]:
+            seen.append(since_date)
+            return []
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(append_mod, "_scan_head_commits", fake_scan_head_commits)
+        try:
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            jsonl = tmp_path / "r.summaries.jsonl"
+            jsonl.write_text(json.dumps({"hash": "f" * 40, "date": "2099-12-31"}) + "\n")
+            append_mod.append_new_commits(repo, jsonl)
+            append_mod.append_new_commits(repo, jsonl, full_scan=True)
+        finally:
+            monkeypatch.undo()
+
+        assert seen[0] == "2100-01-01"
+        assert seen[1] is None
 
 
 class TestSchemaCompat:
@@ -296,3 +360,11 @@ class TestSchemaCompat:
         assert isinstance(rec["changes"], list)
         for ch in rec["changes"]:
             assert set(ch.keys()) == {"file", "description"}
+
+
+class TestDayAfter:
+    def test_day_after_valid(self) -> None:
+        assert _day_after("2026-05-24") == "2026-05-25"
+
+    def test_day_after_invalid_returns_input(self) -> None:
+        assert _day_after("invalid-date") == "invalid-date"

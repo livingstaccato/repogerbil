@@ -105,7 +105,7 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     if not a and not b:
         return 0.0
     union = len(a | b)
-    if union == 0:
+    if union == 0:  # pragma: no cover — kept defensive despite earlier empty-set guard
         return 0.0
     return len(a & b) / union
 
@@ -149,6 +149,10 @@ def _find_match(
     rec_files: frozenset[str],
 ) -> tuple[_LocalCommit | None, bool]:
     """Return (best_match, is_exact_match) or (None, False)."""
+    # Avoid date-only realignment when legacy record has no file evidence.
+    if not rec_files:
+        return None, False
+
     # Same date exact fileset first.
     same_day = commits_by_date.get(rec_date, [])
     for c in same_day:

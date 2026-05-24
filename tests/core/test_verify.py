@@ -233,3 +233,28 @@ class TestVerifyChangelog:
         result = verify_changelog(yaml_path, repo, tolerance=5)
         assert result is not None
         assert result.stats_match is False
+
+    def test_insertions_mismatch_affects_stats_match(self, tmp_path: Path) -> None:
+        repo = _init_verify_repo(tmp_path)
+        from repogerbil.core.git import get_commits_for_date, get_diff_stats
+
+        commits = get_commits_for_date(repo, "2026-04-07")
+        stats = get_diff_stats(repo, commits[0].hash, commits[-1].hash)
+        yaml_path = tmp_path / "insertions-mismatch.yaml"
+        yaml_path.write_text(
+            yaml.dump(
+                {
+                    "date": "2026-04-07",
+                    "repo": "repo",
+                    "stats": {
+                        "files_changed": stats.files_changed,
+                        "insertions": stats.insertions + 999,
+                        "deletions": stats.deletions,
+                    },
+                    "changes": [],
+                }
+            )
+        )
+        result = verify_changelog(yaml_path, repo, tolerance=5)
+        assert result is not None
+        assert result.stats_match is False

@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
 
 SKIP_PATTERNS = re.compile(
@@ -29,15 +30,23 @@ def get_diff_content(
     Returns {filepath: diff_text} with size limits applied.
     Skips lock files, generated code, and binary files.
     """
-    raw = _run_git(
-        repo_path,
-        "diff",
-        f"{first_hash}..{last_hash}",
-        "--no-color",
-        timeout=120,
-    )
+    raw = _run_range_diff(repo_path, first_hash, last_hash)
 
     return parse_diff(raw, max_files=max_files, max_lines_per_file=max_lines_per_file)
+
+
+def _run_range_diff(repo_path: str | Path, first_hash: str, last_hash: str) -> str:
+    """Run an inclusive diff for a commit span.
+
+    Uses ``first^..last`` so the first commit in the set is included. Falls
+    back to ``--root`` when first has no parent.
+    """
+    span = f"{first_hash}^..{last_hash}"
+    try:
+        return _run_git(repo_path, "diff", span, "--no-color", timeout=120)
+    except GitCommandError:
+        target = first_hash if first_hash == last_hash else last_hash
+        return _run_git(repo_path, "show", "--format=", "--root", "--no-color", target, timeout=120)
 
 
 def parse_diff(

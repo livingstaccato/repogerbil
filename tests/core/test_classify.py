@@ -50,6 +50,10 @@ class TestClassifyCommitConventional:
         r = classify_commit("feat(go): add sampling")
         assert r == Classification("instantiate", "minor", False)
 
+    def test_scaffold_prefix(self) -> None:
+        r = classify_commit("scaffold(cli): create command skeleton")
+        assert r == Classification("scaffold", "minor", False)
+
     def test_fix_harden(self) -> None:
         r = classify_commit("fix: harden auth validation")
         assert r == Classification("harden", "minor", False)

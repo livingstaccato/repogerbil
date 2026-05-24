@@ -12,7 +12,7 @@ import yaml
 
 from repogerbil.core.config import load_settings
 from repogerbil.core.provenance import resolve_provenance
-from repogerbil.core.verify import count_accounted_files
+from repogerbil.core.verify import _within_tolerance, count_accounted_files
 
 
 @click.command()
@@ -80,9 +80,9 @@ def _run_verification(
         if data is None:
             continue
         actual_files = stats.files_changed
-        reported_files = int((data.get("stats") or {}).get("files_changed", 0))
-        if abs(reported_files - actual_files) > tol:
-            stat_issues.append(f"  {repo_name}/{date_str}: {reported_files} reported vs {actual_files} actual")
+        mismatches = _collect_stat_mismatches(data, actual_files, stats.insertions, stats.deletions, tol)
+        if mismatches:
+            stat_issues.append(f"  {repo_name}/{date_str}: " + ", ".join(mismatches))
         if data and actual_files > 0:
             accounted = count_accounted_files(data)
             coverage = accounted / actual_files * 100
@@ -92,6 +92,31 @@ def _run_verification(
                 )
 
     return stat_issues, coverage_issues, checked
+
+
+def _collect_stat_mismatches(
+    data: dict[object, object],
+    actual_files: int,
+    actual_insertions: int,
+    actual_deletions: int,
+    tolerance: int,
+) -> list[str]:
+    stats_map = data.get("stats") if isinstance(data, dict) else {}
+    if not isinstance(stats_map, dict):
+        stats_map = {}
+
+    reported_files = int(stats_map.get("files_changed", 0))
+    reported_insertions = int(stats_map.get("insertions", 0))
+    reported_deletions = int(stats_map.get("deletions", 0))
+
+    mismatches: list[str] = []
+    if not _within_tolerance(reported_files, actual_files, tolerance):
+        mismatches.append(f"files {reported_files} vs {actual_files}")
+    if not _within_tolerance(reported_insertions, actual_insertions, tolerance):
+        mismatches.append(f"insertions {reported_insertions} vs {actual_insertions}")
+    if not _within_tolerance(reported_deletions, actual_deletions, tolerance):
+        mismatches.append(f"deletions {reported_deletions} vs {actual_deletions}")
+    return mismatches
 
 
 def _report_verification(

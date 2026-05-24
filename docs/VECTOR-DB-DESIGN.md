@@ -12,21 +12,7 @@ Add semantic search and cross-repo intelligence to repogerbil. Instead of just l
 
 ## Storage Model
 
-### Collections
-
-**repos** — Repository metadata
-```
-{
-  id: "uwarp-space",
-  path: "/Users/tim/code/gh/undef-games/uwarp-space",
-  first_date: "2026-02-21",
-  last_date: "2026-04-07",
-  total_commits: 1170,
-  prefix_adoption: 0.99,
-  primary_categories: ["remediate", "qualify", "instantiate"],
-  dependencies: ["provide-telemetry", "provide-terminal"],
-}
-```
+### Implemented Collections
 
 **changelogs** — Per-date changelog embeddings
 ```
@@ -58,16 +44,26 @@ Add semantic search and cross-repo intelligence to repogerbil. Instead of just l
 }
 ```
 
-**commits** — Individual commit embeddings (for dedup/search)
+**filepaths** — One file-path document per changelog
 ```
 {
-  id: "uwarp-space/abc1234",
+  id: "uwarp-space/2026-04-07/files",
+  changelog_id: "uwarp-space/2026-04-07",
   repo: "uwarp-space",
   date: "2026-04-07",
-  subject: "fix(parity): sync twcfig.dat in preflight",
-  embedding: [0.23, -0.56, ...],
-  category: "remediate",
-  files: ["packages/uwarp-explorer/src/uwarp_explorer/parity/_preflight.py"],
+  document: "packages/uwarp-explorer/src/uwarp_explorer/login.py ..."
+}
+```
+
+**diffs** — Optional per-file diff chunks
+```
+{
+  id: "uwarp-space/2026-04-07/diff/packages/uwarp-explorer/src/login.py",
+  changelog_id: "uwarp-space/2026-04-07",
+  repo: "uwarp-space",
+  date: "2026-04-07",
+  filepath: "packages/uwarp-explorer/src/login.py",
+  document: "diff --git ..."
 }
 ```
 
@@ -118,17 +114,8 @@ Embed `title + summary` or `title + points[].text` as a single document. This ca
 - Requires API key and network
 - Better for production with many repos
 
-### Configuration
-
-```toml
-# .repogerbil.toml
-[vectordb]
-enabled = true
-path = ".repogerbil/vectordb"
-engine = "chromadb"                    # chromadb | lancedb
-embedding_model = "all-MiniLM-L6-v2"  # local model
-# embedding_model = "text-embedding-3-small"  # OpenAI (requires OPENAI_API_KEY)
-```
+The current CLI takes vector DB settings as command flags, primarily `--db-path`.
+Configuration-file support for vector DB settings is not implemented yet.
 
 ## Architecture Integration
 
@@ -144,14 +131,15 @@ repogerbil/
 
 ```python
 class VectorStore:
-    """Abstract interface for vector storage."""
+    """ChromaDB-backed vector storage."""
     
-    def upsert_changelog(self, repo: str, date: str, data: dict) -> None: ...
-    def upsert_change(self, changelog_id: str, index: int, data: dict) -> None: ...
-    def search_changelogs(self, query: str, n: int = 10) -> list[dict]: ...
+    def upsert_changelog(self, repo: str, date_str: str, title: str, summary: str, metadata: dict | None = None) -> None: ...
+    def upsert_change(self, changelog_id: str, index: int, title: str, points_text: str, metadata: dict | None = None) -> None: ...
+    def upsert_filepaths(self, changelog_id: str, filepaths: list[str], metadata: dict | None = None) -> None: ...
+    def upsert_diff(self, changelog_id: str, filepath: str, diff_text: str, metadata: dict | None = None) -> None: ...
+    def search_changelogs(self, query: str, n: int = 10, repo: str | None = None) -> list[dict]: ...
     def search_changes(self, query: str, n: int = 10, repo: str | None = None) -> list[dict]: ...
     def find_related(self, changelog_id: str, n: int = 5) -> list[dict]: ...
-    def find_cross_repo(self, change_id: str) -> list[dict]: ...
 ```
 
 ### embeddings.py — Embedding model wrapper
@@ -173,12 +161,7 @@ def find_security_changes(store: VectorStore) -> list[dict]:
 
 def find_correlated_work(store: VectorStore, repo: str, date: str) -> list[dict]:
     """Find work in other repos related to a specific day's changes."""
-    changelog = store.get_changelog(repo, date)
-    return store.find_related(changelog["id"])
-
-def detect_duplicate_fixes(store: VectorStore, commit_subject: str) -> list[dict]:
-    """Find similar commits across repos (potential duplicates)."""
-    return store.search_commits(commit_subject, n=5, threshold=0.85)
+    return find_related_work(store, repo, date)
 ```
 
 ## CLI Commands
@@ -193,11 +176,12 @@ gerbil search "security hardening" --top 10
 # Find related work across repos for a specific date
 gerbil related uwarp-space --date 2026-04-07
 
-# Find similar commits (deduplication check)
-repogerbil similar "fix(parity): sync twcfig.dat"
+# Find similar file-change history by path signatures
+gerbil similar src/repogerbil/core/changelog.py tests/core/test_changelog.py --top 10
 
-# Show cross-repo impact for a change
-repogerbil impact provide-telemetry --date 2026-04-07
+# Query impact context from path/diff history
+gerbil impact "src/repogerbil/core/changelog.py" --source filepaths --top 10
+gerbil impact "retry backoff timeout" --source diffs --top 10
 ```
 
 ## Indexing Pipeline
@@ -209,16 +193,15 @@ changelog YAML → parse → extract text → embed → upsert to vectordb
 The `index` command:
 1. Walks all changelog YAML files in the directory
 2. For each file: extracts title, summary, change titles, point texts
-3. Generates embeddings (batched for efficiency)
+3. Generates embeddings
 4. Upserts into the appropriate collection with metadata
-5. Incremental: skips files already indexed (by hash or mtime)
+5. Incremental: skips files whose recorded mtime in `.repogerbil-state.json` has not changed
 
 ## Data Size Estimates
 
 For ~2,700 changelog files across 20+ repos:
 - ~2,700 changelog documents (title + summary embeddings)
 - ~10,000 change section documents
-- ~25,000 commit documents (optional, for dedup)
 - ChromaDB storage: ~50MB with MiniLM embeddings
 - Indexing time: ~5 minutes initial, <1 minute incremental
 
@@ -228,6 +211,7 @@ For ~2,700 changelog files across 20+ repos:
 [project.optional-dependencies]
 vectordb = [
     "chromadb>=0.5",
+    "filelock>=3.15",
     "sentence-transformers>=3.0",
 ]
 ```
@@ -243,5 +227,7 @@ The vector DB is an optional feature — all core repogerbil functionality works
 3. **search.py** — high-level query functions
 4. **CLI `index` command** — batch indexing from changelog YAML
 5. **CLI `search` command** — semantic search
-6. **CLI `related` / `similar` / `impact`** — cross-repo queries
-7. **Integration with `summary`** — use vector search for smarter weekly narratives
+6. **CLI `related`** — cross-repo similarity query
+7. **CLI `similar`** — file-path similarity query
+8. **CLI `impact`** — filepath/diff impact-context query
+9. **Future work** — commit-level deduplication and summary integration

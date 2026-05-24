@@ -12,7 +12,7 @@ pip install repogerbil
 uv add repogerbil
 
 # Run without a permanent install
-uvx repogerbil --help
+uvx --from repogerbil gerbil --help
 
 # Optional: vector database for semantic search
 pip install repogerbil[vectordb]
@@ -29,6 +29,9 @@ gerbil changelog /path/to/repo --date 2026-04-07 --analyze
 
 # Generate an LLM prompt with diffs
 gerbil changelog /path/to/repo --date 2026-04-07 --prompt
+
+# Generate a release-span changelog prompt
+gerbil changelog-span /path/to/repo --from v0.3.21 --to v0.4.0 --output prompt.md
 
 # Audit commit message quality
 gerbil audit /path/to/repo --show-bad
@@ -80,6 +83,17 @@ gerbil search "security hardening" --top 5
 
 # Find related cross-repo work
 gerbil related provide-telemetry --date 2026-04-07
+
+# Find similar file-change history from path signatures
+gerbil similar src/repogerbil/cli/main.py tests/cli/test_main.py --top 5
+
+# Search likely impact context from indexed path/diff history
+gerbil impact "src/repogerbil/cli/main.py" --source filepaths --top 5
+gerbil impact "retry backoff" --source diffs --top 5
+
+# Maintain LLM snapshot sidecar records after history changes
+gerbil append /path/to/repo /path/to/repo.summaries.jsonl
+gerbil realign /path/to/repo /path/to/repo.summaries.jsonl
 ```
 
 ## Commands
@@ -88,6 +102,7 @@ gerbil related provide-telemetry --date 2026-04-07
 |---------|-------------|
 | `status` | Show repo info: active dates, date range |
 | `changelog` | Generate changelog YAML (draft, analyze, or prompt mode) |
+| `changelog-span` | Generate a release-span prompt or synthesized changelog for `from..to` |
 | `fix-stats` | Correct changelog stats to match git truth |
 | `verify` | Check stats accuracy + file coverage |
 | `enrich` | Add per-section stats + import impact to changelogs |
@@ -103,11 +118,15 @@ gerbil related provide-telemetry --date 2026-04-07
 | `summary` | Generate weekly cross-repo summary |
 | `missing` | Show missing changelog dates across tracked repos |
 | `backfill` | Batch generate changelogs for all missing dates |
+| `append` | Append new HEAD commits to a `.summaries.jsonl` sidecar |
+| `realign` | Re-key legacy `.summaries.jsonl` records to current local commit SHAs |
 | `lint` | Validate changelog YAML files against schema |
 | `plugin` | Export or install bundled assistant plugin files |
 | `index` | Index changelogs into vector database (requires `[vectordb]`) |
 | `search` | Semantic search across changelogs (requires `[vectordb]`) |
 | `related` | Find related work in other repos (requires `[vectordb]`) |
+| `similar` | Find changelogs that touched similar file paths (requires `[vectordb]`) |
+| `impact` | Search filepath/diff history for impact context (requires `[vectordb]`) |
 
 ## Snapshot Workflow
 
@@ -138,7 +157,7 @@ Full Python `re.search()` regex. Matched paths are stripped from every committed
 |---------|---------|
 | `__pycache__` | All `__pycache__` dirs |
 | `\.lock$` | All lock files |
-| `^\.claude(/\|$)` | `.claude/` directory at repo root |
+| `^\.claude(/|$)` | `.claude/` directory at repo root |
 | `^mutants/` | Mutation testing output |
 | `\.bak$` | Stale backup files |
 
@@ -183,7 +202,16 @@ Windows crossing midnight are supported (`23:00`–`01:00`).
 
 ## Vector Database
 
-With `pip install repogerbil[vectordb]`, changelogs are indexed with 7 data dimensions:
+With `pip install repogerbil[vectordb]`, changelogs are indexed into 4 ChromaDB collections:
+
+| Collection | What it stores |
+|------------|----------------|
+| `changelogs` | Title + summary embeddings with repo/date/stats/category/quality metadata |
+| `changes` | Per-section title + point embeddings with category, severity, scope metadata |
+| `filepaths` | Space-joined file paths per changelog |
+| `diffs` | Optional per-file diff chunks when indexing with source repos |
+
+Those collections support 7 practical search facets:
 
 | Dimension | What it enables |
 |-----------|-----------------|
@@ -205,6 +233,12 @@ message_depth = "subject"       # subject | refs | full
 backfill_depth = "heuristic"    # heuristic | thorough
 tolerance = 20                  # verify_stats % tolerance
 
+llm_ollama_url = "http://localhost:11434"
+llm_model = "qwen3-coder-next:q8_0"
+llm_temperature = 0.0
+llm_timeout_seconds = 120.0
+llm_concurrency = 1
+
 [[file_rules]]
 pattern = "*.lock"
 action = "bulk"
@@ -217,13 +251,15 @@ action = "skip"
 
 [repos.my-important-repo]
 backfill_depth = "thorough"
+message_depth = "refs"
+skip_dates = ["2026-04-01"]
 
 [tracked]
 uwarp-space = "/path/to/uwarp-space"
 provide-telemetry = "/path/to/provide-telemetry"
 ```
 
-**Resolution order**: CLI flags > env vars (`REPOGERBIL_*`) > `.repogerbil.toml` > defaults
+**Resolution order**: CLI flags > env vars (`REPOGERBIL_*`) > walked `.repogerbil.toml` > `~/.config/repogerbil/config.toml` > defaults
 
 ## Vocabulary
 
@@ -275,11 +311,11 @@ Codex uses the same shared plugin directory, with local marketplace metadata in 
 To install the bundled plugin files from an installed package:
 
 ```bash
-# Codex: writes into ~/.agents/plugins/marketplace.json and ~/plugins/repogerbil
-uvx repogerbil plugin install --target codex
+# Codex: writes plugin files into ~/.codex/plugins/repogerbil and marketplace metadata into ~/.agents/plugins/marketplace.json
+uvx --from repogerbil gerbil plugin install --target codex
 
-# Claude Code: writes into ~/plugins/.claude-plugin/marketplace.json and ~/plugins/repogerbil
-uvx repogerbil plugin install --target claude
+# Claude Code: writes into ./plugins/repogerbil and ./plugins/.claude-plugin/marketplace.json from the current directory
+uvx --from repogerbil gerbil plugin install --target claude
 ```
 
 ## Development

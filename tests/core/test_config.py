@@ -72,6 +72,11 @@ class TestSettings:
         with pytest.raises(ValueError, match="Invalid cadence"):
             Settings(cadence="gap:invalid")
 
+    def test_scaffold_category_present_in_defaults(self) -> None:
+        settings = Settings()
+        assert "scaffold" in settings.vocabulary.categories
+        assert settings.vocabulary.prefix_to_category["scaffold"] == "scaffold"
+
 
 class TestLoadSettings:
     def test_default_settings(self) -> None:

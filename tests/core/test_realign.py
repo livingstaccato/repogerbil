@@ -11,7 +11,10 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from repogerbil.core.realign import realign_jsonl
+import pytest
+
+from repogerbil.core import realign as realign_mod
+from repogerbil.core.realign import _LocalCommit, realign_jsonl
 
 
 def _init_repo(repo: Path) -> None:
@@ -53,6 +56,15 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 class TestRealignBasic:
+    def test_missing_jsonl_returns_empty_result(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        r = realign_jsonl(repo, tmp_path / "missing.jsonl")
+
+        assert r.total_records == 0
+        assert r.realigned == 0
+
     def test_already_verified_unchanged(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -151,6 +163,27 @@ class TestRealignBasic:
         assert r.realigned == 0
         after = _read_jsonl(jsonl)
         assert after[0]["hash"] == "f" * 40  # unchanged
+
+    def test_record_without_file_evidence_not_realigned(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
+        jsonl = tmp_path / "s.jsonl"
+        _write_jsonl(
+            jsonl,
+            [
+                {
+                    "hash": "f" * 40,
+                    "date": "2025-10-15",
+                    "subjects": ["legacy"],
+                    "body": "",
+                    "changes": [],
+                }
+            ],
+        )
+        r = realign_jsonl(repo, jsonl)
+        assert r.realigned == 0
+        assert r.unalignable == 1
 
     def test_dry_run_no_write(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
@@ -266,3 +299,78 @@ class TestRealignPicking:
         assert after[0]["hash"] == sha1
         assert after[1]["hash"] == sha2
         assert after[2]["hash"] == "e" * 40  # unchanged
+
+    def test_blank_jsonl_lines_are_ignored(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        sha = _commit(repo, {"a.txt": "1"}, "c1", date="2025-10-15")
+        jsonl = tmp_path / "s.jsonl"
+        jsonl.write_text(
+            "\n"
+            + json.dumps(
+                {
+                    "hash": sha,
+                    "date": "2025-10-15",
+                    "subjects": [],
+                    "body": "",
+                    "changes": [{"file": "a.txt", "description": ""}],
+                }
+            )
+            + "\n\n"
+        )
+
+        r = realign_jsonl(repo, jsonl)
+
+        assert r.total_records == 1
+        assert r.already_verified == 1
+
+
+class TestRealignInternals:
+    def test_jaccard_empty_sets(self) -> None:
+        assert realign_mod._jaccard(frozenset(), frozenset()) == 0.0
+
+    def test_date_window_invalid_date(self) -> None:
+        assert realign_mod._date_window("not-a-date", 7) == set()
+
+    def test_pick_best_empty_and_no_overlap(self) -> None:
+        candidate = _LocalCommit(hash="a" * 40, date="2025-10-15", timestamp=1, files=frozenset({"a.py"}))
+
+        assert realign_mod._pick_best([], frozenset({"a.py"}), "2025-10-15") is None
+        assert realign_mod._pick_best([candidate], frozenset({"b.py"}), "2025-10-15") is None
+
+    def test_pick_best_handles_invalid_record_date(self) -> None:
+        candidate = _LocalCommit(hash="a" * 40, date="2025-10-15", timestamp=1, files=frozenset())
+
+        assert realign_mod._pick_best([candidate], frozenset(), "not-a-date") == candidate
+
+    def test_find_match_falls_through_non_exact_same_day(self) -> None:
+        candidate = _LocalCommit(hash="a" * 40, date="2025-10-15", timestamp=1, files=frozenset({"a.py"}))
+
+        match, is_exact = realign_mod._find_match(
+            {"2025-10-15": [candidate]}, "2025-10-15", frozenset({"a.py", "b.py"})
+        )
+
+        assert match == candidate
+        assert is_exact is False
+
+    def test_scan_local_commits_skips_malformed_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            if "--name-only" in args:
+                return "orphan.py\n" + "a" * 40 + "\ntracked.py\n"
+            return "\n".join(
+                [
+                    "malformed",
+                    "b" * 40 + "\x002025-10-15\x00not-an-int",
+                    "a" * 40 + "\x002025-10-15\x00123",
+                ]
+            )
+
+        monkeypatch.setattr(realign_mod, "_run_git", fake_run_git)
+
+        commits = realign_mod._scan_local_commits(tmp_path)
+
+        assert commits == [
+            _LocalCommit(hash="a" * 40, date="2025-10-15", timestamp=123, files=frozenset({"tracked.py"}))
+        ]

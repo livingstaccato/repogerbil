@@ -6,14 +6,129 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import click
 
 from repogerbil.core.cadence import group_by_cadence, groups_to_json
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import generate_consolidation_preview
+from repogerbil.core.git import get_commits_for_path
 
 from ._helpers import _collect_commits, _load_changelog_messages
+
+
+def _validate_snapshot_timing(
+    commit_time: str | None,
+    time_window_start: str | None,
+    time_window_end: str | None,
+) -> None:
+    """Validate mutually exclusive snapshot timestamp options."""
+    if commit_time and (time_window_start or time_window_end):
+        raise click.UsageError(
+            "--commit-time and --time-window-start/--time-window-end are mutually exclusive"
+        )
+    if (time_window_start is None) != (time_window_end is None):
+        raise click.UsageError("--time-window-start and --time-window-end must both be provided")
+
+
+def _collect_snapshot_commits(
+    path: Path,
+    since: str | None,
+    source_branch: str,
+    extra_sources: tuple[str, ...],
+    all_branches: bool,
+    source_subdir: str | None,
+) -> list[Any]:
+    """Collect and sort commits for the snapshot command."""
+    if source_subdir:
+        all_commits = (
+            get_commits_for_path(  # pragma: no cover — integration test needed for monorepo extraction
+                path, source_subdir, all_branches=all_branches
+            )
+        )
+    else:
+        branch = None if all_branches else source_branch
+        all_commits = _collect_commits(path, since, branch=branch)
+
+    for extra in extra_sources:
+        all_commits.extend(_collect_commits(Path(extra), since))
+    all_commits.sort(key=lambda c: c.date)
+    return all_commits
+
+
+def _build_llm_generator(settings: Any) -> Any:
+    """Create the configured Ollama-backed message generator."""
+    from repogerbil.llm.client import HTTPOllamaClient
+    from repogerbil.llm.generator import MessageGenerator
+
+    client = HTTPOllamaClient(base_url=settings.llm_ollama_url)
+    return MessageGenerator(
+        client=client,
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        timeout=settings.llm_timeout_seconds,
+    )
+
+
+def _parse_repo_specs(repos: tuple[str, ...]) -> dict[str, Path]:
+    """Parse NAME:PATH CLI pairs for multi-snapshot."""
+    source_repos: dict[str, Path] = {}
+    for repo_spec in repos:
+        if ":" not in repo_spec:
+            click.echo(f"Error: --repo must be NAME:PATH format, got: {repo_spec}", err=True)
+            raise SystemExit(1)
+        name, path_str = repo_spec.split(":", 1)
+        source_repos[name] = Path(path_str)
+
+    if not source_repos:
+        click.echo("Error: at least one --repo is required", err=True)
+        raise SystemExit(1)
+
+    return source_repos
+
+
+def _filter_since_dates(active_dates: list[Any], since_date: Any) -> list[Any]:
+    """Apply the optional since date filter."""
+    if since_date:
+        return [d for d in active_dates if d >= since_date]
+    return active_dates
+
+
+def _print_date_preview(active_dates: list[Any], repo_count: int) -> None:
+    """Print the first few active dates for a dry run."""
+    click.echo(f"Would create {len(active_dates)} daily commits from {repo_count} repos")
+    for d in active_dates[:10]:
+        click.echo(f"  {d.isoformat()}")
+    if len(active_dates) > 10:
+        click.echo(f"  ... and {len(active_dates) - 10} more")
+
+
+def _preview_multi_snapshot(source_repos: dict[str, Path], since_date: Any) -> None:
+    """Print a dry-run preview for multi-snapshot."""
+    from repogerbil.core.multi_snapshot import _collect_all_active_dates
+
+    active_dates = _filter_since_dates(_collect_all_active_dates(source_repos), since_date)
+    _print_date_preview(active_dates, len(source_repos))
+
+
+def _print_snapshot_result(result: Any) -> None:
+    """Print snapshot completion details."""
+    dedup_msg = f" ({result.groups_skipped} duplicate tree states removed)" if result.groups_skipped else ""
+    click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits){dedup_msg}")
+
+
+def _print_preview_row(preview_data: dict[str, Any]) -> None:
+    """Print one preview table row plus truncated subject details."""
+    subjects = preview_data["subjects"]
+    first = subjects[0][:40] if subjects else ""
+    click.echo(
+        f"  {preview_data['date']:<12} {preview_data['commit_count']:>8} {preview_data['files_affected']:>8}  {first}"
+    )
+    for subject in subjects[1:3]:
+        click.echo(f"  {'':12} {'':8} {'':8}  {subject[:40]}")
+    if len(subjects) > 3:
+        click.echo(f"  {'':12} {'':8} {'':8}  ... and {len(subjects) - 3} more")
 
 
 @click.command()
@@ -83,38 +198,17 @@ def snapshot(
     time_window_end: str | None = None,
 ) -> None:
     """Create a new repo with distilled daily commits (read-tree based)."""
-    from repogerbil.core.git import get_commits_for_path
     from repogerbil.core.snapshot import create_snapshot
 
-    if commit_time and (time_window_start or time_window_end):
-        raise click.UsageError(
-            "--commit-time and --time-window-start/--time-window-end are mutually exclusive"
-        )
-    if (time_window_start is None) != (time_window_end is None):
-        raise click.UsageError("--time-window-start and --time-window-end must both be provided")
-
+    _validate_snapshot_timing(commit_time, time_window_start, time_window_end)
     path = Path(repo_path)
     dest = Path(dest_path)
     settings = load_settings(repo=path.name)
     cad = cadence or settings.cadence
 
-    # Collect commits from primary source + all extra sources
-    if source_subdir:
-        # Path-scoped commit collection for monorepo sources
-        all_commits = (
-            get_commits_for_path(  # pragma: no cover — integration test needed for monorepo extraction
-                path, source_subdir, all_branches=all_branches
-            )
-        )
-    else:
-        branch = None if all_branches else source_branch
-        all_commits = _collect_commits(path, since, branch=branch)
-
-    for extra in extra_sources:
-        all_commits.extend(_collect_commits(Path(extra), since))
-    # Sort by date for proper chronological grouping
-    all_commits.sort(key=lambda c: c.date)
-
+    all_commits = _collect_snapshot_commits(
+        path, since, source_branch, extra_sources, all_branches, source_subdir
+    )
     if not all_commits:
         click.echo("No commits found")
         return
@@ -124,18 +218,7 @@ def snapshot(
 
     changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
 
-    llm_generator = None
-    if llm_refine:
-        from repogerbil.llm.client import HTTPOllamaClient
-        from repogerbil.llm.generator import MessageGenerator
-
-        client = HTTPOllamaClient(base_url=settings.llm_ollama_url)
-        llm_generator = MessageGenerator(
-            client=client,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            timeout=settings.llm_timeout_seconds,
-        )
+    llm_generator = _build_llm_generator(settings) if llm_refine else None
 
     result = create_snapshot(
         source_path=path,
@@ -154,8 +237,7 @@ def snapshot(
         time_window_start=time_window_start,
         time_window_end=time_window_end,
     )
-    dedup_msg = f" ({result.groups_skipped} duplicate tree states removed)" if result.groups_skipped else ""
-    click.echo(f"Snapshot created at {result.dest_path} ({result.commits_created} commits){dedup_msg}")
+    _print_snapshot_result(result)
 
 
 @click.command(name="multi-snapshot")
@@ -191,48 +273,16 @@ def multi_snapshot(
 
     from repogerbil.core.multi_snapshot import create_multi_snapshot
 
-    # Parse repo arguments (NAME:PATH format)
-    source_repos: dict[str, Path] = {}
-    for repo_spec in repos:
-        if ":" not in repo_spec:
-            click.echo(f"Error: --repo must be NAME:PATH format, got: {repo_spec}", err=True)
-            raise SystemExit(1)
-        name, path_str = repo_spec.split(":", 1)
-        source_repos[name] = Path(path_str)
-
-    if not source_repos:
-        click.echo("Error: at least one --repo is required", err=True)
-        raise SystemExit(1)
-
+    source_repos = _parse_repo_specs(repos)
     since_date = date_type.fromisoformat(since) if since else None
     cl_dir = Path(changelog_dir) if changelog_dir else None
     settings = load_settings()
 
     if dry_run:
-        from repogerbil.core.multi_snapshot import _collect_all_active_dates
-
-        active_dates = _collect_all_active_dates(source_repos)
-        if since_date:
-            active_dates = [d for d in active_dates if d >= since_date]
-        click.echo(f"Would create {len(active_dates)} daily commits from {len(source_repos)} repos")
-        for d in active_dates[:10]:
-            click.echo(f"  {d.isoformat()}")
-        if len(active_dates) > 10:
-            click.echo(f"  ... and {len(active_dates) - 10} more")
+        _preview_multi_snapshot(source_repos, since_date)
         return
 
-    llm_generator = None
-    if llm_refine:
-        from repogerbil.llm.client import HTTPOllamaClient
-        from repogerbil.llm.generator import MessageGenerator
-
-        client = HTTPOllamaClient(base_url=settings.llm_ollama_url)
-        llm_generator = MessageGenerator(
-            client=client,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            timeout=settings.llm_timeout_seconds,
-        )
+    llm_generator = _build_llm_generator(settings) if llm_refine else None
 
     result = create_multi_snapshot(
         source_repos=source_repos,
@@ -309,12 +359,6 @@ def preview(
     click.echo(f"  {'─' * 12} {'─' * 8} {'─' * 8}  {'─' * 40}")
 
     for p in previews:
-        subjects = p["subjects"]
-        first = subjects[0][:40] if subjects else ""
-        click.echo(f"  {p['date']:<12} {p['commit_count']:>8} {p['files_affected']:>8}  {first}")
-        for s in subjects[1:3]:
-            click.echo(f"  {'':12} {'':8} {'':8}  {s[:40]}")
-        if len(subjects) > 3:
-            click.echo(f"  {'':12} {'':8} {'':8}  ... and {len(subjects) - 3} more")
+        _print_preview_row(p)
 
     click.echo(f"\n  Total: {total_commits} commits → {len(previews)} daily commits")

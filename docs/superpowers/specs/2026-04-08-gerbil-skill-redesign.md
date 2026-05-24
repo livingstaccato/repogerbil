@@ -1,5 +1,7 @@
 # /gerbil Skill Redesign
 
+> Historical design note. This file records the original skill redesign proposal and may describe the CLI and config surface as it existed before later commands were added. The current user-facing references are `plugins/repogerbil/skills/gerbil/SKILL.md`, `src/repogerbil/assistant_plugins/repogerbil/skills/gerbil/SKILL.md`, and `gerbil --help`.
+
 ## Context
 
 The `/gerbil` skill currently exposes 7 of 14 CLI commands and lacks config-aware behavior. It doesn't know about `.repogerbil.toml`, can't auto-detect `changelog_dir`, and misses powerful features like backfill, enrich, preview, snapshot, and vectordb search.

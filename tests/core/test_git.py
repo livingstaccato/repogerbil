@@ -500,6 +500,37 @@ class TestGetCommitsForPath:
 
 
 class TestDeduplication:
+    def test_get_commits_for_range_ignores_malformed_lines(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from repogerbil.core.git import get_commits_for_range
+        import repogerbil.core.git._trees as trees
+
+        def fake_run_git(repo_path: Path, *args: str) -> str:
+            return "malformed\n" + "a" * 40 + "\t2026-04-07\t123\tfeat: valid\n"
+
+        monkeypatch.setattr(trees, "_run_git", fake_run_git)
+
+        commits = get_commits_for_range(tmp_path, "old", "new")
+
+        assert len(commits) == 1
+        assert commits[0].subject == "feat: valid"
+
+    def test_attach_commit_files_from_range_ignores_lines_before_hash(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import repogerbil.core.git._trees as trees
+
+        def fake_run_git(repo_path: Path, *args: str) -> str:
+            return "orphan.py\n" + "a" * 40 + "\ntracked.py\n"
+
+        monkeypatch.setattr(trees, "_run_git", fake_run_git)
+        commit = CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: valid", timestamp=123)
+
+        [attached] = trees._attach_commit_files_from_range(tmp_path, [commit], "old", "new")
+
+        assert attached.files == ["tracked.py"]
+
     def test_resolve_commit_trees(self, monorepo: Path) -> None:
         """resolve_commit_trees maps commit hashes to tree SHAs."""
         from repogerbil.core.git import resolve_commit_trees

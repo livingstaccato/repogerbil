@@ -4,6 +4,8 @@
 **Date:** 2026-04-12
 **Related:** `docs/VECTOR-DB-DESIGN.md`, `docs/VOCABULARY.md`, `src/repogerbil/core/snapshot.py`
 
+> Historical design note. This file records the April 2026 design exploration and is not the current user-facing reference. The implemented default Ollama model is configured in `Settings.llm_model` (`qwen3-coder-next:q8_0` at the time this note was updated), and the current CLI/docs are authoritative.
+
 ---
 
 ## Context

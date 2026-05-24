@@ -32,9 +32,8 @@ def cli() -> None:
 
 def main() -> None:
     """Entry point with error handling."""
+    debug = "--debug" in sys.argv
     try:
-        # Check for --debug flag anywhere in args
-        debug = "--debug" in sys.argv
         if debug:
             sys.argv.remove("--debug")
 
@@ -44,7 +43,7 @@ def main() -> None:
         console.print(f"[bold red]Error:[/] {e}")
         sys.exit(1)
     except Exception as e:
-        if "--debug" in sys.argv:  # pragma: no cover — --debug is removed before cli() runs
+        if debug:  # pragma: no cover — debug path is exercised manually
             raise
         console = Console(stderr=True)
         console.print(f"[bold red]Unexpected Error:[/] {str(e) or type(e).__name__}")
@@ -146,11 +145,19 @@ from repogerbil.cli.commands.verify_cmds import _report_verification as _report_
 
 # Register optional vectordb commands
 try:
-    from repogerbil.cli.commands.vectordb_cmds import index, related, search  # pragma: no cover
+    from repogerbil.cli.commands.vectordb_cmds import (
+        impact,
+        index,
+        related,
+        search,
+        similar,
+    )  # pragma: no cover
 
     cli.add_command(index)  # pragma: no cover
     cli.add_command(search)  # pragma: no cover
     cli.add_command(related)  # pragma: no cover
+    cli.add_command(similar)  # pragma: no cover
+    cli.add_command(impact)  # pragma: no cover
 except ImportError:  # pragma: no cover
     pass
 
@@ -238,5 +245,5 @@ cli.add_command(backfill)
 cli.add_command(probe)
 
 
-if __name__ == "__main__":
-    cli()
+if __name__ == "__main__":  # pragma: no cover
+    main()

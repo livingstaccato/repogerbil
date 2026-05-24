@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git, get_commits_for_date, parse_shortstat
 
 
@@ -90,11 +91,28 @@ def _get_file_stats(
     if not files:  # pragma: no cover — caller checks before calling
         return {"files_changed": 0, "insertions": 0, "deletions": 0}
 
-    cmd_args = ["diff", "--shortstat", f"{first_hash}..{last_hash}", "--", *sorted(files)]
-    stat_line = _run_git(repo_path, *cmd_args, timeout=30).strip()
+    stat_line = _run_file_shortstat(repo_path, first_hash, last_hash, files).strip()
     if not stat_line:
         return {"files_changed": 0, "insertions": 0, "deletions": 0}
     return parse_shortstat(stat_line)
+
+
+def _run_file_shortstat(
+    repo_path: str | Path,
+    first_hash: str,
+    last_hash: str,
+    files: set[str],
+) -> str:
+    """Run inclusive shortstat for file-filtered commit range."""
+    span = f"{first_hash}^..{last_hash}"
+    target = first_hash if first_hash == last_hash else last_hash
+    file_args = ["--", *sorted(files)]
+    try:
+        return _run_git(repo_path, "diff", "--shortstat", span, *file_args, timeout=30)
+    except GitCommandError:
+        return _run_git(
+            repo_path, "show", "--shortstat", "--format=", "--root", target, *file_args, timeout=30
+        )
 
 
 def _find_importers(  # pragma: no cover — grep-based, environment-dependent

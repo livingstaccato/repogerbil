@@ -64,6 +64,7 @@ def _default_prefix_map() -> dict[str, str]:
         "rename": "decouple",
         "config": "baseline",
         "release": "baseline",
+        "scaffold": "scaffold",
     }
 
 

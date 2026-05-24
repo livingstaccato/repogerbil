@@ -38,6 +38,7 @@ def _default_categories() -> dict[str, CategoryDefinition]:
         "docs": CategoryDefinition(label="docs", conventional="docs"),
         "chore": CategoryDefinition(label="chore", conventional="chore"),
         # ── Semantic categories ────────────────────────────────────────────
+        "scaffold": CategoryDefinition(label="feat", conventional="feat", verb="Scaffold"),
         "instantiate": CategoryDefinition(label="feat", conventional="feat", verb="Add"),
         "interface": CategoryDefinition(label="feat", conventional="feat", verb="Wire"),
         "remediate": CategoryDefinition(label="fix", conventional="fix", verb="Fix"),
@@ -78,6 +79,7 @@ def _default_prefix_map() -> dict[str, str]:
         "rename": "decouple",
         "config": "baseline",
         "release": "baseline",
+        "scaffold": "scaffold",
     }
 
 

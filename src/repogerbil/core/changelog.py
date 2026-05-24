@@ -55,9 +55,9 @@ def generate_analyzed(
     settings: Settings,
 ) -> dict[str, Any]:
     """Generate a complete changelog using heuristic analysis."""
-    auto_bulk, commits = _apply_file_rules(commits, settings.file_rules)
-    groups, review = _group_commits(commits, settings)
-    changes = _build_changes(groups, settings)
+    auto_bulk, commits, forced_categories = _apply_file_rules(commits, settings.file_rules)
+    groups, review = _group_commits(commits, settings, forced_categories)
+    changes = _build_changes(groups, settings, forced_categories)
 
     result: dict[str, Any] = {
         "date": date_str,
@@ -241,6 +241,7 @@ def _stats_dict(stats: DiffStats, commit_count: int) -> dict[str, int]:
 def _group_commits(
     commits: list[CommitInfo],
     settings: Settings,
+    forced_categories: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[CommitInfo]], list[str]]:
     """Group commits by category. Returns (groups, review_subjects)."""
     groups: dict[str, list[CommitInfo]] = {}
@@ -253,7 +254,7 @@ def _group_commits(
             auto_breaking=settings.auto_breaking,
             settings=settings,
         )
-        key = result.category or "_unclassified"
+        key = (forced_categories or {}).get(commit.hash) or result.category or "_unclassified"
         groups.setdefault(key, []).append(commit)
         if result.needs_review:
             review.append(commit.subject)
@@ -269,7 +270,11 @@ def _strip_prefix(subject: str) -> str:
     return m.string[m.end() :] if m else subject
 
 
-def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> list[dict[str, Any]]:
+def _build_changes(
+    groups: dict[str, list[CommitInfo]],
+    settings: Settings,
+    forced_categories: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Build the changes list from grouped commits."""
     changes: list[dict[str, Any]] = []
     # Use categories from config if available, otherwise fallback to default order
@@ -296,7 +301,9 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
             section_cat = cat
             section_sev = classify_commit(group[0].subject, body=group[0].body, settings=settings).severity
 
-        points = [_commit_to_point(c, settings) for c in group]
+        points = [
+            _commit_to_point(c, settings, forced_category=(forced_categories or {}).get(c.hash)) for c in group
+        ]
 
         section_files = _collect_section_files(group)
 
@@ -313,11 +320,15 @@ def _build_changes(groups: dict[str, list[CommitInfo]], settings: Settings) -> l
     return changes
 
 
-def _commit_to_point(commit: CommitInfo, settings: Settings) -> dict[str, Any]:
+def _commit_to_point(
+    commit: CommitInfo,
+    settings: Settings,
+    forced_category: str | None = None,
+) -> dict[str, Any]:
     result = classify_commit(commit.subject, body=commit.body, settings=settings)
     point: dict[str, Any] = {
         "text": commit.subject,
-        "category": result.category,
+        "category": forced_category or result.category,
         "severity": result.severity,
         "files": commit.files,
     }
@@ -397,13 +408,14 @@ def _generate_summary(stats: DiffStats, groups: dict[str, list[CommitInfo]], set
 def _apply_file_rules(
     commits: list[CommitInfo],
     file_rules: list[FileRule],
-) -> tuple[list[dict[str, Any]], list[CommitInfo]]:
+) -> tuple[list[dict[str, Any]], list[CommitInfo], dict[str, str]]:
     """Apply file rules to commits, returning (bulk_entries, modified_commits)."""
     if not file_rules:
-        return [], commits
+        return [], commits, {}
 
     all_bulk: list[dict[str, Any]] = []
     modified: list[CommitInfo] = []
+    forced_by_commit: dict[str, str] = {}
 
     for commit in commits:
         if not commit.files:
@@ -412,6 +424,14 @@ def _apply_file_rules(
         result = classify_files(commit.files, file_rules)
         modified.append(replace(commit, files=result.meaningful))
         all_bulk.extend(result.bulk_entries)
+        if result.forced_categories:
+            cat_counts: dict[str, int] = {}
+            for category in result.forced_categories.values():
+                cat_counts[category] = cat_counts.get(category, 0) + 1
+            forced_by_commit[commit.hash] = min(
+                (cat for cat, count in cat_counts.items() if count == max(cat_counts.values())),
+                key=str,
+            )
 
     # Merge bulk entries by category+reason
     merged: dict[tuple[str, str], int] = {}
@@ -423,7 +443,7 @@ def _apply_file_rules(
         {"category": cat, "files": count, "reason": reason} for (cat, reason), count in sorted(merged.items())
     ]
 
-    return bulk_list, modified
+    return bulk_list, modified, forced_by_commit
 
 
 def _prompt_instructions(repo: str, date_str: str, stats: DiffStats, commit_count: int) -> str:
@@ -455,7 +475,7 @@ changes:
         files: [path/to/file]
 ```
 
-Categories: instantiate, remediate, decouple, deprecate, interface, specify, qualify, margin, harden, streamline, baseline
+Categories: scaffold, instantiate, remediate, decouple, deprecate, interface, specify, qualify, margin, harden, streamline, baseline
 Severities: architectural, behavioral, internal, errata
 
 Group related changes into sections. Write real summaries based on the diffs.

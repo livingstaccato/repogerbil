@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+import sqlite3
+import time
+from typing import Any, cast
 
 from repogerbil.core.embeddings import Embedder
 
@@ -17,11 +19,15 @@ class VectorStore:
     def __init__(self, db_path: str | Path, embedder: Embedder) -> None:
         try:
             import chromadb
+            from filelock import FileLock
         except ImportError as e:  # pragma: no cover
-            msg = "chromadb not installed. Run: pip install repogerbil[vectordb]"
+            msg = "vectordb deps not installed. Run: pip install repogerbil[vectordb]"
             raise ImportError(msg) from e  # pragma: no cover
 
-        self._client = chromadb.PersistentClient(path=str(db_path))
+        path = Path(db_path)
+        path.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(path / ".init.lock"))
+        self._client = self._create_client_with_retry(chromadb, lock, path)
         self._embedder = embedder
         self._changelogs = self._client.get_or_create_collection(
             "changelogs",
@@ -39,6 +45,21 @@ class VectorStore:
             "diffs",
             metadata={"hnsw:space": "cosine"},
         )
+
+    def _create_client_with_retry(self, chromadb: Any, lock: Any, path: Path) -> Any:
+        for attempt in range(3):
+            try:
+                with lock.acquire(timeout=15):
+                    return chromadb.PersistentClient(path=str(path))
+            except sqlite3.OperationalError as exc:
+                if attempt == 2 or "already exists" not in str(exc).lower():
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+            except RuntimeError as exc:
+                if attempt == 2 or "already exists" not in str(exc).lower():
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        raise RuntimeError("Failed to initialize vector store")  # pragma: no cover
 
     def upsert_changelog(
         self,
@@ -62,7 +83,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._changelogs.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=cast(Any, [embedding]),
             documents=[text],
             metadatas=[meta],
         )
@@ -88,7 +109,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._changes.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=cast(Any, [embedding]),
             documents=[text],
             metadatas=[meta],
         )
@@ -103,11 +124,11 @@ class VectorStore:
         embedding = self._embedder.embed(query)
         where = {"repo": repo} if repo else None
         results = self._changelogs.query(
-            query_embeddings=[embedding],
+            query_embeddings=cast(Any, [embedding]),
             n_results=n,
-            where=where,
+            where=cast(Any, where),
         )
-        return _format_results(results)
+        return _format_results(cast(dict[str, Any], results))
 
     def search_changes(
         self,
@@ -118,10 +139,10 @@ class VectorStore:
         """Search change sections by semantic similarity."""
         embedding = self._embedder.embed(query)
         results = self._changes.query(
-            query_embeddings=[embedding],
+            query_embeddings=cast(Any, [embedding]),
             n_results=n * 3 if repo else n,
         )
-        formatted = _format_results(results)
+        formatted = _format_results(cast(dict[str, Any], results))
         if repo:
             formatted = [r for r in formatted if r.get("metadata", {}).get("repo") == repo][:n]
         return formatted
@@ -138,10 +159,10 @@ class VectorStore:
             return []
         embedding = embeddings[0]
         results = self._changelogs.query(
-            query_embeddings=[embedding],
+            query_embeddings=cast(Any, [embedding]),
             n_results=n + 1,  # +1 to exclude self
         )
-        formatted = _format_results(results)
+        formatted = _format_results(cast(dict[str, Any], results))
         return [r for r in formatted if r["id"] != changelog_id][:n]
 
     def upsert_filepaths(
@@ -160,7 +181,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._filepaths.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=cast(Any, [embedding]),
             documents=[text],
             metadatas=[meta],
         )
@@ -183,7 +204,7 @@ class VectorStore:
         meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool))}
         self._diffs.upsert(
             ids=[doc_id],
-            embeddings=[embedding],
+            embeddings=cast(Any, [embedding]),
             documents=[diff_text[:5000]],  # cap stored text
             metadatas=[meta],
         )
@@ -196,10 +217,10 @@ class VectorStore:
         """Search by file path similarity."""
         embedding = self._embedder.embed(query)
         results = self._filepaths.query(
-            query_embeddings=[embedding],
+            query_embeddings=cast(Any, [embedding]),
             n_results=n,
         )
-        return _format_results(results)
+        return _format_results(cast(dict[str, Any], results))
 
     def search_diffs(
         self,
@@ -209,10 +230,10 @@ class VectorStore:
         """Search diff content by semantic similarity."""
         embedding = self._embedder.embed(query)
         results = self._diffs.query(
-            query_embeddings=[embedding],
+            query_embeddings=cast(Any, [embedding]),
             n_results=n,
         )
-        return _format_results(results)
+        return _format_results(cast(dict[str, Any], results))
 
     @property
     def changelog_count(self) -> int:

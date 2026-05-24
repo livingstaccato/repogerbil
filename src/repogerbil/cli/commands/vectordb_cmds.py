@@ -79,3 +79,42 @@ def related(repo: str, date: str, top: int, db_path: str | None) -> None:
     for r in results:
         meta = r.get("metadata", {})
         click.echo(f"  {r['id']}: {meta.get('title', '?')}")
+
+
+@click.command()
+@click.argument("filepaths", nargs=-1, required=True)
+@click.option("--top", default=5, help="Number of results")
+@click.option("--db-path", default=None, help="Vector DB path")
+def similar(filepaths: tuple[str, ...], top: int, db_path: str | None) -> None:
+    """Find changelogs that touched similar file paths."""
+    from repogerbil.core.search import find_similar_file_changes
+
+    store = _get_store(db_path)
+    results = find_similar_file_changes(store, list(filepaths), n=top)  # type: ignore[arg-type]
+    if not results:
+        click.echo("No similar file-change history found.")
+        return
+    for r in results:
+        meta = r.get("metadata", {})
+        click.echo(f"  {r['id']}: {meta.get('title', '?')} (distance: {r['distance']:.3f})")
+
+
+@click.command()
+@click.argument("query")
+@click.option("--source", type=click.Choice(["filepaths", "diffs"]), default="filepaths")
+@click.option("--top", default=10, help="Number of results")
+@click.option("--db-path", default=None, help="Vector DB path")
+def impact(query: str, source: str, top: int, db_path: str | None) -> None:
+    """Search path/diff history for likely downstream impact context."""
+    from repogerbil.core.search import search_diffs, search_filepaths
+
+    store = _get_store(db_path)
+    results = search_diffs(store, query, n=top) if source == "diffs" else search_filepaths(store, query, n=top)  # type: ignore[arg-type]
+
+    if not results:
+        click.echo("No impact context found.")
+        return
+    for r in results:
+        meta = r.get("metadata", {})
+        title = meta.get("title", "?")
+        click.echo(f"  {r['id']}: {title} (distance: {r['distance']:.3f})")

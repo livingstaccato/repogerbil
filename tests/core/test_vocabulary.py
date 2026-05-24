@@ -74,6 +74,9 @@ class TestPrefixToCategory:
     def test_fix_maps_to_remediate(self) -> None:
         assert PREFIX_TO_CATEGORY["fix"] == "remediate"
 
+    def test_scaffold_maps_to_scaffold(self) -> None:
+        assert PREFIX_TO_CATEGORY["scaffold"] == "scaffold"
+
     def test_all_prefixes_map_to_valid_categories(self) -> None:
         for prefix, cat in PREFIX_TO_CATEGORY.items():
             assert cat in CATEGORIES, f"{prefix} maps to unknown category {cat}"

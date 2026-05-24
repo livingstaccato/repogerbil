@@ -64,7 +64,11 @@ def verify_changelog(
     return VerifyResult(
         repo=repo,
         date=date_str,
-        stats_match=_within_tolerance(stats["files_changed"], git_stats.files_changed, tolerance),
+        stats_match=(
+            _within_tolerance(stats["files_changed"], git_stats.files_changed, tolerance)
+            and _within_tolerance(stats.get("insertions", 0), git_stats.insertions, tolerance)
+            and _within_tolerance(stats.get("deletions", 0), git_stats.deletions, tolerance)
+        ),
         reported_files=stats["files_changed"],
         actual_files=git_stats.files_changed,
         accounted_files=accounted,

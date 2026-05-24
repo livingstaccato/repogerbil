@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> Historical implementation plan. This file preserves the original April 2026 task plan and may name files/models from that iteration. The current user-facing docs and `Settings.llm_model` are authoritative for the implemented CLI.
+
 **Goal:** Add `gerbil snapshot --llm-refine` flag that generates narrative commit messages using Gemma 4 via Ollama, grounded in the project's vocabulary and the actual files each group touched.
 
 **Architecture:** New `src/repogerbil/llm/` package provides schema, prompt, client, and generator layers. The generator is wired into `create_snapshot()` when `llm_refine=True`. A `FakeOllamaClient` enables full unit test coverage without a live Ollama. `HTTPOllamaClient` is coverage-carvedout (transport boundary).

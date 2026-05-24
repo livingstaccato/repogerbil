@@ -102,6 +102,22 @@ class TestGenerateAnalyzed:
         result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
         assert "bulk" not in result
 
+    def test_classify_file_rules_force_commit_category(self) -> None:
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="chore: adjust test scaffold",
+                files=["tests/test_core.py", "src/main.py"],
+            ),
+        ]
+        settings = Settings(
+            file_rules=[FileRule(pattern="tests/**", action="classify", category="qualify")],
+        )
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        assert result["changes"][0]["category"] == "qualify"
+        assert result["changes"][0]["points"][0]["category"] == "qualify"
+
     def test_multi_commit_title(self) -> None:
         commits = _make_commits(
             "feat: add planet harvest pipeline",

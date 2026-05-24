@@ -88,6 +88,34 @@ class TestHelp:
         assert "gerbil" in result.output
 
 
+class TestRealign:
+    def test_reports_realign_result(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        jsonl = tmp_path / "repo.summaries.jsonl"
+
+        def fake_realign_jsonl(repo_path: Path, jsonl_path: Path, dry_run: bool) -> SimpleNamespace:
+            assert repo_path == repo
+            assert jsonl_path == jsonl
+            assert dry_run is True
+            return SimpleNamespace(
+                jsonl_path=str(jsonl),
+                total_records=3,
+                already_verified=1,
+                realigned=1,
+                exact_matches=1,
+                unalignable=1,
+            )
+
+        monkeypatch.setattr("repogerbil.cli.commands.realign_cmd.realign_jsonl", fake_realign_jsonl)
+
+        result = CliRunner().invoke(cli, ["realign", str(repo), str(jsonl), "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "would realign: 1 (exact match: 1)" in result.output
+        assert "unalignable: 1" in result.output
+
+
 class TestStatus:
     def test_with_dates(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
@@ -331,6 +359,60 @@ class TestVerify:
         _generate_changelog(runner, repo, out)
         result = runner.invoke(cli, ["verify", str(out / repo.name), str(repo), "--tolerance", "50"])
         assert result.exit_code == 0
+
+    def test_run_verification_checks_insertions_and_deletions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from repogerbil.cli.commands import verify_cmds as verify_mod
+
+        changelog_dir = tmp_path / "out" / "repo"
+        changelog_dir.mkdir(parents=True)
+        yaml_file = changelog_dir / "2026-04-07-repo-changelog.yaml"
+        yaml_file.write_text(
+            yaml.dump(
+                {
+                    "date": "2026-04-07",
+                    "repo": "repo",
+                    "stats": {"files_changed": 10, "insertions": 100, "deletions": 1},
+                    "bulk": [{"files": 10}],
+                    "changes": [],
+                }
+            )
+        )
+
+        monkeypatch.setattr(
+            verify_mod,
+            "resolve_provenance",
+            lambda *args, **kwargs: SimpleNamespace(
+                commits=[SimpleNamespace(hash="a"), SimpleNamespace(hash="b")],
+                stats=SimpleNamespace(files_changed=10, insertions=10, deletions=10),
+            ),
+        )
+        stat_issues, coverage_issues, checked = verify_mod._run_verification(
+            changelog_dir,
+            tmp_path,
+            "repo",
+            since=None,
+            tol=5,
+        )
+
+        assert checked == 1
+        assert coverage_issues == []
+        assert len(stat_issues) == 1
+        assert "insertions" in stat_issues[0]
+        assert "deletions" in stat_issues[0]
+
+    def test_collect_stat_mismatches_handles_non_mapping_stats(self) -> None:
+        from repogerbil.cli.commands.verify_cmds import _collect_stat_mismatches
+
+        mismatches = _collect_stat_mismatches(
+            {"stats": "invalid"},
+            actual_files=1,
+            actual_insertions=1,
+            actual_deletions=1,
+            tolerance=0,
+        )
+        assert mismatches
 
     def test_verify_stats_mismatch(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
@@ -779,3 +861,18 @@ class TestMainEntryPoint:
 
         assert call_count[0] == 1
         assert "--debug" not in sys.argv
+
+    def test_debug_flag_reraises_unexpected_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sys
+
+        from repogerbil.cli.main import main
+
+        monkeypatch.setattr(sys, "argv", ["gerbil", "--debug"])
+
+        def _raise() -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            main()

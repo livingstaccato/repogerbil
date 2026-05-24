@@ -6,7 +6,10 @@
 from pathlib import Path
 import subprocess
 
-from repogerbil.core.diff import get_diff_content, parse_diff
+import pytest
+
+from repogerbil.core.diff import _run_range_diff, get_diff_content, parse_diff
+from repogerbil.core.errors import GitCommandError
 
 
 class TestParseDiff:
@@ -104,6 +107,21 @@ class TestGetDiffContent:
         result = get_diff_content(repo, first, last)
         assert "b.py" in result
 
+    def test_single_commit_range_includes_changes(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
+        (repo / "a.py").write_text("x\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        result = get_diff_content(repo, sha, sha)
+        assert "a.py" in result
+
 
 class TestParseDiffEdgeCases:
     def test_empty_diff_for_file(self) -> None:
@@ -111,3 +129,21 @@ class TestParseDiffEdgeCases:
         result = parse_diff(raw)
         assert "empty.py" not in result
         assert "real.py" in result
+
+
+class TestRunRangeDiff:
+    def test_falls_back_to_root_on_missing_parent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from repogerbil.core import diff as diff_mod
+
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            calls.append(args)
+            if "^.." in args[1]:
+                raise GitCommandError("no parent", returncode=128)
+            return "diff --git a/a.py b/a.py\n+line\n"
+
+        monkeypatch.setattr(diff_mod, "_run_git", fake_run_git)
+        out = _run_range_diff(Path(), "a" * 40, "a" * 40)
+        assert "diff --git" in out
+        assert "--root" in calls[1]

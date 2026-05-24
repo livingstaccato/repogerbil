@@ -21,6 +21,7 @@ LLM summary was generated.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as date_type, timedelta
 import json
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,14 @@ def count_jsonl_entries(jsonl_path: Path) -> int:
         return 0
     with jsonl_path.open("r", encoding="utf-8") as fh:
         return sum(1 for line in fh if line.strip())
+
+
+def _day_after(iso_date: str) -> str:
+    """Return the next day in ISO format, or input unchanged if invalid."""
+    try:
+        return (date_type.fromisoformat(iso_date) + timedelta(days=1)).isoformat()
+    except ValueError:
+        return iso_date
 
 
 def _scan_head_commits(
@@ -207,17 +216,16 @@ def append_new_commits(
         dry_run: When ``True``, report what would be appended without writing.
 
     Default behavior when none of ``since_ref``/``since_date``/``full_scan``
-    are set: the latest date found in ``jsonl_path`` is used as a git
-    ``--since=`` cutoff. This avoids re-recording scrub-era commits in
-    repositories whose history was rewritten (where local hashes don't
-    match the recorded hashes).
+    are set: one day after the latest date found in ``jsonl_path`` is used as
+    a git ``--since=`` cutoff. This avoids re-recording rewritten-history
+    commits that share the same date as previously recorded entries.
     """
     hashes, latest_date = _read_recorded(jsonl_path)
     existing = len(hashes)
 
     effective_date = since_date
     if effective_date is None and since_ref is None and not full_scan:
-        effective_date = latest_date
+        effective_date = _day_after(latest_date) if latest_date else None
 
     commits = _scan_head_commits(
         repo_path,

@@ -46,12 +46,25 @@ claude --plugin-dir ./plugins
 Use the bundled installer when `repogerbil` is installed via `uv tool install` or run with `uvx`:
 
 ```bash
-uvx repogerbil plugin install --target codex
+uvx --from repogerbil gerbil plugin install --target codex
 ```
 
 That installs:
-- `~/plugins/repogerbil/`
+- `~/.codex/plugins/repogerbil/`
 - `~/.agents/plugins/marketplace.json`
+
+For a home-like root other than the default Codex home, pass `--root`:
+
+```bash
+gerbil plugin install --target codex --root /path/to/root
+```
+
+The Claude installer writes relative to the current working directory by default:
+
+```bash
+gerbil plugin install --target claude
+# writes ./plugins/repogerbil/ and ./plugins/.claude-plugin/marketplace.json
+```
 
 ### Notes
 

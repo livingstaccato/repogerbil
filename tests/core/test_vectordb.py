@@ -3,7 +3,10 @@
 
 """Tests for vector database wrapper."""
 
+import multiprocessing
 from pathlib import Path
+import sqlite3
+from typing import Any
 
 import pytest
 
@@ -13,6 +16,15 @@ from repogerbil.core.embeddings import SimpleHashEmbedder
 chromadb = pytest.importorskip("chromadb")
 
 from repogerbil.core.vectordb import VectorStore  # noqa: E402
+
+
+def _open_store_worker(db_path: str, q: Any) -> None:
+    try:
+        store = VectorStore(Path(db_path), SimpleHashEmbedder())
+        store.upsert_changelog("repo-x", "2026-04-07", "Title", "Summary")
+        q.put(("ok", str(store.changelog_count)))
+    except Exception as exc:  # pragma: no cover - defensive for child-process reporting
+        q.put(("err", f"{type(exc).__name__}: {exc}"))
 
 
 @pytest.fixture()
@@ -117,3 +129,133 @@ class TestUpsertDiff:
         assert store.diff_count == 1
         results = store.search_diffs("print hello", n=5)
         assert len(results) >= 1
+
+
+class TestConcurrentInitialization:
+    @pytest.mark.integration
+    def test_parallel_initialization_same_db_path(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "shared-db"
+        q: Any = multiprocessing.Queue()
+
+        p1 = multiprocessing.Process(target=_open_store_worker, args=(str(db_path), q))
+        p2 = multiprocessing.Process(target=_open_store_worker, args=(str(db_path), q))
+        p1.start()
+        p2.start()
+        p1.join(timeout=20)
+        p2.join(timeout=20)
+
+        if p1.is_alive():
+            p1.terminate()
+        if p2.is_alive():
+            p2.terminate()
+
+        assert p1.exitcode == 0
+        assert p2.exitcode == 0
+        results = [q.get(timeout=5), q.get(timeout=5)]
+        assert all(status == "ok" for status, _ in results)
+
+
+class TestVectorStoreInitRetry:
+    def test_retries_on_runtime_already_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        class DummyLock:
+            def acquire(self, timeout: int) -> object:
+                class _Ctx:
+                    def __enter__(self) -> None:
+                        return None
+
+                    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+                        return None
+
+                assert timeout == 15
+                return _Ctx()
+
+        class DummyChromadb:
+            attempts = 0
+
+            @classmethod
+            def PersistentClient(cls, *, path: str) -> object:
+                cls.attempts += 1
+                if cls.attempts == 1:
+                    raise RuntimeError("table collections already exists")
+                return {"path": path}
+
+        monkeypatch.setattr("repogerbil.core.vectordb.time.sleep", lambda _s: None)
+        store = object.__new__(VectorStore)
+        client = store._create_client_with_retry(DummyChromadb, DummyLock(), tmp_path / "db")
+        assert client == {"path": str(tmp_path / "db")}
+        assert DummyChromadb.attempts == 2
+
+    def test_retries_on_sqlite_already_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        class DummyLock:
+            def acquire(self, timeout: int) -> object:
+                class _Ctx:
+                    def __enter__(self) -> None:
+                        return None
+
+                    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+                        return None
+
+                assert timeout == 15
+                return _Ctx()
+
+        class DummyChromadb:
+            attempts = 0
+
+            @classmethod
+            def PersistentClient(cls, *, path: str) -> object:
+                cls.attempts += 1
+                if cls.attempts == 1:
+                    raise sqlite3.OperationalError("table collections already exists")
+                return {"path": path}
+
+        monkeypatch.setattr("repogerbil.core.vectordb.time.sleep", lambda _s: None)
+        store = object.__new__(VectorStore)
+        client = store._create_client_with_retry(DummyChromadb, DummyLock(), tmp_path / "db")
+        assert client == {"path": str(tmp_path / "db")}
+        assert DummyChromadb.attempts == 2
+
+    def test_raises_runtime_non_retryable(self, tmp_path: Path) -> None:
+        class DummyLock:
+            def acquire(self, timeout: int) -> object:
+                class _Ctx:
+                    def __enter__(self) -> None:
+                        return None
+
+                    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+                        return None
+
+                assert timeout == 15
+                return _Ctx()
+
+        class DummyChromadb:
+            @staticmethod
+            def PersistentClient(*, path: str) -> object:
+                _ = path
+                raise RuntimeError("disk full")
+
+        store = object.__new__(VectorStore)
+        with pytest.raises(RuntimeError, match="disk full"):
+            store._create_client_with_retry(DummyChromadb, DummyLock(), tmp_path / "db")
+
+    def test_raises_sqlite_non_retryable(self, tmp_path: Path) -> None:
+        class DummyLock:
+            def acquire(self, timeout: int) -> object:
+                class _Ctx:
+                    def __enter__(self) -> None:
+                        return None
+
+                    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+                        return None
+
+                assert timeout == 15
+                return _Ctx()
+
+        class DummyChromadb:
+            @staticmethod
+            def PersistentClient(*, path: str) -> object:
+                _ = path
+                raise sqlite3.OperationalError("database is locked")
+
+        store = object.__new__(VectorStore)
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            store._create_client_with_retry(DummyChromadb, DummyLock(), tmp_path / "db")

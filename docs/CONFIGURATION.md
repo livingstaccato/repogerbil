@@ -18,8 +18,8 @@ CLI flags and environment variables (`REPOGERBIL_*`) override the config file.
 ```toml
 # .repogerbil.toml
 
-# Commit grouping cadence for distill
-cadence = "daily"                    # hourly | daily | weekly
+# Commit grouping cadence for distill/snapshot
+cadence = "daily"                    # hourly | daily | weekly | gap:NNm | gap:NNh
 
 # How much of the commit message to capture
 message_depth = "subject"            # subject | refs | full
@@ -44,6 +44,13 @@ create_backup = true
 
 # Target branch name for distill output
 target_branch = "repogerbil-consolidated"
+
+# Ollama-backed snapshot message refinement
+llm_ollama_url = "http://localhost:11434"
+llm_model = "qwen3-coder-next:q8_0"
+llm_temperature = 0.0
+llm_timeout_seconds = 120.0
+llm_concurrency = 1
 
 # File rules — control how files are handled during --analyze
 [[file_rules]]

@@ -13,6 +13,7 @@ Use `uv` for local setup and execution.
 - `make type-check` runs strict `mypy` over `src` and `tests`.
 - `make test` runs `pytest` with branch coverage and a 100% coverage gate.
 - `make quality` runs the full local gate: lint, typing, security, complexity, dead-code, and tests.
+- `make act-dry` lists the CI workflow's jobs locally via [`act`](https://github.com/nektos/act) using `.actrc`; `make act-ci` runs the `quality` job end-to-end inside Docker (Python 3.13 only, single matrix slot, slow on first run).
 - `uv run gerbil --help` shows the CLI surface during development.
 
 ## Coding Style & Naming Conventions

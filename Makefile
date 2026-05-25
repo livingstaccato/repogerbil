@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: help install lint type-check test test-cov security complexity dead-code mutation mutation-ci max-loc plugin-sync plugin-sync-copy changelog-check approxidate-check quality check
+.PHONY: help install lint type-check test test-cov security complexity dead-code mutation mutation-ci max-loc plugin-sync plugin-sync-copy changelog-check approxidate-check quality check act-dry act-ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -58,3 +58,9 @@ approxidate-check: ## Guard against unpinned git --since=/--until= approxidate u
 quality: lint type-check security complexity dead-code max-loc plugin-sync changelog-check approxidate-check test ## Run all quality gates
 
 check: quality ## Alias for quality
+
+act-dry: ## List CI jobs without running them (validates workflow + .actrc)
+	env -u DOCKER_HOST act --list
+
+act-ci: ## Run the CI quality job locally via act (slow; pulls images on first run)
+	env -u DOCKER_HOST act -j quality --matrix python-version:3.13 --rm

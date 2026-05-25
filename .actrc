@@ -1,0 +1,30 @@
+# act configuration for repogerbil
+# https://github.com/nektos/act
+#
+# Run the CI workflow locally:
+#   make act-dry       # validate without running containers
+#   make act-ci        # run the quality job end-to-end
+#
+# Pattern borrowed from provide-io/octowright/.actrc.
+
+# Runner images — act-24.04 includes node in PATH (act-latest does not).
+-P ubuntu-latest=catthehacker/ubuntu:act-24.04
+-P ubuntu-24.04=catthehacker/ubuntu:act-24.04
+-P ubuntu-22.04=catthehacker/ubuntu:act-22.04
+
+# Apple Silicon: force amd64 emulation so amd64 images pull and run.
+--container-architecture linux/amd64
+
+# Colima compatibility: don't bind-mount the host daemon socket path.
+--container-daemon-socket -
+
+# Avoid non-loopback bind selection issues in some local environments.
+--artifact-server-addr 127.0.0.1
+--cache-server-addr 127.0.0.1
+--no-cache-server
+
+# Pull images if needed (first run; cached thereafter).
+--pull
+
+# Default workflow.
+--workflows .github/workflows/ci.yml

@@ -22,15 +22,13 @@ jobs:
     timeout-minutes: 180
     steps:
       # Checkout full history so mutmut can diff against the working tree.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      # Install uv (provides the python interpreter via uv sync).
-      - uses: astral-sh/setup-uv@v5
-
-      # Pin Python version.
-      - uses: actions/setup-python@v5
+      # Install uv and the pinned Python (uv manages its own interpreters,
+      # so we don't need actions/setup-python).
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: "3.13"
 
@@ -38,7 +36,7 @@ jobs:
       # mutmut 4.x stores its state in .mutmut-cache (SQLite); the legacy
       # `mutants/` directory was unused and dropped from the cache paths.
       - name: cache mutmut state
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .mutmut-cache
@@ -48,7 +46,7 @@ jobs:
 
       # Cache mypy and ruff caches for faster pre-mutmut sanity.
       - name: cache lint caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .mypy_cache
@@ -66,7 +64,7 @@ jobs:
       # Upload summary artifact regardless of pass/fail for inspection.
       - name: upload summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-summary
           path: |

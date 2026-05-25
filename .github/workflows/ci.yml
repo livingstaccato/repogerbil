@@ -16,14 +16,23 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
+      # act compat: act's `docker exec` doesn't inherit the image's PATH, so
+      # node (installed at /opt/acttoolcache/node/<ver>/x64/bin/node in
+      # catthehacker images) is invisible to JS actions' Main/Post hooks.
+      # Symlink it into /usr/local/bin (a default docker-exec PATH entry).
+      # Requires sudo since the runner user (UID 1001) can't write to
+      # /usr/local/bin — catthehacker images ship passwordless sudo.
+      # No-op on GitHub-hosted runners (env.ACT is unset).
+      - name: act compat — expose node to docker exec
+        if: ${{ env.ACT }}
+        run: sudo ln -sf "$(command -v node)" /usr/local/bin/node
+
       # Checkout source
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      # Install uv
-      - uses: astral-sh/setup-uv@v5
-
-      # Install Python
-      - uses: actions/setup-python@v5
+      # Install uv and the matrix Python (uv manages its own interpreters,
+      # so we don't need actions/setup-python).
+      - uses: astral-sh/setup-uv@v8
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -73,10 +82,12 @@ jobs:
       - name: pytest
         run: uv run pytest --cov-report=xml
 
-      # Upload coverage
+      # Upload coverage (skipped under act — coverage.xml is already on disk
+      # locally, and act's container PATH doesn't expose node to most
+      # actions/* JS bootstraps).
       - name: upload coverage
-        if: matrix.python-version == '3.13'
-        uses: actions/upload-artifact@v4
+        if: ${{ matrix.python-version == '3.13' && !env.ACT }}
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml

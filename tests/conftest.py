@@ -29,10 +29,55 @@ introduced after the migration completes.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+import os
 from pathlib import Path
 import subprocess
 
 import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_git_global_config(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Provide a sandboxed git global config for the whole test session.
+
+    Several tests (and the production snapshot pipeline they exercise) call
+    ``git commit-tree`` / ``git commit`` without setting per-repo identity
+    first. Modern git refuses to auto-detect ``user.email``/``user.name``,
+    so on CI runners or containers without a global identity these tests
+    fail with ``fatal: unable to auto-detect email address``.
+
+    We point git at a session-scoped ``GIT_CONFIG_GLOBAL`` file with a
+    test identity so:
+    - Tests run identically on developer machines, GitHub-hosted runners,
+      and act containers — no workflow-side ``git config --global`` needed.
+    - The developer's real ``~/.gitconfig`` is never touched (signing keys,
+      aliases, user identity all preserved).
+
+    Requires git >= 2.32 for ``GIT_CONFIG_GLOBAL`` support.
+    """
+    gitconfig_dir = tmp_path_factory.mktemp("git_global")
+    gitconfig_file = gitconfig_dir / ".gitconfig"
+    gitconfig_file.write_text(
+        "[user]\n"
+        "\temail = tests@repogerbil.test\n"
+        "\tname = repogerbil tests\n"
+        "[init]\n"
+        "\tdefaultBranch = main\n"
+        "[commit]\n"
+        "\tgpgsign = false\n",
+        encoding="utf-8",
+    )
+    previous = os.environ.get("GIT_CONFIG_GLOBAL")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(gitconfig_file)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GIT_CONFIG_GLOBAL", None)
+        else:
+            os.environ["GIT_CONFIG_GLOBAL"] = previous
 
 
 def _run_git(args: list[str], cwd: Path) -> None:

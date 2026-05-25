@@ -7,10 +7,16 @@
 #
 # Pattern borrowed from provide-io/octowright/.actrc.
 
-# Runner images — act-24.04 includes node in PATH (act-latest does not).
--P ubuntu-latest=catthehacker/ubuntu:act-24.04
--P ubuntu-24.04=catthehacker/ubuntu:act-24.04
--P ubuntu-22.04=catthehacker/ubuntu:act-22.04
+# Runner image. We use catthehacker/ubuntu:runner-24.04 (~1.4 GB) instead of
+# the smaller act-24.04 (~250 MB) because runner-XX.XX puts node in /usr/bin,
+# matching the GitHub-hosted runner layout. act-XX.XX installs node via nvm,
+# which raw `docker exec` calls from act do not source — so JS actions like
+# actions/upload-artifact@v7 and actions/setup-python@v5 fail with
+# "node: not found". One-time bigger pull buys byte-for-byte parity between
+# `make act-ci` and the real CI run.
+#
+# Only ubuntu-latest is mapped here — our workflow uses that label exclusively.
+-P ubuntu-latest=catthehacker/ubuntu:runner-24.04
 
 # Apple Silicon: force amd64 emulation so amd64 images pull and run.
 --container-architecture linux/amd64

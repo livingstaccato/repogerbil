@@ -75,6 +75,13 @@ gerbil snapshot /path/to/source /path/to/dest \
   --time-window-end 00:00 \
   --timezone America/Los_Angeles
 
+# Merge multiple repos into one ecosystem-labeled distilled snapshot
+gerbil multi-snapshot /path/to/dest \
+  --repo api:/path/to/api \
+  --repo web:/path/to/web \
+  --ecosystem-label my-platform \
+  --timezone America/Los_Angeles
+
 # Index changelogs for semantic search (requires vectordb extra)
 gerbil index /path/to/changelogs
 
@@ -95,6 +102,16 @@ gerbil impact "retry backoff" --source diffs --top 5
 gerbil catch-up /path/to/repo /path/to/repo.summaries.jsonl
 gerbil realign /path/to/repo /path/to/repo.summaries.jsonl
 ```
+
+## Global Options
+
+`--verbose` is a group-level flag (no short form — `-v` is reserved for per-command use such as `preflight -v`). Pass it at the group level, before the subcommand, to enable INFO-level logging from `repogerbil.*` loggers:
+
+```bash
+gerbil --verbose snapshot /path/to/source /path/to/dest --cadence daily
+```
+
+Without `--verbose`, logging defaults to WARNING level.
 
 ## Commands
 

@@ -11,12 +11,26 @@ from unittest.mock import patch
 
 import pytest
 
+from repogerbil.core.errors import RepogerbilError
 from repogerbil.core.llm_runner import (
     LlmRunnerError,
     agent_dispatch_instructions,
     run_claude_cli,
     strip_fence_wrapper,
 )
+
+
+def test_llm_runner_error_is_repogerbil_error_subclass() -> None:
+    """LlmRunnerError must inherit from RepogerbilError so the top-level CLI
+    handler at ``cli/main.py`` formats it as a user-facing "Error:" line rather
+    than as an "Unexpected Error:" stack-trace candidate.
+    """
+    assert issubclass(LlmRunnerError, RepogerbilError)
+    # And instances should be catchable by the base type for the CLI handler.
+    try:
+        raise LlmRunnerError("boom")
+    except RepogerbilError as exc:
+        assert str(exc) == "boom"
 
 
 def test_strip_fence_wrapper_removes_outer_markdown_fence() -> None:
@@ -79,3 +93,32 @@ def test_agent_dispatch_instructions_contains_key_fields() -> None:
     assert "/tmp/prompt.md" in msg
     assert "repogerbil:analyzer:analyzer" in msg
     assert "Instruction:" in msg
+
+
+def test_agent_dispatch_instructions_pins_contract_markers() -> None:
+    """Outer-agent consumers grep for these markers — pin them as the contract."""
+    msg = agent_dispatch_instructions(Path("/work/changelog-prompt.md"))
+
+    # The leading banner line consumers detect.
+    assert "Analyzer dispatch requested" in msg
+    # Labeled fields the outer agent parses.
+    assert "prompt-file:" in msg
+    assert "subagent:" in msg
+    # Subagent identifier (qualified name) must round-trip verbatim.
+    assert "repogerbil:analyzer:analyzer" in msg
+    # The prompt path must appear in the rendered message.
+    assert "/work/changelog-prompt.md" in msg
+    # The instruction block keyword and its referenced section.
+    assert "Instruction:" in msg
+    assert "Instructions" in msg
+    # Output flag the analyzer is told to honor.
+    assert "--output" in msg
+    # The format the analyzer must emit.
+    assert "Keep-a-Changelog" in msg
+
+
+def test_agent_dispatch_instructions_includes_path_argument_verbatim() -> None:
+    """Various path shapes (relative, absolute, with spaces) round-trip into the message."""
+    for p in (Path("rel.md"), Path("/abs/here.md"), Path("/with space/x.md")):
+        msg = agent_dispatch_instructions(p)
+        assert str(p) in msg

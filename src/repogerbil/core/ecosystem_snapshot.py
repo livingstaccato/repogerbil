@@ -12,6 +12,7 @@ import subprocess
 
 from repogerbil.core.cadence import TimeGroup
 from repogerbil.core.snapshot import SnapshotResult, create_snapshot
+from repogerbil.core.vocabulary import PREFIX_TO_CATEGORY
 
 
 @dataclass
@@ -37,8 +38,32 @@ class EcosystemResult:
     error: str = ""
 
 
+def _known_prefixes() -> frozenset[str]:
+    """Return the set of conventional-commit prefixes known to the vocabulary.
+
+    Derived from :data:`repogerbil.core.vocabulary.PREFIX_TO_CATEGORY` so adding a
+    new prefix in the vocabulary automatically extends what counts as "prefixed"
+    here.
+    """
+    return frozenset(PREFIX_TO_CATEGORY.keys())
+
+
+def _line_has_known_prefix(line: str, prefixes: frozenset[str]) -> bool:
+    """Return True if ``line`` begins with ``<prefix>:`` for a known prefix.
+
+    Splits on the first colon (handling scopes like ``feat(api):``) to match the
+    raw prefix word, then checks membership against the vocabulary set.
+    """
+    head, sep, _ = line.partition(":")
+    if not sep:
+        return False
+    # Strip any conventional-commit scope like ``feat(api)`` → ``feat``.
+    prefix = head.split("(", 1)[0].strip().lower()
+    return prefix in prefixes
+
+
 def _count_prefixed_commits(dest_path: Path) -> int:
-    """Count commits with conventional prefix in dest repo."""
+    """Count commits whose subject starts with a known conventional prefix."""
     try:
         result = subprocess.run(
             ["git", "log", "--format=%s"],  # noqa: S607
@@ -49,15 +74,9 @@ def _count_prefixed_commits(dest_path: Path) -> int:
         )
         if result.returncode != 0:
             return 0
-        output = result.stdout
-        lines = [line for line in output.split("\n") if line.strip()]
-        prefixed = sum(
-            1
-            for line in lines
-            if line[0:5].rstrip(":")
-            in ("feat", "fix", "docs", "test", "chore", "perf", "refactor", "ci", "build", "style")
-        )
-        return prefixed
+        prefixes = _known_prefixes()
+        lines = [line for line in result.stdout.split("\n") if line.strip()]
+        return sum(1 for line in lines if _line_has_known_prefix(line, prefixes))
     except Exception:
         return 0
 

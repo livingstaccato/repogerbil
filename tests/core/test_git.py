@@ -28,8 +28,15 @@ from repogerbil.core.git import (
 
 
 @pytest.fixture()
-def git_repo(tmp_path: Path) -> Path:
-    """Create a temporary git repo with a few commits."""
+def repo_with_commits(tmp_path: Path) -> Path:
+    """Create a temporary git repo seeded with a few fixed-date commits.
+
+    Distinct from the shared empty ``git_repo`` fixture in
+    ``tests/conftest.py``; this one seeds the repo with three commits across
+    two dates (2026-04-07 and 2026-04-08) so the tests below can verify
+    date/commit-lookup behavior without re-creating commits each time.
+    Renamed from ``git_repo`` to avoid shadowing the conftest fixture.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
@@ -107,8 +114,8 @@ class TestParseShortstat:
 
 
 class TestGetActiveDates:
-    def test_returns_dates(self, git_repo: Path) -> None:
-        dates = get_active_dates(git_repo)
+    def test_returns_dates(self, repo_with_commits: Path) -> None:
+        dates = get_active_dates(repo_with_commits)
         assert "2026-04-07" in dates
         assert "2026-04-08" in dates
 
@@ -121,14 +128,14 @@ class TestGetActiveDates:
 
 
 class TestResolveHeadBranch:
-    def test_returns_current_branch(self, git_repo: Path) -> None:
-        branch = resolve_head_branch(git_repo)
+    def test_returns_current_branch(self, repo_with_commits: Path) -> None:
+        branch = resolve_head_branch(repo_with_commits)
         assert branch != ""
 
-    def test_detached_head_raises(self, git_repo: Path) -> None:
-        subprocess.run(["git", "checkout", "--detach"], cwd=git_repo, capture_output=True, check=True)
+    def test_detached_head_raises(self, repo_with_commits: Path) -> None:
+        subprocess.run(["git", "checkout", "--detach"], cwd=repo_with_commits, capture_output=True, check=True)
         with pytest.raises(GitCommandError, match="Unable to resolve source branch"):
-            resolve_head_branch(git_repo)
+            resolve_head_branch(repo_with_commits)
 
     def test_empty_branch_name_raises(self) -> None:
         with (
@@ -139,46 +146,46 @@ class TestResolveHeadBranch:
 
 
 class TestGetCommitsForDate:
-    def test_returns_commits_for_date(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07")
+    def test_returns_commits_for_date(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
         assert len(commits) == 2
         assert all(isinstance(c, CommitInfo) for c in commits)
         assert commits[0].subject == "feat: add file1"
         assert commits[1].subject == "fix: add file2"
 
-    def test_no_commits_for_date(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-01-01")
+    def test_no_commits_for_date(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-01-01")
         assert commits == []
 
-    def test_include_files(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07", include_files=True)
+    def test_include_files(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", include_files=True)
         assert len(commits) == 2
         assert "file1.py" in commits[0].files
         assert "file2.py" in commits[1].files
 
-    def test_message_depth_subject(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="subject")
+    def test_message_depth_subject(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", message_depth="subject")
         assert commits[0].body == ""
         assert commits[0].refs == []
 
-    def test_message_depth_refs(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="refs")
+    def test_message_depth_refs(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", message_depth="refs")
         assert len(commits) == 2
         # No refs in these commits
         assert commits[0].refs == []
 
-    def test_message_depth_full(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="full")
+    def test_message_depth_full(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", message_depth="full")
         assert len(commits) == 2
 
-    def test_oldest_first(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07")
+    def test_oldest_first(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
         assert commits[0].subject == "feat: add file1"
 
-    def test_include_files_with_body(self, git_repo: Path) -> None:
+    def test_include_files_with_body(self, repo_with_commits: Path) -> None:
         """include_files works with message_depth=full."""
         commits = get_commits_for_date(
-            git_repo,
+            repo_with_commits,
             "2026-04-07",
             message_depth="full",
             include_files=True,
@@ -188,19 +195,19 @@ class TestGetCommitsForDate:
 
 
 class TestGetDiffStats:
-    def test_returns_stats(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07")
-        stats = get_diff_stats(git_repo, commits[0].hash, commits[-1].hash)
+    def test_returns_stats(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
+        stats = get_diff_stats(repo_with_commits, commits[0].hash, commits[-1].hash)
         assert isinstance(stats, DiffStats)
         assert stats.files_changed >= 1
         assert stats.insertions >= 1
 
-    def test_root_commit_fallback(self, git_repo: Path) -> None:
+    def test_root_commit_fallback(self, repo_with_commits: Path) -> None:
         """Single-commit call on the root commit exercises the --root fallback and returns real stats."""
-        commits = get_commits_for_date(git_repo, "2026-04-07")
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
         # Passing the same hash for first and last triggers the single-commit path.
         # The root commit adds file1.py, so stats must be non-zero.
-        stats = get_diff_stats(git_repo, commits[0].hash, commits[0].hash)
+        stats = get_diff_stats(repo_with_commits, commits[0].hash, commits[0].hash)
         assert isinstance(stats, DiffStats)
         assert stats.files_changed >= 1
         assert stats.insertions >= 1
@@ -297,10 +304,10 @@ class TestCommitLookup:
         ):
             get_commit_for_hash(".", "a" * 40)
 
-    def test_get_commits_for_hashes(self, git_repo: Path) -> None:
-        commits = get_commits_for_date(git_repo, "2026-04-07")
+    def test_get_commits_for_hashes(self, repo_with_commits: Path) -> None:
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
         hashes = [c.hash for c in commits]
-        resolved = get_commits_for_hashes(git_repo, hashes, include_files=True)
+        resolved = get_commits_for_hashes(repo_with_commits, hashes, include_files=True)
         assert len(resolved) == len(hashes)
         assert all(c.files for c in resolved)
 
@@ -355,7 +362,7 @@ class TestAttachFileLists:
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
                 MagicMock(returncode=0, stdout=f"{h1}\t2026-04-10\t1234567890\tfeat: test\n"),
-                MagicMock(returncode=0, stdout=f"{h1}\nfile1.py\nfile2.py\n"),
+                MagicMock(returncode=0, stdout=f"\x00{h1}\nfile1.py\nfile2.py\n"),
             ]
             commits = get_commits_for_date(".", "2026-04-10", include_files=True)
             assert commits[0].files == ["file1.py", "file2.py"]
@@ -363,7 +370,7 @@ class TestAttachFileLists:
     def test_edge_case_empty_lines(self) -> None:
         h1 = "a" * 40
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=f"\n{h1}\nfile1.py\n\n")
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"\n\x00{h1}\nfile1.py\n\n")
             commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test")]
             res = _attach_file_lists(".", commits)
             assert res[0].files == ["file1.py"]
@@ -372,16 +379,35 @@ class TestAttachFileLists:
         """_attach_file_lists must preserve CommitInfo.timestamp (regression: was dropped)."""
         h1 = "a" * 40
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=f"{h1}\nfile1.py\n")
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"\x00{h1}\nfile1.py\n")
             commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test", timestamp=1234567890)]
             res = _attach_file_lists(".", commits)
             assert res[0].timestamp == 1234567890
 
+    def test_attach_handles_hex_like_filename(self) -> None:
+        """A filename of exactly 40 lowercase hex chars must not be misread as a hash."""
+        h1 = "a" * 40
+        hex_filename = "0" * 40
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"\x00{h1}\n{hex_filename}\nother.py\n")
+            commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test")]
+            res = _attach_file_lists(".", commits)
+            assert res[0].files == [hex_filename, "other.py"]
+
+    def test_attach_handles_sha256_hash(self) -> None:
+        """Parser must accept 64-char SHA-256 hashes via the NUL sentinel."""
+        h1 = "b" * 64
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"\x00{h1}\nfile1.py\n")
+            commits = [CommitInfo(hash=h1, date="2026-04-10", subject="test")]
+            res = _attach_file_lists(".", commits)
+            assert res[0].files == ["file1.py"]
+
 
 class TestCommitTimestamps:
-    def test_timestamp_populated_from_git_log(self, git_repo: Path) -> None:
+    def test_timestamp_populated_from_git_log(self, repo_with_commits: Path) -> None:
         """CommitInfo.timestamp is populated from git log %at field."""
-        commits = get_commits_for_date(git_repo, "2026-04-07")
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
         assert len(commits) == 2
         # Both commits should have non-zero timestamp
         assert commits[0].timestamp != 0
@@ -389,20 +415,20 @@ class TestCommitTimestamps:
         # Second commit (11:00) should have later timestamp than first (10:00)
         assert commits[1].timestamp > commits[0].timestamp
 
-    def test_timestamp_with_message_depth_full(self, git_repo: Path) -> None:
+    def test_timestamp_with_message_depth_full(self, repo_with_commits: Path) -> None:
         """Timestamp is populated with message_depth='full'."""
-        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="full")
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", message_depth="full")
         assert all(c.timestamp != 0 for c in commits)
 
-    def test_timestamp_with_message_depth_refs(self, git_repo: Path) -> None:
+    def test_timestamp_with_message_depth_refs(self, repo_with_commits: Path) -> None:
         """Timestamp is populated with message_depth='refs'."""
-        commits = get_commits_for_date(git_repo, "2026-04-07", message_depth="refs")
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07", message_depth="refs")
         assert all(c.timestamp != 0 for c in commits)
 
-    def test_get_commit_for_hash_includes_timestamp(self, git_repo: Path) -> None:
+    def test_get_commit_for_hash_includes_timestamp(self, repo_with_commits: Path) -> None:
         """get_commit_for_hash includes timestamp."""
-        commits = get_commits_for_date(git_repo, "2026-04-07")
-        commit = get_commit_for_hash(git_repo, commits[0].hash)
+        commits = get_commits_for_date(repo_with_commits, "2026-04-07")
+        commit = get_commit_for_hash(repo_with_commits, commits[0].hash)
         assert commit.timestamp != 0
         assert commit.timestamp == commits[0].timestamp
 
@@ -517,6 +543,31 @@ class TestGetCommitsForPath:
         assert commits[0].files is not None
         assert len(commits[0].files) > 0  # pyvider-cty/ was created/modified
 
+    def test_subject_only_skips_malformed_lines(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """A line with too few NUL separators is silently skipped.
+
+        The subject-only branch in get_commits_for_path uses ``%H%x00%as%x00%at%x00%s``
+        and splits on ``\\x00`` with maxsplit 3. If git produces a malformed line
+        with fewer separators (defensive guard for unexpected output), the parser
+        must not crash — it skips the line and continues with the valid ones.
+        """
+        import repogerbil.core.git._commits as commits_mod
+
+        valid = "a" * 40 + "\x002026-04-07\x00123\x00feat: valid"
+        # Single NUL → only 2 parts after split → must be skipped (no IndexError).
+        malformed = "garbage\x00line"
+
+        def fake_run_git(repo_path: object, *args: object, **kwargs: object) -> str:
+            return f"{malformed}\n{valid}\n"
+
+        monkeypatch.setattr(commits_mod, "_run_git", fake_run_git)
+
+        result = commits_mod.get_commits_for_path(tmp_path, "any-subdir")
+
+        assert len(result) == 1
+        assert result[0].hash == "a" * 40
+        assert result[0].subject == "feat: valid"
+
 
 class TestDeduplication:
     def test_get_commits_for_range_ignores_malformed_lines(
@@ -541,7 +592,7 @@ class TestDeduplication:
         import repogerbil.core.git._trees as trees
 
         def fake_run_git(repo_path: Path, *args: str) -> str:
-            return "orphan.py\n" + "a" * 40 + "\ntracked.py\n"
+            return "orphan.py\n\x00" + "a" * 40 + "\ntracked.py\n"
 
         monkeypatch.setattr(trees, "_run_git", fake_run_git)
         commit = CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: valid", timestamp=123)
@@ -549,6 +600,43 @@ class TestDeduplication:
         [attached] = trees._attach_commit_files_from_range(tmp_path, [commit], "old", "new")
 
         assert attached.files == ["tracked.py"]
+
+    def test_attach_commit_files_from_range_handles_hex_filename(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A 40-hex-char filename must not be misread as a commit hash."""
+        import repogerbil.core.git._trees as trees
+
+        commit_hash = "a" * 40
+        hex_filename = "0" * 40
+
+        def fake_run_git(repo_path: Path, *args: str) -> str:
+            return f"\x00{commit_hash}\n{hex_filename}\nreal.py\n"
+
+        monkeypatch.setattr(trees, "_run_git", fake_run_git)
+        commit = CommitInfo(hash=commit_hash, date="2026-04-07", subject="feat: valid", timestamp=123)
+
+        [attached] = trees._attach_commit_files_from_range(tmp_path, [commit], "old", "new")
+
+        assert attached.files == [hex_filename, "real.py"]
+
+    def test_attach_commit_files_from_range_handles_sha256_hash(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Parser must accept 64-char SHA-256 hashes."""
+        import repogerbil.core.git._trees as trees
+
+        commit_hash = "b" * 64
+
+        def fake_run_git(repo_path: Path, *args: str) -> str:
+            return f"\x00{commit_hash}\nreal.py\n"
+
+        monkeypatch.setattr(trees, "_run_git", fake_run_git)
+        commit = CommitInfo(hash=commit_hash, date="2026-04-07", subject="feat: valid", timestamp=123)
+
+        [attached] = trees._attach_commit_files_from_range(tmp_path, [commit], "old", "new")
+
+        assert attached.files == ["real.py"]
 
     def test_resolve_commit_trees(self, monorepo: Path) -> None:
         """resolve_commit_trees maps commit hashes to tree SHAs."""
@@ -633,3 +721,19 @@ class TestDeduplication:
         for commit in commits:
             assert commit.hash in tree_map
             assert len(tree_map[commit.hash]) == 40
+
+
+class TestPublicApi:
+    """Underscore-prefixed helpers must remain importable but stay out of ``__all__``."""
+
+    def test_internal_helpers_excluded_from_all(self) -> None:
+        import repogerbil.core.git as git_pkg
+
+        assert "_run_git" not in git_pkg.__all__
+        assert "_attach_file_lists" not in git_pkg.__all__
+
+    def test_internal_helpers_still_importable(self) -> None:
+        from repogerbil.core.git import _attach_file_lists, _run_git
+
+        assert callable(_run_git)
+        assert callable(_attach_file_lists)

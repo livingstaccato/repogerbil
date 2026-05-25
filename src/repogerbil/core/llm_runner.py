@@ -21,8 +21,10 @@ import re
 import shutil
 import subprocess
 
+from repogerbil.core.errors import RepogerbilError
 
-class LlmRunnerError(Exception):
+
+class LlmRunnerError(RepogerbilError):
     """Raised when an LLM runner cannot complete its task."""
 
 

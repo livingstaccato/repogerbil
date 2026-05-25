@@ -10,6 +10,7 @@ from pathlib import Path
 
 import click
 
+from repogerbil.core.config import load_settings
 from repogerbil.core.preflight import FileRecord, PreflightReport, scan_repo
 
 
@@ -75,7 +76,8 @@ def preflight_cmd(
     verbose: bool,
 ) -> None:
     """Scan SOURCE repo and report files to exclude before distilling."""
-    report = scan_repo(source, since=since, until=until)
+    settings = load_settings()
+    report = scan_repo(source, since=since, until=until, settings=settings)
 
     if emit_flags:
         for flag in report.suggested_flags:

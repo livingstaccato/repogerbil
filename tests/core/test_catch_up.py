@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -35,10 +36,11 @@ def _init_repo(repo: Path) -> None:
         subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
 
 
-def _commit(repo: Path, file: str, content: str, message: str) -> str:
+def _commit(repo: Path, file: str, content: str, message: str, date: str = "2026-04-07T10:00:00") -> str:
     (repo / file).write_text(content)
     subprocess.run(["git", "add", file], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, capture_output=True, check=True)
+    env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, capture_output=True, check=True, env=env)
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -179,13 +181,46 @@ class TestRecordMissingCommits:
         from repogerbil.core import catch_up as catch_up_mod
 
         def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
-            return "orphan.txt\n" + "a" * 40 + "\ntracked.txt\n"
+            return "orphan.txt\n\x00" + "a" * 40 + "\ntracked.txt\n"
 
         monkeypatch.setattr(catch_up_mod, "_run_git", fake_run_git)
         commit = CommitInfo(hash="a" * 40, date="2026-04-20", subject="feat: one", timestamp=1)
 
         [attached] = catch_up_mod._attach_files(tmp_path, [commit], since_ref=None)
         assert attached.files == ["tracked.txt"]
+
+    def test_attach_files_handles_hex_like_filename(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file whose name is 40 lowercase hex chars must not be treated as a hash."""
+        from repogerbil.core import catch_up as catch_up_mod
+
+        hex_filename = "0" * 40  # exactly 40 lowercase-hex chars — looks like SHA-1
+        commit_hash = "a" * 40
+
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            return f"\x00{commit_hash}\n{hex_filename}\nreal.txt\n"
+
+        monkeypatch.setattr(catch_up_mod, "_run_git", fake_run_git)
+        commit = CommitInfo(hash=commit_hash, date="2026-04-20", subject="feat: one", timestamp=1)
+
+        [attached] = catch_up_mod._attach_files(tmp_path, [commit], since_ref=None)
+        assert attached.files == [hex_filename, "real.txt"]
+
+    def test_attach_files_handles_sha256_hash(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Parser must accept 64-char SHA-256 hashes via the NUL sentinel."""
+        from repogerbil.core import catch_up as catch_up_mod
+
+        commit_hash = "b" * 64  # SHA-256 length
+
+        def fake_run_git(repo_path: Path, *args: str, timeout: int) -> str:
+            return f"\x00{commit_hash}\nfile.py\n"
+
+        monkeypatch.setattr(catch_up_mod, "_run_git", fake_run_git)
+        commit = CommitInfo(hash=commit_hash, date="2026-04-20", subject="feat: one", timestamp=1)
+
+        [attached] = catch_up_mod._attach_files(tmp_path, [commit], since_ref=None)
+        assert attached.files == ["file.py"]
 
     def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import sys
 from typing import Any
@@ -24,10 +25,52 @@ from repogerbil.core.git import get_diff_stats
 from repogerbil.core.provenance import resolve_provenance
 
 
+def _configure_cli_logging(level: int = logging.WARNING) -> None:
+    """Attach a stderr handler to the ``repogerbil`` package logger.
+
+    The package itself only attaches a ``NullHandler`` (library hygiene), so
+    without this configuration ``logger.warning(...)`` from core modules
+    would be swallowed for CLI users. Safe to call multiple times — the Click
+    test runner can invoke the CLI repeatedly in one process and we must not
+    pile on duplicate handlers each time.
+
+    Library-consumer hygiene: ``pkg_logger.setLevel`` is only invoked on
+    first-time configuration. Subsequent calls (e.g. ``--verbose`` bumping
+    on a later CLI invocation) update *our handler's* level instead, so an
+    embedder's previously-set package-logger level is preserved. The handler's
+    own level filter is sufficient to route records to stderr.
+    """
+    pkg_logger = logging.getLogger("repogerbil")
+    # Only attach our handler once — identify it by an internal marker so we
+    # never clash with handlers a host app may have already attached.
+    for h in pkg_logger.handlers:
+        if getattr(h, "_repogerbil_cli_handler", False):
+            # Bump only the handler level so --verbose still works on repeat
+            # invocations, but DO NOT touch pkg_logger.level — that belongs to
+            # whoever configured the logger first (embedder or first CLI call).
+            h.setLevel(level)
+            return
+    # First-time setup: take ownership of the package-logger level, but only
+    # if no embedder has already configured it (NOTSET means "untouched").
+    if pkg_logger.level == logging.NOTSET:
+        pkg_logger.setLevel(level)
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    # Marker used above to avoid duplicate registration across CliRunner calls.
+    handler._repogerbil_cli_handler = True  # type: ignore[attr-defined]  # private marker on the handler instance
+    pkg_logger.addHandler(handler)
+
+
 @click.group()
 @click.version_option()
-def cli() -> None:
+# NOTE: deliberately no ``-v`` short form — it collides with subcommand flags
+# (e.g. ``gerbil preflight -v``, which is the long-standing preflight verbose
+# source-listing flag). Use ``--verbose`` at the group level.
+@click.option("--verbose", is_flag=True, help="Enable INFO-level logging to stderr.")
+def cli(verbose: bool) -> None:
     """gerbil — Git history documentation and consolidation."""
+    _configure_cli_logging(level=logging.INFO if verbose else logging.WARNING)
 
 
 def main() -> None:

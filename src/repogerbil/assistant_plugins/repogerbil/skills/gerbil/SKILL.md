@@ -33,6 +33,8 @@ When invoked without arguments:
 
 ## Command Reference
 
+Global flags: `--verbose` is a group-level flag (no short form; `-v` is reserved for per-command use like `preflight -v`) that enables INFO-level logging from `repogerbil.*`. Pass it before the subcommand, e.g. `gerbil --verbose snapshot ...`.
+
 | Command | Args | Key Options | Description |
 |---|---|---|---|
 | `status` | `<repo>` | — | Repo info, active dates, date range |
@@ -45,7 +47,7 @@ When invoked without arguments:
 | `preview` | `<repo>` | `--cadence`, `--since` | Rich table preview of distillation |
 | `preflight` | `<source>` | `--since`, `--until`, `--emit-flags`, `--verbose` | Inspect source repo — classify files as artifact/source/unknown, suggest exclude flags |
 | `snapshot` | `<source> <dest>` | `--cadence`, `--since`, `--exclude-path`, `--time-window-start`, `--time-window-end`, `--timezone`, `--commit-time`, `--source-branch`, `--changelog-dir`, `--extra-source`, `--all-branches`, `--source-subdir`, `--llm-refine` | Create an independent repo with distilled history |
-| `multi-snapshot` | `<dest>` | `--repo NAME:PATH`, `--cadence`, `--since`, `--exclude-path`, `--timezone` | Merge multiple source repos into one distilled snapshot |
+| `multi-snapshot` | `<dest>` | `--repo NAME:PATH`, `--since`, `--exclude-path`, `--commit-time`, `--timezone`, `--ecosystem-label`, `--llm-refine`, `--dry-run` | Merge multiple source repos into one distilled snapshot |
 | `export-cadence` | `<repo>` | `--cadence`, `--since`, `-o` | JSON export of time-grouped commits |
 | `audit` | `<repo>` | `--since`, `--show-bad` | Commit message prefix adoption |
 | `summary` | `<cl_dir>` | `--year`, `--week`, `--output-dir`, `--prompt`, `--force` | Weekly cross-repo summary |
@@ -53,7 +55,7 @@ When invoked without arguments:
 | `backfill` | `<cl_dir>` | `--config`, `--since` | Batch generate missing changelogs |
 | `catch-up` | `<repo> <jsonl>` | `--since`, `--since-date`, `--full`, `--dry-run` | Record missing HEAD commit metadata to a `.summaries.jsonl` sidecar |
 | `append` | `<repo> <jsonl>` | `--since`, `--since-date`, `--full`, `--dry-run` | Legacy alias for `catch-up` |
-| `realign` | `<repo> <jsonl>` | `--dry-run` | Re-key legacy `.summaries.jsonl` records to current local commit SHAs |
+| `realign` | `<repo> <jsonl>` | `--dry-run` | Re-key legacy `.summaries.jsonl` records to current local commit SHAs; malformed lines are preserved verbatim and counted as `corrupt lines (preserved)` |
 | `lint` | `<cl_dir>` | — | Validate changelog YAML files against schema |
 | `probe` | `<repo>` | `--date`, `--cadence` | Probe candidate sources for a repo/date pair |
 | `plugin` | — | `--target {codex\|claude}` | Export or install bundled assistant plugin files |

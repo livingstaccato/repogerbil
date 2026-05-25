@@ -13,63 +13,83 @@ import yaml
 
 from repogerbil.core.vocabulary import CATEGORIES, SEVERITIES
 
-# Valid values include canonical + alt-labels
-VALID_CATEGORIES = set(CATEGORIES.keys()) | {
-    "realize",
-    "provision",
-    "actualize",
-    "commission",
-    "manifest",
-    "rectify",
-    "correct",
-    "mitigate",
-    "resolve",
-    "restore",
-    "modularize",
-    "partition",
-    "decompose",
-    "isolate",
-    "extract",
-    "decommission",
-    "retire",
-    "sunset",
-    "expunge",
-    "phase-out",
-    "integrate",
-    "bridge",
-    "interoperate",
-    "bind",
-    "wire",
-    "formalize",
-    "define",
-    "prescribe",
-    "annotate",
-    "articulate",
-    "verify",
-    "validate",
-    "certify",
-    "demonstrate",
-    "confirm",
-    "buffer",
-    "headroom",
-    "slack",
-    "tolerance",
-    "reserve",
-    "fortify",
-    "ruggedize",
-    "armor",
-    "guard",
-    "optimize",
-    "tune",
-    "refine",
-    "accelerate",
-    "reduce-drag",
-    "pin",
-    "lock",
-    "freeze",
-    "normalize",
-    "standardize",
-}
+# Free-form synonyms (alt-labels) accepted alongside the vocabulary. These are
+# NOT part of the canonical vocabulary; they exist so older changelogs that
+# used a different verb still pass lint. New vocabulary categories should be
+# added to ``vocabulary._default_categories`` — this set picks them up
+# automatically via :data:`VALID_CATEGORIES` below.
+_CATEGORY_SYNONYMS: frozenset[str] = frozenset(
+    {
+        "realize",
+        "provision",
+        "actualize",
+        "commission",
+        "manifest",
+        "rectify",
+        "correct",
+        "mitigate",
+        "resolve",
+        "restore",
+        "modularize",
+        "partition",
+        "decompose",
+        "isolate",
+        "extract",
+        "decommission",
+        "retire",
+        "sunset",
+        "expunge",
+        "phase-out",
+        "integrate",
+        "bridge",
+        "interoperate",
+        "bind",
+        "wire",
+        "formalize",
+        "define",
+        "prescribe",
+        "annotate",
+        "articulate",
+        "verify",
+        "validate",
+        "certify",
+        "demonstrate",
+        "confirm",
+        "buffer",
+        "headroom",
+        "slack",
+        "tolerance",
+        "reserve",
+        "fortify",
+        "ruggedize",
+        "armor",
+        "guard",
+        "optimize",
+        "tune",
+        "refine",
+        "accelerate",
+        "reduce-drag",
+        "pin",
+        "lock",
+        "freeze",
+        "normalize",
+        "standardize",
+    }
+)
+
+
+def _valid_categories() -> set[str]:
+    """Return the live valid-category set (vocabulary keys + synonyms).
+
+    Computed on each call so monkeypatching ``vocabulary.CATEGORIES`` in
+    tests is reflected without a re-import. The :data:`VALID_CATEGORIES`
+    module attribute is a snapshot at import time for back-compat with
+    callers that import the constant directly.
+    """
+    return set(CATEGORIES.keys()) | set(_CATEGORY_SYNONYMS)
+
+
+VALID_CATEGORIES: set[str] = _valid_categories()
 
 VALID_SEVERITIES = (
     set(SEVERITIES.keys())
@@ -166,7 +186,7 @@ def _check_bulk(data: dict[str, Any], result: LintResult) -> None:
         bcat = entry.get("category")
         if bcat is None:
             result.errors.append(f"{bloc}: missing 'category'")
-        elif bcat not in VALID_CATEGORIES:
+        elif bcat not in _valid_categories():
             result.errors.append(f"{bloc}: unknown category {bcat!r}")
         bfiles = entry.get("files")
         if not isinstance(bfiles, int) or bfiles < 0:
@@ -231,7 +251,7 @@ def _check_category_severity(change: dict[str, Any], loc: str, result: LintResul
     if cat is None:
         if not errors_only:
             result.warnings.append(f"{loc}: 'category' not set")
-    elif cat not in VALID_CATEGORIES:
+    elif cat not in _valid_categories():
         result.errors.append(f"{loc}: unknown category {cat!r}")
 
     sev = change.get("severity")
@@ -295,7 +315,7 @@ def _check_point_category_severity(
     if pcat is None:
         if not errors_only:
             result.warnings.append(f"{ploc}: 'category' not set")
-    elif pcat not in VALID_CATEGORIES:
+    elif pcat not in _valid_categories():
         result.errors.append(f"{ploc}: unknown category {pcat!r}")
 
     psev = point.get("severity")

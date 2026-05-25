@@ -9,20 +9,32 @@ import contextlib
 from datetime import date
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 
 from repogerbil.core.errors import GitCommandError
 from repogerbil.core.git import _run_git
-from repogerbil.core.tree_filter import filter_tree
+from repogerbil.core.tree_filter import _cleanup_index_files, filter_tree
 
 
-def _init_dest_repo(dest_path: Path, source_repos: dict[str, Path]) -> None:
-    """Initialize the destination repo and add source remotes."""
+def _init_dest_repo(
+    dest_path: Path,
+    source_repos: dict[str, Path],
+    *,
+    author_name: str | None = None,
+    author_email: str | None = None,
+) -> None:
+    """Initialize the destination repo and add source remotes.
+
+    When ``author_name`` and ``author_email`` are both ``None`` the destination
+    repo inherits the user's global git identity — matching the behavior of the
+    single-snapshot path. When either is set, both must be set so the resulting
+    commits have a complete identity.
+    """
     dest_path.mkdir(parents=True, exist_ok=True)
     _run_git(dest_path, "init")
-    _run_git(dest_path, "config", "user.email", "repogerbil@localhost")
-    _run_git(dest_path, "config", "user.name", "repogerbil")
+    if author_email is not None and author_name is not None:
+        _run_git(dest_path, "config", "user.email", author_email)
+        _run_git(dest_path, "config", "user.name", author_name)
 
     for name, path in source_repos.items():
         if not path.exists() or not (path / ".git").exists():
@@ -34,7 +46,11 @@ def _init_dest_repo(dest_path: Path, source_repos: dict[str, Path]) -> None:
 
 
 def _commit_tree(dest_path: Path, tree_sha: str, message: str, timestamp: str) -> str:
-    """Create a commit on the tree with the given timestamp. Returns the commit hash."""
+    """Create a commit on the tree with the given timestamp. Returns the commit hash.
+
+    Raises:
+        GitCommandError: If ``git commit-tree`` or the subsequent ``update-ref`` fails.
+    """
     cmd = ["commit-tree", tree_sha, "-m", message]
 
     try:
@@ -48,15 +64,10 @@ def _commit_tree(dest_path: Path, tree_sha: str, message: str, timestamp: str) -
     env["GIT_AUTHOR_DATE"] = timestamp
     env["GIT_COMMITTER_DATE"] = timestamp
 
-    result = subprocess.run(  # noqa: S603
-        ["git", *cmd],  # noqa: S607
-        cwd=str(dest_path),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=env,
-    )
-    new_commit = result.stdout.strip()
+    new_commit = _run_git(dest_path, *cmd, timeout=30, env=env).strip()
+    if not new_commit:  # pragma: no cover — _run_git already raises on failure
+        msg = "git commit-tree produced no output"
+        raise GitCommandError(msg)
     _run_git(dest_path, "update-ref", "refs/heads/main", new_commit)
     return new_commit
 
@@ -84,44 +95,37 @@ def _get_tree_at_date(dest_path: Path, remote_name: str, day: date) -> str | Non
 
 
 def _build_merged_tree(dest_path: Path, repo_trees: dict[str, str]) -> str:
-    """Build a combined tree with each repo as a subdirectory."""
-    with tempfile.NamedTemporaryFile(prefix="multi-snap-idx-", delete=False) as tmp:
-        index_file = tmp.name
+    """Build a combined tree with each repo as a subdirectory.
 
+    Uses a unique temporary index file (``mkstemp``) so the real index and
+    working tree are untouched, and so concurrent callers never collide on a
+    deterministic name. The temp index AND any sibling ``.lock`` file are
+    cleaned up via the shared ``_cleanup_index_files`` helper — if git is
+    interrupted mid-write it can leave an orphan lock that
+    ``NamedTemporaryFile(delete=True)`` would otherwise miss.
+
+    Raises:
+        GitCommandError: If any underlying read-tree/write-tree call fails.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(dest_path / ".git"), prefix="multi-snap-idx-", suffix=".idx")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
     try:
-        env = dict(os.environ)
-        env["GIT_INDEX_FILE"] = index_file
+        env = {**os.environ, "GIT_INDEX_FILE": tmp_name}
 
-        subprocess.run(
-            ["git", "read-tree", "--empty"],  # noqa: S607
-            cwd=str(dest_path),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
+        _run_git(dest_path, "read-tree", "--empty", timeout=10, env=env)
 
         for name, tree_sha in sorted(repo_trees.items()):
-            subprocess.run(  # noqa: S603
-                ["git", "read-tree", f"--prefix={name}/", tree_sha],  # noqa: S607
-                cwd=str(dest_path),
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env=env,
-            )
+            _run_git(dest_path, "read-tree", f"--prefix={name}/", tree_sha, timeout=10, env=env)
 
-        result = subprocess.run(
-            ["git", "write-tree"],  # noqa: S607
-            cwd=str(dest_path),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=env,
-        )
-        return result.stdout.strip()
+        tree_sha = _run_git(dest_path, "write-tree", timeout=10, env=env).strip()
     finally:
-        Path(index_file).unlink(missing_ok=True)
+        _cleanup_index_files(tmp_path)
+
+    if not tree_sha:  # pragma: no cover — _run_git already raises on failure
+        msg = "git write-tree produced no output"
+        raise GitCommandError(msg)
+    return tree_sha
 
 
 def _collect_repo_trees_for_day(

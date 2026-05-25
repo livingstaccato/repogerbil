@@ -6,12 +6,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from repogerbil.core.artifact_patterns import ARTIFACT_RULES
+from repogerbil.core.config import ArtifactPatternConfig, Settings
 from repogerbil.core.errors import (
     PreflightGitLogCommandFailedError,
     PreflightInvalidRevisionOrDateError,
     PreflightNotAGitRepositoryError,
 )
-from repogerbil.core.preflight import PreflightReport, _count_files, scan_repo
+from repogerbil.core.preflight import (
+    PreflightReport,
+    _count_files,
+    _pin_iso_date,
+    _resolve_artifact_rules,
+    scan_repo,
+)
 
 
 def _make_repo(tmp_path: Path) -> Path:
@@ -137,6 +145,28 @@ class TestScanRepo:
         assert "Makefile" in source_paths
 
 
+class TestPinIsoDate:
+    """``_pin_iso_date`` decides per-value whether to anchor the time-of-day."""
+
+    def test_bare_iso_pinned_to_start_of_day(self) -> None:
+        assert _pin_iso_date("2026-05-25", end_of_day=False) == "2026-05-25T00:00:00"
+
+    def test_bare_iso_pinned_to_end_of_day(self) -> None:
+        assert _pin_iso_date("2026-05-25", end_of_day=True) == "2026-05-25T23:59:59"
+
+    def test_relative_string_unchanged(self) -> None:
+        assert _pin_iso_date("yesterday", end_of_day=False) == "yesterday"
+        assert _pin_iso_date("1.week.ago", end_of_day=True) == "1.week.ago"
+
+    def test_iso_datetime_unchanged(self) -> None:
+        assert _pin_iso_date("2026-05-25T08:30:00", end_of_day=False) == "2026-05-25T08:30:00"
+
+    def test_partial_iso_unchanged(self) -> None:
+        """A string that looks ISO-ish but isn't bare YYYY-MM-DD passes through."""
+        assert _pin_iso_date("2026-05", end_of_day=False) == "2026-05"
+        assert _pin_iso_date("2026-05-25 ", end_of_day=False) == "2026-05-25 "
+
+
 class TestScanRepoErrors:
     def test_non_git_dir_raises(self, tmp_path: Path) -> None:
         """scan_repo raises a specific preflight not-a-repo error."""
@@ -198,6 +228,118 @@ class TestCountFiles:
         assert "collecting file history with git log" in message
         assert "category: git-command-failed" in message
         assert "unexpected failure" in message
+
+    def test_subprocess_run_called_with_timeout(self, tmp_path: Path) -> None:
+        """git log must be invoked with an explicit timeout to avoid hangs."""
+        from repogerbil.core.preflight import _GIT_LOG_TIMEOUT_SECONDS
+
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result) as mock_run:
+            _count_files(tmp_path, since=None, until=None)
+        assert mock_run.call_count == 1
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("timeout") == _GIT_LOG_TIMEOUT_SECONDS
+
+    def test_resolve_artifact_rules_no_settings_returns_builtins(self) -> None:
+        rules = _resolve_artifact_rules(None)
+        assert rules == tuple(ARTIFACT_RULES)
+
+    def test_resolve_artifact_rules_no_extras_returns_builtins(self) -> None:
+        rules = _resolve_artifact_rules(Settings())
+        assert rules == tuple(ARTIFACT_RULES)
+
+    def test_resolve_artifact_rules_appends_extras(self) -> None:
+        s = Settings(
+            extra_artifact_patterns=[
+                ArtifactPatternConfig(label="snapshot tarball", pattern=r"snapshots/.*\.tar\.gz$"),
+            ]
+        )
+        rules = _resolve_artifact_rules(s)
+        # Extras come AFTER built-ins so built-ins always win first.
+        assert rules[: len(ARTIFACT_RULES)] == tuple(ARTIFACT_RULES)
+        assert len(rules) == len(ARTIFACT_RULES) + 1
+        assert rules[-1].label == "snapshot tarball"
+
+    def test_scan_repo_uses_extra_patterns(self, tmp_path: Path) -> None:
+        """A user pattern matches a path the built-ins ignore."""
+        repo = tmp_path / "snaprepo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        # Disable any global gitignore so test files we create are always tracked.
+        subprocess.run(
+            ["git", "config", "core.excludesFile", "/dev/null"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
+        (repo / "snapshots").mkdir()
+        # ``.snap`` is unknown to both the built-in ARTIFACT_RULES and the
+        # source-file heuristic, so without extras the file lands in "unknown".
+        (repo / "snapshots" / "2026-05-24.snap").write_bytes(b"\x00\x01\x02")
+        (repo / "main.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+
+        # Without extras: the snapshot file lands in "unknown".
+        report_default = scan_repo(repo)
+        assert any("2026-05-24.snap" in r.path for r in report_default.unknown)
+
+        # With extras: the snapshot file is classified as an artifact via the user rule.
+        s = Settings(
+            extra_artifact_patterns=[
+                ArtifactPatternConfig(label="snapshot file", pattern=r"snapshots/.*\.snap$"),
+            ]
+        )
+        report = scan_repo(repo, settings=s)
+        snaps = [r for r in report.artifacts if "2026-05-24.snap" in r.path]
+        assert len(snaps) == 1
+        assert snaps[0].rule is not None
+        assert snaps[0].rule.label == "snapshot file"
+
+    def test_since_iso_date_pinned_to_midnight(self, tmp_path: Path) -> None:
+        """Bare ``--since=YYYY-MM-DD`` must be pinned to T00:00:00 so git's
+        approxidate does not silently drop same-day-earlier commits.
+        """
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result) as mock_run:
+            _count_files(tmp_path, since="2026-05-25", until=None)
+        args, _ = mock_run.call_args
+        cmd = args[0]
+        assert "--since=2026-05-25T00:00:00" in cmd
+
+    def test_until_iso_date_pinned_to_end_of_day(self, tmp_path: Path) -> None:
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result) as mock_run:
+            _count_files(tmp_path, since=None, until="2026-05-25")
+        args, _ = mock_run.call_args
+        cmd = args[0]
+        assert "--until=2026-05-25T23:59:59" in cmd
+
+    def test_relative_since_passes_through(self, tmp_path: Path) -> None:
+        """``--since=yesterday`` (or any non-ISO string) is passed unchanged."""
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result) as mock_run:
+            _count_files(tmp_path, since="yesterday", until=None)
+        args, _ = mock_run.call_args
+        cmd = args[0]
+        assert "--since=yesterday" in cmd
+
+    def test_iso_datetime_since_passes_through(self, tmp_path: Path) -> None:
+        """A user-supplied ISO datetime is not re-pinned."""
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        with patch("repogerbil.core.preflight.subprocess.run", return_value=mock_result) as mock_run:
+            _count_files(tmp_path, since="2026-05-25T08:30:00", until=None)
+        args, _ = mock_run.call_args
+        cmd = args[0]
+        assert "--since=2026-05-25T08:30:00" in cmd
 
     def test_not_git_error_message_includes_context(self, tmp_path: Path) -> None:
         exc = subprocess.CalledProcessError(

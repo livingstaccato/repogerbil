@@ -88,6 +88,171 @@ class TestHelp:
         assert "gerbil" in result.output
 
 
+class TestCliLogging:
+    """Verify ``_configure_cli_logging`` wires the repogerbil logger to stderr."""
+
+    def test_warning_reaches_stderr(self) -> None:
+        """A ``logger.warning`` from a core module reaches the CLI handler's stream.
+
+        The package root attaches only a ``NullHandler``; the CLI layer is
+        responsible for routing warnings to the user. After CLI bootstrap the
+        warning surfaces on the handler's stream (configured to ``sys.stderr``
+        at bootstrap time — pytest's capture mechanism may swap sys.stderr
+        between the bootstrap call and the assertion, so we point the handler
+        at an in-memory buffer to make the test deterministic).
+        """
+        import io
+        import logging
+
+        from repogerbil.cli.main import _configure_cli_logging
+
+        pkg_logger = logging.getLogger("repogerbil")
+        # Drop any prior CLI handler + level so we exercise a clean first-time
+        # bootstrap; other tests may have left state behind.
+        for h in list(pkg_logger.handlers):
+            if getattr(h, "_repogerbil_cli_handler", False):
+                pkg_logger.removeHandler(h)
+        pkg_logger.setLevel(logging.NOTSET)
+        # Bootstrap CLI logging exactly as a real CLI invocation would.
+        _configure_cli_logging()
+        assert pkg_logger.level == logging.WARNING
+        cli_handlers = [h for h in pkg_logger.handlers if getattr(h, "_repogerbil_cli_handler", False)]
+        assert len(cli_handlers) == 1
+        handler = cli_handlers[0]
+        # Redirect the handler at an in-memory buffer to confirm the formatted
+        # message lands there.
+        buf = io.StringIO()
+        original_stream = handler.stream  # type: ignore[attr-defined]  # StreamHandler exposes .stream
+        handler.stream = buf  # type: ignore[attr-defined]
+        try:
+            child_logger = logging.getLogger("repogerbil.core.multi_snapshot")
+            assert child_logger.getEffectiveLevel() == logging.WARNING
+            child_logger.warning("LLM refinement failed for 2026-04-01")
+        finally:
+            handler.stream = original_stream  # type: ignore[attr-defined]
+        assert "LLM refinement failed for 2026-04-01" in buf.getvalue()
+
+    def test_idempotent_across_invocations(self) -> None:
+        """Repeated CLI invocations must not stack duplicate handlers."""
+        import logging
+
+        runner = CliRunner()
+        runner.invoke(cli, ["--help"])
+        runner.invoke(cli, ["--help"])
+        runner.invoke(cli, ["--help"])
+        pkg_logger = logging.getLogger("repogerbil")
+        cli_handlers = [h for h in pkg_logger.handlers if getattr(h, "_repogerbil_cli_handler", False)]
+        assert len(cli_handlers) == 1
+
+    def test_verbose_flag_bumps_handler_level_to_info(self, tmp_path: Path) -> None:
+        """``--verbose`` bumps the CLI handler's level to INFO.
+
+        The package-logger level itself is *not* re-asserted on each call so
+        an embedder's pre-existing level is preserved (see
+        ``test_embedder_logger_level_preserved``). The handler's own level is
+        the bumping point for ``--verbose``.
+        """
+        import logging
+
+        from repogerbil.cli.main import _configure_cli_logging
+
+        # Reset handler to WARNING so the bump is observable.
+        _configure_cli_logging(level=logging.WARNING)
+        repo = tmp_path / "r"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        runner = CliRunner()
+        runner.invoke(cli, ["--verbose", "status", str(repo)])
+        pkg_logger = logging.getLogger("repogerbil")
+        cli_handlers = [h for h in pkg_logger.handlers if getattr(h, "_repogerbil_cli_handler", False)]
+        assert len(cli_handlers) == 1
+        assert cli_handlers[0].level == logging.INFO
+        # Restore handler WARNING for downstream tests.
+        _configure_cli_logging(level=logging.WARNING)
+
+    def test_embedder_logger_level_preserved(self, tmp_path: Path) -> None:
+        """A pre-existing ``repogerbil`` logger level survives CLI invocations.
+
+        Library hygiene: when an embedder sets the package logger to e.g.
+        ``ERROR``, subsequent CLI invocations must not silently downgrade it
+        to ``WARNING``/``INFO``. The CLI bumps its *handler* level instead.
+        """
+        import logging
+
+        from repogerbil.cli.main import _configure_cli_logging
+
+        # First, ensure the CLI handler exists (simulates a prior CLI run).
+        _configure_cli_logging(level=logging.WARNING)
+        pkg_logger = logging.getLogger("repogerbil")
+        # Embedder now reconfigures the package logger to ERROR.
+        original = pkg_logger.level
+        try:
+            pkg_logger.setLevel(logging.ERROR)
+            # Subsequent CLI invocations must leave the embedder's level alone.
+            repo = tmp_path / "r"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+            runner = CliRunner()
+            runner.invoke(cli, ["--verbose", "status", str(repo)])
+            assert pkg_logger.level == logging.ERROR
+            # The CLI handler should still have bumped to INFO though.
+            cli_handlers = [h for h in pkg_logger.handlers if getattr(h, "_repogerbil_cli_handler", False)]
+            assert len(cli_handlers) == 1
+            assert cli_handlers[0].level == logging.INFO
+        finally:
+            pkg_logger.setLevel(original)
+            _configure_cli_logging(level=logging.WARNING)
+
+    def test_first_time_setup_respects_existing_logger_level(self) -> None:
+        """First-time CLI bootstrap must not clobber a level the embedder set.
+
+        Covers the case where an embedder configures the package logger
+        *before* any CLI command runs. ``NOTSET`` (no embedder config) is the
+        only state where the CLI takes ownership of the level.
+        """
+        import logging
+
+        from repogerbil.cli.main import _configure_cli_logging
+
+        pkg_logger = logging.getLogger("repogerbil")
+        # Drop the CLI handler so we exercise the first-time-setup branch.
+        for h in list(pkg_logger.handlers):
+            if getattr(h, "_repogerbil_cli_handler", False):
+                pkg_logger.removeHandler(h)
+        original = pkg_logger.level
+        try:
+            pkg_logger.setLevel(logging.ERROR)
+            _configure_cli_logging(level=logging.WARNING)
+            # Embedder's level survives; only the handler we just added is
+            # owned by us.
+            assert pkg_logger.level == logging.ERROR
+            cli_handlers = [h for h in pkg_logger.handlers if getattr(h, "_repogerbil_cli_handler", False)]
+            assert len(cli_handlers) == 1
+            assert cli_handlers[0].level == logging.WARNING
+        finally:
+            pkg_logger.setLevel(original)
+            _configure_cli_logging(level=logging.WARNING)
+
+    def test_first_time_setup_takes_level_when_logger_notset(self) -> None:
+        """When the package logger is NOTSET (no embedder), CLI sets the level."""
+        import logging
+
+        from repogerbil.cli.main import _configure_cli_logging
+
+        pkg_logger = logging.getLogger("repogerbil")
+        for h in list(pkg_logger.handlers):
+            if getattr(h, "_repogerbil_cli_handler", False):
+                pkg_logger.removeHandler(h)
+        original = pkg_logger.level
+        try:
+            pkg_logger.setLevel(logging.NOTSET)
+            _configure_cli_logging(level=logging.WARNING)
+            assert pkg_logger.level == logging.WARNING
+        finally:
+            pkg_logger.setLevel(original)
+            _configure_cli_logging(level=logging.WARNING)
+
+
 class TestRealign:
     def test_reports_realign_result(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = tmp_path / "repo"
@@ -105,6 +270,7 @@ class TestRealign:
                 realigned=1,
                 exact_matches=1,
                 unalignable=1,
+                corrupt_lines=2,
             )
 
         monkeypatch.setattr("repogerbil.cli.commands.realign_cmd.realign_jsonl", fake_realign_jsonl)
@@ -114,6 +280,31 @@ class TestRealign:
         assert result.exit_code == 0
         assert "would realign: 1 (exact match: 1)" in result.output
         assert "unalignable: 1" in result.output
+        assert "corrupt lines (preserved): 2" in result.output
+
+    def test_no_corrupt_lines_message_when_zero(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When corrupt_lines == 0, the corrupt-lines line is omitted."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        jsonl = tmp_path / "repo.summaries.jsonl"
+
+        def fake_realign_jsonl(repo_path: Path, jsonl_path: Path, dry_run: bool) -> SimpleNamespace:
+            return SimpleNamespace(
+                jsonl_path=str(jsonl),
+                total_records=1,
+                already_verified=1,
+                realigned=0,
+                exact_matches=0,
+                unalignable=0,
+                corrupt_lines=0,
+            )
+
+        monkeypatch.setattr("repogerbil.cli.commands.realign_cmd.realign_jsonl", fake_realign_jsonl)
+
+        result = CliRunner().invoke(cli, ["realign", str(repo), str(jsonl)])
+
+        assert result.exit_code == 0
+        assert "corrupt lines" not in result.output
 
 
 class TestStatus:
@@ -521,6 +712,15 @@ class TestDistill:
         assert "Backup" in result.output
         assert "Tag" in result.output
 
+    def test_confirm_source_write_suppresses_warning(self, tmp_path: Path) -> None:
+        repo = _init_test_repo(tmp_path)
+        result = CliRunner().invoke(
+            cli,
+            ["distill", str(repo), "--target-branch", "test-distill-confirmed", "--confirm-source-write"],
+        )
+        assert result.exit_code == 0
+        assert "WARNING" not in result.output
+
     def test_distill_with_changelog_dir(self, tmp_path: Path) -> None:
         repo = _init_test_repo(tmp_path)
         out = tmp_path / "cl"
@@ -533,6 +733,23 @@ class TestDistill:
         )
         assert result.exit_code == 0
         assert "Consolidated" in result.output
+
+    def test_distill_without_backup_omits_backup_lines(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When create_backup=False, consolidate() returns empty backup_branch/tag
+        and the CLI must NOT print the 'Backup:' / 'Tag:' lines (exercises the
+        falsy branch of the post-distill conditionals)."""
+        monkeypatch.setenv("REPOGERBIL_CREATE_BACKUP", "false")
+        repo = _init_test_repo(tmp_path)
+        result = CliRunner().invoke(
+            cli,
+            ["distill", str(repo), "--target-branch", "no-backup-distill", "--confirm-source-write"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Consolidated" in result.output
+        assert "Backup:" not in result.output
+        assert "Tag:" not in result.output
 
 
 class TestFixStatsEdgeCases:

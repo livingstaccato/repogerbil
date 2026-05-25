@@ -41,6 +41,30 @@ jobs:
       - name: mypy
         run: uv run mypy src tests
 
+      # Enforce 500-line per-file cap
+      - name: max-loc
+        run: make max-loc
+
+      # Verify plugins/ matches packaged assistant_plugins/ mirror
+      - name: plugin-sync
+        run: make plugin-sync
+
+      # Verify CHANGELOG.md head matches VERSION (warns on commit drift)
+      - name: changelog-check
+        run: make changelog-check
+
+      # Guard against unpinned git --since=/--until= approxidate usage
+      - name: approxidate-check
+        run: make approxidate-check
+
+      # Cyclomatic complexity gate
+      - name: complexity
+        run: make complexity
+
+      # Dead-code scan
+      - name: dead-code
+        run: make dead-code
+
       # Security scan
       - name: bandit
         run: uv run bandit -r src -ll

@@ -14,7 +14,7 @@ commits exist in the wild (merge commits, reverts, ``--allow-empty``), so this
 is a heuristic — review the output before running ``repogerbil fix-stats``.
 
 Usage:
-    python scripts/audit_zero_stats.py <changelog_dir> [<changelog_dir> ...]
+    python scripts/forensics/audit_zero_stats.py <changelog_dir> [<changelog_dir> ...]
 
 Exits 0 if no suspicious files found, 1 otherwise (so it can gate CI if wanted).
 """

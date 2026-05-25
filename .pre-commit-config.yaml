@@ -85,6 +85,14 @@ repos:
         types: [python]
         stages: [pre-push]
 
+      - id: changelog-check
+        name: changelog drift check
+        entry: uv run python scripts/check_changelog_current.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
       - id: mutation-gate
         name: mutmut gate (manual)
         entry: uv run mutmut run

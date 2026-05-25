@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
+import tempfile
 
 from pydantic import BaseModel, Field
 
@@ -36,9 +39,24 @@ class StateStore:
             return State()
 
     def save(self) -> None:
-        """Save current state to disk."""
+        """Save current state to disk atomically (temp file + rename).
+
+        Uses a unique temp file path so concurrent writers cannot collide on a
+        deterministic ``.tmp`` name; the temp file is always cleaned up on
+        failure so it never leaks alongside the final state file.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(self.state.model_dump_json(indent=2) + "\n")
+        fd, tmp_name = tempfile.mkstemp(dir=self.path.parent, prefix=".repogerbil-state-", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            # Close the low-level fd immediately — we re-open via Path to keep
+            # write semantics consistent with the rest of the codebase.
+            os.close(fd)
+            tmp_path.write_text(self.state.model_dump_json(indent=2) + "\n")
+            tmp_path.replace(self.path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
 
     def is_changed(self, file_path: Path) -> bool:
         """Return True if the file has changed since it was last indexed."""

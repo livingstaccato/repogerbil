@@ -114,3 +114,34 @@ class TestFilterTree:
             check=True,
         ).stdout.splitlines()
         assert ls == ["main.py"]
+
+    def test_no_index_temp_files_leak(self, tmp_path: Path) -> None:
+        """After a successful filter_tree call, no idx temp file remains in .git."""
+        repo, tree_sha = _make_git_repo(tmp_path, {"main.py": "x\n", "poetry.lock": "lock\n"})
+        filter_tree(repo, tree_sha, [r"\.lock$"])
+
+        leftovers = sorted((repo / ".git").glob("filter-tree-idx-*"))
+        assert leftovers == []
+
+
+class TestFilterTreeCleanup:
+    def test_cleanup_index_files_removes_index_and_lock(self, tmp_path: Path) -> None:
+        """Helper removes both the index file and its sibling .lock if present."""
+        from repogerbil.core.tree_filter import _cleanup_index_files
+
+        idx = tmp_path / "some-idx"
+        idx.write_text("x")
+        lock = tmp_path / "some-idx.lock"
+        lock.write_text("y")
+
+        _cleanup_index_files(idx)
+
+        assert not idx.exists()
+        assert not lock.exists()
+
+    def test_cleanup_index_files_missing_paths_ok(self, tmp_path: Path) -> None:
+        """Helper is a no-op when neither file exists (safe in finally)."""
+        from repogerbil.core.tree_filter import _cleanup_index_files
+
+        # Should not raise — both paths missing.
+        _cleanup_index_files(tmp_path / "absent-idx")

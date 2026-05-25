@@ -55,7 +55,7 @@ def _build_ecosystem_targets(
 
         # Load changelog messages
         changelog_dir = report_base_path / name
-        changelog_messages = _load_changelog_messages(str(changelog_dir), name)
+        changelog_messages = _load_changelog_messages(str(changelog_dir), name, vocabulary=settings.vocabulary)
 
         ecosystem_targets.append(
             EcosystemTarget(

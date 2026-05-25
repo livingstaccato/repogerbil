@@ -18,6 +18,16 @@ repogerbil/
 │   ├── config.py          pydantic-settings with TOML + env vars
 │   ├── vocabulary.py      Category/severity definitions
 │   ├── snapshot.py        Independent repo creation with distilled history
+│   ├── _snapshot_git.py        Internal to snapshot.py — git subprocess helpers
+│   ├── _snapshot_timestamps.py Internal to snapshot.py — time-window jitter math
+│   ├── multi_snapshot.py  Merge several source repos into one distilled snapshot
+│   ├── _multi_snapshot_git.py  Internal to multi_snapshot.py — git plumbing
+│   ├── ecosystem_snapshot.py   Parallel per-repo distill driver for ecosystems
+│   ├── tree_filter.py     Apply --exclude-path regexes when materializing trees
+│   ├── state.py           Atomic save/load of resumable run state (temp + replace)
+│   ├── provenance.py      Sidecar provenance records for refined commit messages
+│   ├── lint.py            Changelog YAML schema validation
+│   ├── errors.py          Structured exception types for core operations
 │   ├── artifact_patterns.py  Regex rules classifying known artifact file types
 │   ├── preflight.py       Scan repo file history into PreflightReport
 │   ├── embeddings.py      Embedding model wrapper (sentence-transformers or hash)

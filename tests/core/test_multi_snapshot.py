@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from typing import Any
 
+import pytest
 import yaml
 
 from repogerbil.core.multi_snapshot import (
@@ -233,8 +235,6 @@ class TestCreateMultiSnapshot:
         dest = tmp_path / "dest"
         dest.mkdir()
         (dest / "blocker.txt").write_text("existing content")
-
-        import pytest
 
         with pytest.raises(RuntimeError, match="not empty"):
             create_multi_snapshot(
@@ -617,16 +617,23 @@ class TestCollectDayContext:
         assert subjects == []
         assert bodies == []
 
-    def test_subprocess_error_skips_repo(self, tmp_path: Path) -> None:
-        """SubprocessError from git is caught and the repo is silently skipped."""
+    def test_git_command_error_skips_repo(self, tmp_path: Path, caplog: Any) -> None:
+        """GitCommandError from _run_git is caught, logged, and the repo is skipped."""
         from datetime import date
-        import subprocess
+        import logging
         from unittest.mock import patch
 
+        from repogerbil.core.errors import GitCommandError
         from repogerbil.core.multi_snapshot import _collect_day_context
 
         repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
-        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=subprocess.SubprocessError):
+        with (
+            caplog.at_level(logging.WARNING, logger="repogerbil.core.multi_snapshot"),
+            patch(
+                "repogerbil.core.multi_snapshot._run_git",
+                side_effect=GitCommandError("boom"),
+            ),
+        ):
             files, subjects, bodies = _collect_day_context(
                 {"alpha": repo},
                 {"alpha"},
@@ -636,22 +643,26 @@ class TestCollectDayContext:
         assert files == []
         assert subjects == []
         assert bodies == []
+        assert any("git log failed for repo alpha" in r.message for r in caplog.records)
 
     def test_body_appended_when_present(self, tmp_path: Path) -> None:
         """Commit body text is collected into the bodies list."""
         from datetime import date
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from repogerbil.core.multi_snapshot import _collect_day_context
 
         repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
-        # format=%s\x1f%b\x1e — subject, unit-sep, body, record-sep
-        msg_mock = MagicMock()
-        msg_mock.stdout = "feat: add foo\x1fThis is the commit body.\x1e"
-        file_mock = MagicMock()
-        file_mock.stdout = "foo.py\n"
+        # Two-call format: metadata = \x00<hash>\x1d<date>\x1d<subject>\x1d<body>
+        # files    = \x00<hash>\n<file>\n
+        commit_hash = "a" * 40
+        meta_out = f"\x00{commit_hash}\x1d2026-04-01\x1dfeat: add foo\x1dThis is the commit body."
+        files_out = f"\x00{commit_hash}\nfoo.py\n"
 
-        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=[msg_mock, file_mock]):
+        with patch(
+            "repogerbil.core.multi_snapshot._run_git",
+            side_effect=[meta_out, files_out],
+        ):
             _, subjects, bodies = _collect_day_context(
                 {"alpha": repo},
                 {"alpha"},
@@ -664,17 +675,20 @@ class TestCollectDayContext:
     def test_empty_file_lines_skipped(self, tmp_path: Path) -> None:
         """Blank lines in file output are not added to the files set."""
         from datetime import date
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from repogerbil.core.multi_snapshot import _collect_day_context
 
         repo = _make_repo(tmp_path, "alpha", [("2026-04-01", "foo.py", "feat: add foo")])
-        msg_mock = MagicMock()
-        msg_mock.stdout = ""
-        file_mock = MagicMock()
-        file_mock.stdout = "\n\nfoo.py\n\n"
+        commit_hash = "a" * 40
+        meta_out = f"\x00{commit_hash}\x1d2026-04-01\x1dfeat: add foo\x1d"
+        # File block has blank lines between paths — they must be filtered out.
+        files_out = f"\x00{commit_hash}\n\nfoo.py\n\n"
 
-        with patch("repogerbil.core.multi_snapshot.subprocess.run", side_effect=[msg_mock, file_mock]):
+        with patch(
+            "repogerbil.core.multi_snapshot._run_git",
+            side_effect=[meta_out, files_out],
+        ):
             files, _, _ = _collect_day_context(
                 {"alpha": repo},
                 {"alpha"},
@@ -683,3 +697,344 @@ class TestCollectDayContext:
             )
         assert files == ["foo.py"]
         assert "" not in files
+
+    def test_body_with_field_separator_byte(self, tmp_path: Path) -> None:
+        """A commit body containing the GS (\\x1d) byte must not poison file parsing.
+
+        Regression for the previous single-call ``--name-only`` parser: a
+        literal ``\\x1d`` in the body would split early and bleed body text
+        into the file block. The two-call architecture eliminates that path
+        entirely — files are keyed by commit hash from a separate ``git log``.
+        """
+        from datetime import date as _date
+        import os
+        import subprocess as _sp
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = tmp_path / "gs_in_body"
+        repo.mkdir()
+        _sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.email", "t@t.test"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+        _sp.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+
+        (repo / "real.py").write_text("real\n")
+        _sp.run(["git", "add", "."], cwd=repo, check=True)
+        # Inject a literal \x1d into the commit body via -F /dev/stdin so the
+        # raw byte ends up in the git object.
+        body = "header line\nfake/path/in/body\x1dmore body text\n"
+        _sp.run(
+            ["git", "commit", "-q", "-F", "-"],
+            cwd=repo,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": "2026-04-01T12:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-01T12:00:00",
+            },
+            input=f"feat: gs body\n\n{body}",
+            text=True,
+            check=True,
+        )
+
+        files, subjects, _bodies = _collect_day_context(
+            {"alpha": repo},
+            {"alpha"},
+            _date(2026, 4, 1),
+            exclude_paths=None,
+        )
+        assert subjects == ["alpha: feat: gs body"]
+        # Crucial: only the real file is collected — none of the body fragments
+        # (e.g. "fake/path/in/body") leak in.
+        assert files == ["real.py"]
+
+    def test_author_date_filter_excludes_committer_date_only_matches(self, tmp_path: Path) -> None:
+        """A commit whose committer date is on `day` but author date is NOT is excluded.
+
+        Simulates a rebased commit: author date 2026-04-01, committer date 2026-04-02.
+        Asking for day=2026-04-02 must NOT include this commit's subject/files.
+        """
+        from datetime import date as _date
+        import os
+        import subprocess as _sp
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = tmp_path / "rebased"
+        repo.mkdir()
+        _sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.email", "t@t.test"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+        _sp.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+
+        # Author date 2026-04-01, committer date 2026-04-02 (rebase-style drift).
+        (repo / "rebased.py").write_text("x\n")
+        _sp.run(["git", "add", "."], cwd=repo, check=True)
+        _sp.run(
+            ["git", "commit", "-q", "-m", "feat: rebased"],
+            cwd=repo,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": "2026-04-01T12:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-02T12:00:00",
+            },
+            check=True,
+        )
+        # A second commit authored AND committed on 2026-04-02 — this one
+        # *should* be picked up when we ask for day=2026-04-02.
+        (repo / "fresh.py").write_text("y\n")
+        _sp.run(["git", "add", "."], cwd=repo, check=True)
+        _sp.run(
+            ["git", "commit", "-q", "-m", "feat: fresh"],
+            cwd=repo,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": "2026-04-02T12:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-02T12:00:00",
+            },
+            check=True,
+        )
+
+        files, subjects, _ = _collect_day_context(
+            {"repo": repo},
+            {"repo"},
+            _date(2026, 4, 2),
+            exclude_paths=None,
+        )
+        # Only the fresh commit (authored on 04-02) is included.
+        assert subjects == ["repo: feat: fresh"]
+        assert "fresh.py" in files
+        assert "rebased.py" not in files
+
+        # And asking for 04-01 picks up the rebased commit by its author date,
+        # even though its committer date is 04-02.
+        files1, subjects1, _ = _collect_day_context(
+            {"repo": repo},
+            {"repo"},
+            _date(2026, 4, 1),
+            exclude_paths=None,
+        )
+        assert subjects1 == ["repo: feat: rebased"]
+        assert "rebased.py" in files1
+
+    def test_author_date_picked_up_when_committer_date_is_weeks_earlier(self, tmp_path: Path) -> None:
+        """A commit with committer date >7 days BEFORE author date is still picked up.
+
+        Regression for the previous ±7-day window which was too tight to cover
+        the case where committer date sits well before author date (e.g.
+        manually backdated committer-date, or weird rebase scenarios). The
+        widened ±30-day window now catches a 14-day asymmetry like this.
+        """
+        from datetime import date as _date
+        import os
+        import subprocess as _sp
+
+        from repogerbil.core.multi_snapshot import _collect_day_context
+
+        repo = tmp_path / "skew"
+        repo.mkdir()
+        _sp.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.email", "t@t.test"], cwd=repo, check=True)
+        _sp.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+        _sp.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+
+        # Author date 2026-04-15, committer date 2026-04-01 (14-day skew —
+        # committer date *earlier* than author date, outside the old ±7-day
+        # window but well within the new ±30-day window).
+        (repo / "skewed.py").write_text("x\n")
+        _sp.run(["git", "add", "."], cwd=repo, check=True)
+        _sp.run(
+            ["git", "commit", "-q", "-m", "feat: skewed"],
+            cwd=repo,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": "2026-04-15T12:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-01T12:00:00",
+            },
+            check=True,
+        )
+
+        files, subjects, _ = _collect_day_context(
+            {"repo": repo},
+            {"repo"},
+            _date(2026, 4, 15),
+            exclude_paths=None,
+        )
+        # The widened window picks this up by author date even though committer
+        # date is 14 days earlier.
+        assert subjects == ["repo: feat: skewed"]
+        assert "skewed.py" in files
+
+
+class TestMultiSnapshotEcosystemLabel:
+    def test_default_label_in_message(self, tmp_path: Path) -> None:
+        """Default ecosystem_label appears in the first line when there is a changelog."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-01-15", "a.py", "feat: init")])
+        # Use TWO repos so the single-repo short-circuit in _build_message is not taken.
+        repo_b = _make_repo(tmp_path, "beta", [("2026-01-15", "b.py", "feat: init beta")])
+        dest = tmp_path / "dest"
+
+        cl_dir = tmp_path / "changelogs" / "alpha"
+        cl_dir.mkdir(parents=True)
+        (cl_dir / "2026-01-15-alpha-changelog.yaml").write_text(
+            yaml.dump({"date": "2026-01-15", "repo": "alpha", "title": "Title"})
+        )
+
+        create_multi_snapshot(
+            source_repos={"alpha": repo, "beta": repo_b},
+            dest_path=dest,
+            changelog_dir=tmp_path / "changelogs",
+        )
+
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=dest, capture_output=True, text=True, check=True
+        )
+        assert "2026-01-15 ecosystem" in log.stdout
+        assert "pyvider" not in log.stdout
+
+    def test_custom_label_overrides_default(self, tmp_path: Path) -> None:
+        """A caller-supplied ecosystem_label appears verbatim in the commit subject."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-01-15", "a.py", "feat: init")])
+        repo_b = _make_repo(tmp_path, "beta", [("2026-01-15", "b.py", "feat: init beta")])
+        dest = tmp_path / "dest"
+
+        cl_dir = tmp_path / "changelogs" / "alpha"
+        cl_dir.mkdir(parents=True)
+        (cl_dir / "2026-01-15-alpha-changelog.yaml").write_text(
+            yaml.dump({"date": "2026-01-15", "repo": "alpha", "title": "Title"})
+        )
+
+        create_multi_snapshot(
+            source_repos={"alpha": repo, "beta": repo_b},
+            dest_path=dest,
+            changelog_dir=tmp_path / "changelogs",
+            ecosystem_label="my-platform",
+        )
+
+        log = subprocess.run(
+            ["git", "log", "--format=%s"], cwd=dest, capture_output=True, text=True, check=True
+        )
+        assert "2026-01-15 my-platform" in log.stdout
+
+
+class TestMultiSnapshotAuthorIdentity:
+    def test_explicit_author_overrides_global(self, tmp_path: Path) -> None:
+        """When author_name + author_email are provided, dest commits use them."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-01-15", "a.py", "feat: init")])
+        dest = tmp_path / "dest"
+
+        create_multi_snapshot(
+            source_repos={"alpha": repo},
+            dest_path=dest,
+            author_name="Snapshot Bot",
+            author_email="bot@example.invalid",
+        )
+
+        log = subprocess.run(
+            ["git", "log", "--format=%an <%ae>"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "Snapshot Bot <bot@example.invalid>" in log.stdout
+
+    def test_default_inherits_global_config(self, tmp_path: Path) -> None:
+        """With no explicit author, the dest repo has no committed user.email override."""
+        repo = _make_repo(tmp_path, "alpha", [("2026-01-15", "a.py", "feat: init")])
+        dest = tmp_path / "dest"
+
+        create_multi_snapshot(source_repos={"alpha": repo}, dest_path=dest)
+
+        # Local repo config should NOT contain a user.email key (inherits global).
+        cfg = subprocess.run(
+            ["git", "config", "--local", "--get", "user.email"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert cfg.returncode != 0  # key not set locally
+
+
+class TestMultiSnapshotCommitTreeFailure:
+    def test_commit_tree_failure_raises(self, tmp_path: Path) -> None:
+        """When git commit-tree fails, _commit_tree surfaces a GitCommandError."""
+        from repogerbil.core._multi_snapshot_git import _commit_tree
+        from repogerbil.core.errors import GitCommandError
+
+        # Init an empty repo with a global identity so commit-tree could otherwise succeed.
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+
+        # Use an obviously invalid tree SHA so commit-tree fails fast.
+        with pytest.raises(GitCommandError):
+            _commit_tree(dest, "0" * 40, "msg", "2026-01-15T20:00:00-0800")
+
+
+class TestMultiSnapshotBuildMergedTreeFailure:
+    def test_build_merged_tree_failure_raises(self, tmp_path: Path) -> None:
+        """An invalid tree SHA passed to _build_merged_tree raises GitCommandError."""
+        from repogerbil.core._multi_snapshot_git import _build_merged_tree
+        from repogerbil.core.errors import GitCommandError
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+
+        with pytest.raises(GitCommandError):
+            _build_merged_tree(dest, {"alpha": "0" * 40})
+
+    def test_build_merged_tree_cleans_up_idx_and_lock_on_failure(self, tmp_path: Path) -> None:
+        """Idx temp file and any sibling .lock are removed even when git fails."""
+        from repogerbil.core._multi_snapshot_git import _build_merged_tree
+        from repogerbil.core.errors import GitCommandError
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+
+        # Pre-seed a lock file that would already exist if a previous git call
+        # had been interrupted — the .lock cleanup in finally must remove it
+        # too. We can't predict the mkstemp name, so seed *any* matching idx
+        # file and lock pair to assert nothing of the new shape leaks after.
+        with pytest.raises(GitCommandError):
+            _build_merged_tree(dest, {"alpha": "0" * 40})
+
+        leftovers = sorted((dest / ".git").glob("multi-snap-idx-*"))
+        assert leftovers == []
+
+
+class TestMultiSnapshotLLMFailureLogged:
+    def test_llm_failure_logs_warning(self, tmp_path: Path, caplog: Any) -> None:
+        """An LLM failure during refinement emits a WARNING via the module logger."""
+        import logging
+        from unittest.mock import MagicMock
+
+        repo = _make_repo(tmp_path, "alpha", [("2026-03-01", "a.py", "wip: messy")])
+        dest = tmp_path / "dest"
+
+        bad = MagicMock()
+        bad.generate.side_effect = RuntimeError("ollama gone")
+
+        with caplog.at_level(logging.WARNING, logger="repogerbil.core.multi_snapshot"):
+            result = create_multi_snapshot(
+                source_repos={"alpha": repo},
+                dest_path=dest,
+                llm_generator=bad,
+            )
+
+        assert result.commits_created == 1
+        assert any("LLM refinement failed" in r.message for r in caplog.records)
+
+
+class TestEcosystemSettings:
+    def test_settings_default_ecosystem_label(self) -> None:
+        """The Settings model defaults ecosystem_label to the generic placeholder."""
+        from repogerbil.core.config import Settings
+
+        s = Settings()
+        assert s.ecosystem_label == "ecosystem"
+        assert s.snapshot_author_name is None
+        assert s.snapshot_author_email is None

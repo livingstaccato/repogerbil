@@ -188,18 +188,24 @@ def _parse_commits_subject_only(repo_path: str | Path, date_str: str) -> list[Co
 
 
 def _attach_file_lists(repo_path: str | Path, commits: list[CommitInfo]) -> list[CommitInfo]:
-    """Attach per-commit file lists by parsing --name-only output."""
-    output = _run_git(repo_path, "log", "--format=%H", "--name-only", "--all")
+    """Attach per-commit file lists by parsing --name-only output.
+
+    Uses a NUL-prefixed ``--format`` sentinel so hash lines are unambiguous
+    regardless of hash length (SHA-1 vs SHA-256) and even when a file path
+    happens to look like a hex digest.
+    """
+    output = _run_git(repo_path, "log", "--format=%x00%H", "--name-only", "--all")
     hash_files: dict[str, list[str]] = {}
     current_hash: str | None = None
     for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
-            current_hash = stripped
+        if line.startswith("\x00"):
+            current_hash = line[1:].strip()
             hash_files[current_hash] = []
-        elif current_hash:  # pragma: no branch — always true after first hash line
+            continue
+        if current_hash is None:
+            continue
+        stripped = line.strip()
+        if stripped:
             hash_files[current_hash].append(stripped)
 
     return [
@@ -295,7 +301,7 @@ def get_commits_for_path(
     else:
         for line in output.strip().splitlines():
             parts = line.split("\x00", 3)
-            if len(parts) >= 3:  # pragma: no cover — false branch unreachable with valid git output
+            if len(parts) >= 3:
                 commits.append(
                     CommitInfo(
                         hash=parts[0],

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from repogerbil.cli.commands.distill_cmds import _find_source_repo
+from repogerbil.cli.commands.distill_cmds._helpers import _find_source_repo
 from repogerbil.cli.main import cli
 from repogerbil.core.errors import GitCommandError
 

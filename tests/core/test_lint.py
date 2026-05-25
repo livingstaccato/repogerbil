@@ -445,3 +445,51 @@ class TestLintResult:
         assert r.ok
         r.errors.append("bad")
         assert not r.ok
+
+
+class TestValidCategoriesDerivation:
+    """``VALID_CATEGORIES`` must follow the vocabulary, not drift from it."""
+
+    def test_module_attribute_includes_all_vocabulary_categories(self) -> None:
+        from repogerbil.core.lint import VALID_CATEGORIES
+        from repogerbil.core.vocabulary import CATEGORIES
+
+        for key in CATEGORIES:
+            assert key in VALID_CATEGORIES, key
+
+    def test_module_attribute_includes_legacy_synonyms(self) -> None:
+        from repogerbil.core.lint import _CATEGORY_SYNONYMS, VALID_CATEGORIES
+
+        for synonym in _CATEGORY_SYNONYMS:
+            assert synonym in VALID_CATEGORIES, synonym
+
+    def test_new_vocabulary_category_picked_up_by_valid_categories(self, monkeypatch: "Any") -> None:
+        """Adding a vocabulary entry at runtime appears in :func:`_valid_categories`.
+
+        This pins the derivation: ``_valid_categories()`` reads vocabulary live,
+        so adding a category in ``vocabulary._default_categories`` does not
+        require a parallel edit in lint.py.
+        """
+        from repogerbil.core import lint, vocabulary as vocab_mod
+        from repogerbil.core.vocabulary import CategoryDefinition
+
+        custom = dict(vocab_mod.CATEGORIES)
+        custom["choreograph"] = CategoryDefinition(label="choreograph", conventional="chore")
+        monkeypatch.setattr(lint, "CATEGORIES", custom)
+
+        assert "choreograph" in lint._valid_categories()
+
+    def test_new_vocabulary_category_accepted_by_linter(self, monkeypatch: "Any", tmp_path: Path) -> None:
+        """A custom category added to vocabulary lints cleanly without code edit."""
+        from repogerbil.core import lint, vocabulary as vocab_mod
+        from repogerbil.core.vocabulary import CategoryDefinition
+
+        custom = dict(vocab_mod.CATEGORIES)
+        custom["choreograph"] = CategoryDefinition(label="choreograph", conventional="chore")
+        monkeypatch.setattr(lint, "CATEGORIES", custom)
+
+        data = _valid_changelog()
+        data["changes"][0]["category"] = "choreograph"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert result.ok, result.errors

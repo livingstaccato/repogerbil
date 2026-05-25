@@ -55,7 +55,9 @@ def enrich_changelog(
             change["stats"] = section_stats
             modified = True
 
-        if depth in ("file", "package", "cross-repo"):  # pragma: no cover — grep-based
+        # depth is constrained by the Settings literal to exactly these three
+        # values, so the False branch is unreachable in practice.
+        if depth in ("file", "package", "cross-repo"):  # pragma: no branch
             impact = _find_importers(repo_path, section_files, depth)
             if impact:
                 change["impact"] = impact
@@ -115,12 +117,20 @@ def _run_file_shortstat(
         )
 
 
-def _find_importers(  # pragma: no cover — grep-based, environment-dependent
+def _find_importers(
     repo_path: str | Path,
     changed_files: set[str],
     depth: str,
 ) -> dict[str, Any]:
-    """Find files/packages that depend on the changed files."""
+    """Find files/packages that depend on the changed files.
+
+    Uses ``git grep`` to locate files that reference the basename of any
+    changed file. The exit code from ``git grep`` is **not** a fatal error —
+    a returncode of 1 simply means "no matches", and any other failure
+    (binary index, regex error in the basename, etc.) is reported via
+    :class:`GitCommandError` from the ``_run_git`` wrapper and swallowed
+    here so a single bad basename does not abort the whole enrichment.
+    """
     impact: dict[str, Any] = {}
 
     importing_files: set[str] = set()
@@ -128,14 +138,17 @@ def _find_importers(  # pragma: no cover — grep-based, environment-dependent
         base_name = Path(changed).stem
         try:
             result = _run_git(repo_path, "grep", "-l", base_name, "HEAD", timeout=10)
-            for line in result.strip().splitlines():
-                path = line.split(":", 1)[-1] if ":" in line else line
-                if path not in changed_files and not path.endswith(
-                    (".md", ".yaml", ".yml", ".json", ".lock"),
-                ):
-                    importing_files.add(path)
-        except Exception:  # noqa: S110 — grep may fail on some repos  # pragma: no cover
-            pass
+        except GitCommandError:
+            # ``git grep`` exits 1 when there are no matches — _run_git turns
+            # that into a GitCommandError. Treat any grep failure as "no
+            # importers found for this basename" and continue to the next.
+            continue
+        for line in result.strip().splitlines():
+            path = line.split(":", 1)[-1] if ":" in line else line
+            if path not in changed_files and not path.endswith(
+                (".md", ".yaml", ".yml", ".json", ".lock"),
+            ):
+                importing_files.add(path)
 
     if importing_files:
         impact["files"] = sorted(importing_files)[:20]

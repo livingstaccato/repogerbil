@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+
+# Nightly mutation testing (mutmut). Excluded from PR CI because mutation
+# testing is slow; runs on a cron and can be triggered manually.
+#
+# Script policy: this workflow keeps every `run:` block <=3 lines. Any
+# longer driver logic belongs in scripts/run_mutation_test.py or a Makefile
+# target (see `make mutation-ci`).
+
+name: Mutation
+
+on:
+  schedule:
+    # Nightly at 04:00 UTC.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  mutmut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      # Checkout full history so mutmut can diff against the working tree.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install uv (provides the python interpreter via uv sync).
+      - uses: astral-sh/setup-uv@v5
+
+      # Pin Python version.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Cache mutmut state across runs to avoid re-running unchanged mutants.
+      # mutmut 4.x stores its state in .mutmut-cache (SQLite); the legacy
+      # `mutants/` directory was unused and dropped from the cache paths.
+      - name: cache mutmut state
+        uses: actions/cache@v4
+        with:
+          path: |
+            .mutmut-cache
+          key: mutmut-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'src/repogerbil/**/*.py') }}
+          restore-keys: |
+            mutmut-${{ runner.os }}-
+
+      # Cache mypy and ruff caches for faster pre-mutmut sanity.
+      - name: cache lint caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .mypy_cache
+            .ruff_cache
+          key: lint-cache-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+
+      # Install project dependencies.
+      - name: install
+        run: uv sync --all-extras
+
+      # Run mutation tests via the Makefile target.
+      - name: run mutmut
+        run: make mutation-ci
+
+      # Upload summary artifact regardless of pass/fail for inspection.
+      - name: upload summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-summary
+          path: |
+            mutation-summary.txt
+            mutation-results.json

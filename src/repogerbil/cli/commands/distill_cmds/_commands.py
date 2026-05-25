@@ -224,7 +224,11 @@ def snapshot(
     groups = group_by_cadence(all_commits, cad)
     click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
 
-    changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
+    changelog_messages = (
+        _load_changelog_messages(changelog_dir, path.name, vocabulary=settings.vocabulary)
+        if changelog_dir
+        else None
+    )
 
     llm_generator = _build_llm_generator(settings) if use_llm else None
 
@@ -269,6 +273,14 @@ def snapshot(
     multiple=True,
     help="Regex patterns to strip from every committed tree (repeatable)",
 )
+@click.option(
+    "--ecosystem-label",
+    default=None,
+    help=(
+        "Label appended after the date on each commit's first line "
+        "(e.g. '2026-05-24 my-platform'). Overrides Settings.ecosystem_label."
+    ),
+)
 def multi_snapshot(
     dest_path: str,
     repos: tuple[str, ...],
@@ -279,6 +291,7 @@ def multi_snapshot(
     dry_run: bool,
     llm_refine: bool | None,
     exclude_paths: tuple[str, ...],
+    ecosystem_label: str | None,
 ) -> None:
     """Create a new repo merging multiple source repos into daily commits."""
     from datetime import date as date_type
@@ -290,6 +303,7 @@ def multi_snapshot(
     cl_dir = Path(changelog_dir) if changelog_dir else None
     settings = load_settings()
     use_llm = settings.llm_refine if llm_refine is None else llm_refine
+    resolved_label = ecosystem_label if ecosystem_label is not None else settings.ecosystem_label
 
     if dry_run:
         _preview_multi_snapshot(source_repos, since_date)
@@ -306,6 +320,9 @@ def multi_snapshot(
         changelog_dir=cl_dir,
         exclude_paths=list(exclude_paths) or None,
         llm_generator=llm_generator,
+        ecosystem_label=resolved_label,
+        author_name=settings.snapshot_author_name,
+        author_email=settings.snapshot_author_email,
     )
     click.echo(
         f"Multi-snapshot created at {result.dest_path} "

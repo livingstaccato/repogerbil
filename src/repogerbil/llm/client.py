@@ -57,14 +57,14 @@ class FakeOllamaClient:
         return response
 
 
-class HTTPOllamaClient:  # pragma: no cover — transport boundary, tested via integration only
+class HTTPOllamaClient:
     """Production Ollama HTTP client using stdlib ``urllib.request`` (no extra deps).
 
     Sends a ``POST /api/generate`` request with structured-output JSON schema
     constraint (``format`` field) and returns the parsed response object.
     """
 
-    def __init__(self, base_url: str = "http://localhost:11434") -> None:
+    def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
 
     def generate(

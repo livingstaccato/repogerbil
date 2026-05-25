@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import logging
 from pathlib import Path
-import subprocess
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -28,6 +28,13 @@ from repogerbil.llm.prompt import WELL_FORMED_RE
 
 if TYPE_CHECKING:
     from repogerbil.llm.generator import MessageGenerator
+
+logger = logging.getLogger(__name__)
+
+# Fallback used by ``_build_message`` when no caller-supplied label is passed.
+# Real callers (CLI / API) thread the value from Settings; this constant only
+# exists so direct test/library invocations remain ergonomic.
+_DEFAULT_ECOSYSTEM_LABEL = "ecosystem"
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,9 @@ def create_multi_snapshot(
     changelog_dir: Path | None = None,
     exclude_paths: list[str] | None = None,
     llm_generator: MessageGenerator | None = None,
+    ecosystem_label: str = _DEFAULT_ECOSYSTEM_LABEL,
+    author_name: str | None = None,
+    author_email: str | None = None,
 ) -> MultiSnapshotResult:
     """Create an independent repo with one daily commit merging multiple source repos.
 
@@ -65,6 +75,13 @@ def create_multi_snapshot(
         changelog_dir: Directory containing <repo>/<date>-<repo>-changelog.yaml files.
         exclude_paths: Regex patterns stripped from every committed tree (via re.search).
         llm_generator: When set, refine each commit message using the LLM.
+        ecosystem_label: Label appended after the date in each commit's first line
+            (``"YYYY-MM-DD <label>"``). Defaults to a generic placeholder; callers
+            should thread Settings.ecosystem_label here.
+        author_name: Optional git author/committer name for the destination repo.
+            When both ``author_name`` and ``author_email`` are ``None``, the
+            destination inherits the user's global git config.
+        author_email: Optional git author/committer email for the destination repo.
 
     Returns:
         MultiSnapshotResult with path and counts.
@@ -84,7 +101,12 @@ def create_multi_snapshot(
         return MultiSnapshotResult(dest_path=dest_path, commits_created=0, repos_included=[])
 
     # Initialize destination repo and fetch sources
-    _init_dest_repo(dest_path, source_repos)
+    _init_dest_repo(
+        dest_path,
+        source_repos,
+        author_name=author_name,
+        author_email=author_email,
+    )
 
     # Load changelog messages
     changelog_messages = _load_multi_changelog_messages(changelog_dir) if changelog_dir else {}
@@ -107,6 +129,7 @@ def create_multi_snapshot(
         exclude_paths=exclude_paths,
         llm_generator=llm_generator,
         summaries_path=summaries_path,
+        ecosystem_label=ecosystem_label,
     )
 
     # Cleanup remotes
@@ -139,6 +162,7 @@ def _create_daily_commits(
     exclude_paths: list[str] | None = None,
     llm_generator: MessageGenerator | None = None,
     summaries_path: Path | None = None,
+    ecosystem_label: str = _DEFAULT_ECOSYSTEM_LABEL,
 ) -> int:
     """Create one commit per active day in the destination repo."""
     import json
@@ -169,7 +193,7 @@ def _create_daily_commits(
             # Strip the "reponame: " prefix that _collect_day_context prepends before checking
             raw_subjects = [s.split(": ", 1)[1] if ": " in s else s for s in subjects]
             if raw_subjects and all(WELL_FORMED_RE.match(s) for s in raw_subjects):
-                message = _build_message(day, active_repos, changelog_messages)
+                message = _build_message(day, active_repos, changelog_messages, ecosystem_label)
             else:
                 try:
                     generated = llm_generator.generate(
@@ -180,10 +204,15 @@ def _create_daily_commits(
                         original_bodies=bodies,
                     )
                     message = generated.message
-                except Exception:
-                    message = _build_message(day, active_repos, changelog_messages)
+                except Exception as exc:
+                    logger.warning(
+                        "LLM refinement failed for %s, falling back to non-LLM message: %s",
+                        day.isoformat(),
+                        exc,
+                    )
+                    message = _build_message(day, active_repos, changelog_messages, ecosystem_label)
         else:
-            message = _build_message(day, active_repos, changelog_messages)
+            message = _build_message(day, active_repos, changelog_messages, ecosystem_label)
 
         timestamp = _make_timestamp(day, commit_time, timezone)
         first_line = message.splitlines()[0][:72]
@@ -267,13 +296,14 @@ def _build_message(
     day: date,
     active_repos: set[str],
     changelog_messages: dict[str, dict[str, str]],
+    ecosystem_label: str = _DEFAULT_ECOSYSTEM_LABEL,
 ) -> str:
     """Build commit message from changelog YAMLs or fallback.
 
     Only includes repos that had actual commits on this day (not carried-forward).
     """
     date_str = day.isoformat()
-    lines = [f"{date_str} pyvider ecosystem", ""]
+    lines = [f"{date_str} {ecosystem_label}", ""]
 
     has_changelog = False
     for name in sorted(active_repos):
@@ -331,13 +361,31 @@ def _collect_day_context(
 ) -> tuple[list[str], list[str], list[str]]:
     """Collect files changed, commit subjects, and bodies for all active repos on a day.
 
-    Uses two separate git calls per repo: one for subjects/bodies, one for file names.
+    Uses two ``git log`` calls per repo: one for metadata (date/subject/body)
+    keyed by commit hash, one for file names keyed by the same hash. Splitting
+    the calls eliminates the previous parser ambiguity where a commit body
+    containing the field-separator byte (``\\x1d``) could bleed into the
+    ``--name-only`` file block. Best-effort: a repo that errors is logged at
+    WARNING and skipped.
+
+    Filters by **author date** (``%as``) — consistent with sibling helpers.
+    ``git log --since/--until`` uses committer date, so we widen by ±30 days
+    and exact-match by author date in Python. Known limitation: a commit
+    whose committer date is *older* than its author date by more than 30
+    days (exotic clock skew / backdated committer date) is silently dropped.
+    The common case (committer date newer than author date — rebase /
+    cherry-pick / late merge) is well covered.
 
     Returns:
         Tuple of (sorted_files, subjects, bodies) for passing to MessageGenerator.
     """
-    since = f"{day.isoformat()}T00:00:00"
-    until = f"{day.isoformat()}T23:59:59"
+    # ±30 days bounds the ``git log`` cost on large repos while covering all
+    # rebase / cherry-pick patterns we have seen. See docstring for the
+    # asymmetric edge case left intentionally unaddressed.
+    window = timedelta(days=30)
+    since = f"{(day - window).isoformat()}T00:00:00"
+    until = f"{(day + window).isoformat()}T23:59:59"
+    day_iso = day.isoformat()
     all_files: set[str] = set()
     subjects: list[str] = []
     bodies: list[str] = []
@@ -347,43 +395,105 @@ def _collect_day_context(
         if path is None or not path.exists():
             continue
         try:
-            # Subjects and bodies — one record separator (RS = \x1e) per commit
-            msg_out = subprocess.run(  # noqa: S603
-                ["git", "log", f"--since={since}", f"--until={until}", "--format=%s\x1f%b\x1e"],  # noqa: S607
-                cwd=str(path),
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30,
-            ).stdout
-            # Files changed — empty format strips hash lines
-            file_out = subprocess.run(  # noqa: S603
-                ["git", "log", f"--since={since}", f"--until={until}", "--name-only", "--format="],  # noqa: S607
-                cwd=str(path),
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30,
-            ).stdout
-        except subprocess.SubprocessError:
+            meta_out, files_out = _git_log_meta_and_files(path, since, until)
+        except GitCommandError as exc:
+            logger.warning(
+                "git log failed for repo %s on %s, skipping: %s",
+                name,
+                day_iso,
+                exc,
+            )
             continue
 
-        for record in msg_out.split("\x1e"):
-            record = record.strip()
-            if not record:
-                continue
-            parts = record.split("\x1f", 1)
-            subject = parts[0].strip()
-            body = parts[1].strip() if len(parts) > 1 else ""
-            if subject:  # pragma: no branch — git always produces non-empty subjects
-                subjects.append(f"{name}: {subject}")
-            if body:
-                bodies.append(body)
-
-        for line in file_out.splitlines():
-            line = line.strip()
-            if line:
-                all_files.add(line)
+        _parse_day_log(meta_out, files_out, name, day_iso, all_files, subjects, bodies)
 
     filtered = exclude_files(all_files, exclude_paths)
     return sorted(filtered), subjects, bodies
+
+
+def _git_log_meta_and_files(repo_path: Path, since: str, until: str) -> tuple[str, str]:
+    """Run two ``git log`` calls — metadata + file names — over the same window.
+
+    Both calls share the same ``--since``/``--until`` bounds so the resulting
+    hash sets are identical; keeping them separate avoids the body-vs-file
+    parser ambiguity that would otherwise arise when a commit body contains
+    the field-separator byte (``\\x1d``).
+    """
+    # Metadata: leading NUL + hash, then \x1d-separated date/subject/body.
+    # Use git's ``%xNN`` format escapes so the control bytes are emitted by
+    # git itself — we cannot pass literal \x00 / \x1d in argv on POSIX.
+    meta_fmt = "%x00%H%x1d%as%x1d%s%x1d%b"
+    meta = _run_git(
+        repo_path,
+        "log",
+        f"--since={since}",
+        f"--until={until}",
+        f"--format={meta_fmt}",
+        timeout=30,
+    )
+    # Files: leading NUL + hash, then ``--name-only`` block. No user-controlled
+    # body content here, so the NUL sentinel is unambiguous.
+    files = _run_git(
+        repo_path,
+        "log",
+        f"--since={since}",
+        f"--until={until}",
+        "--format=%x00%H",
+        "--name-only",
+        timeout=30,
+    )
+    return meta, files
+
+
+def _parse_day_log(
+    meta_out: str,
+    files_out: str,
+    repo_name: str,
+    day_iso: str,
+    all_files: set[str],
+    subjects: list[str],
+    bodies: list[str],
+) -> None:
+    """Parse the metadata + files outputs from ``_git_log_meta_and_files``.
+
+    Metadata records start with ``\\x00<hash>`` then ``\\x1d``-separated
+    date/subject/body. File records start with ``\\x00<hash>`` followed by one
+    file path per line. Mutates ``all_files`` / ``subjects`` / ``bodies`` in
+    place once author-date matches ``day_iso``.
+    """
+    files_by_hash = _parse_files_block(files_out)
+    for record in meta_out.split("\x00"):
+        if not record:
+            continue
+        # Parse: hash\x1dauthor_date\x1dsubject\x1dbody
+        parts = record.split("\x1d", 3)
+        if len(parts) < 4:  # pragma: no cover — git format guarantees 3 separators
+            continue
+        commit_hash = parts[0].strip()
+        author_date = parts[1].strip()
+        # Filter on author date — only commits actually authored on `day`.
+        if author_date != day_iso:
+            continue
+        subject = parts[2].strip()
+        body = parts[3].strip()
+        if subject:  # pragma: no branch — git always produces non-empty subjects
+            subjects.append(f"{repo_name}: {subject}")
+        if body:
+            bodies.append(body)
+        all_files.update(files_by_hash.get(commit_hash, set()))
+
+
+def _parse_files_block(files_out: str) -> dict[str, set[str]]:
+    """Group ``--name-only`` file paths by their NUL-prefixed commit hash."""
+    result: dict[str, set[str]] = {}
+    current: str | None = None
+    for line in files_out.splitlines():
+        if line.startswith("\x00"):
+            current = line[1:].strip()
+            continue
+        if current is None:  # pragma: no cover — files always follow a NUL-hash sentinel
+            continue
+        stripped = line.strip()
+        if stripped:
+            result.setdefault(current, set()).add(stripped)
+    return result

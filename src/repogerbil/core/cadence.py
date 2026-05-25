@@ -15,6 +15,9 @@ _SECONDS_PER_HOUR = 3600
 _SECONDS_PER_DAY = 86400
 _SECONDS_PER_WEEK = 7 * _SECONDS_PER_DAY
 _EPOCH_MONDAY_OFFSET = 3 * _SECONDS_PER_DAY  # 1970-01-01 was Thursday
+# Note: weekly bucketing assumes UTC timestamps >= 0 (post-1970). Pre-1970 dates
+# would land in incorrect buckets due to Python floor-division on negative
+# values. Git repos do not predate 1970 in practice.
 
 
 @dataclass(frozen=True)

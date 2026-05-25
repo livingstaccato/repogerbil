@@ -93,25 +93,31 @@ def _attach_commit_files_from_range(
     from_ref: str,
     to_ref: str,
 ) -> list[CommitInfo]:
-    """Attach per-commit file lists for a ref range."""
+    """Attach per-commit file lists for a ref range.
+
+    Uses a NUL-prefixed ``--format`` sentinel so hash lines are unambiguous
+    regardless of hash length (SHA-1 vs SHA-256) and even when a file path
+    happens to look like a hex digest.
+    """
     output = _run_git(
         repo_path,
         "log",
         "--no-merges",
-        "--format=%H",
+        "--format=%x00%H",
         "--name-only",
         f"{from_ref}..{to_ref}",
     )
     hash_files: dict[str, list[str]] = {}
     current_hash: str | None = None
     for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
-            current_hash = stripped
+        if line.startswith("\x00"):
+            current_hash = line[1:].strip()
             hash_files[current_hash] = []
-        elif current_hash is not None:
+            continue
+        if current_hash is None:
+            continue
+        stripped = line.strip()
+        if stripped:
             hash_files[current_hash].append(stripped)
     return [
         CommitInfo(

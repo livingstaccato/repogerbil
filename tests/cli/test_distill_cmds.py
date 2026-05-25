@@ -208,6 +208,57 @@ class TestMultiSnapshot:
         assert result.exit_code == 0
         assert "Multi-snapshot created" in result.output
 
+    def test_ecosystem_label_flag(self, tmp_path: Path) -> None:
+        """The --ecosystem-label CLI flag overrides the Settings default."""
+        # Use TWO source repos so the single-repo short-circuit in _build_message
+        # (which returns "<date> <reponame>") is not taken — the ecosystem label
+        # only appears when len(active_repos) > 1 OR a changelog is present.
+        repo_a = _init_test_repo(tmp_path)
+        repo_b = tmp_path / "other"
+        repo_b.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_b, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo_b, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo_b, capture_output=True, check=True)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (repo_b / "z.py").write_text("z\n")
+        subprocess.run(["git", "add", "."], cwd=repo_b, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: init b"],
+            cwd=repo_b,
+            capture_output=True,
+            check=True,
+            env={
+                **env,
+                "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+            },
+        )
+
+        dest = tmp_path / "multi-eco"
+        result = CliRunner().invoke(
+            cli,
+            [
+                "multi-snapshot",
+                str(dest),
+                "--repo",
+                f"testrepo:{repo_a}",
+                "--repo",
+                f"other:{repo_b}",
+                "--ecosystem-label",
+                "my-platform",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        log = subprocess.run(
+            ["git", "log", "--format=%s"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "my-platform" in log.stdout
+        assert "ecosystem" not in log.stdout.replace("my-platform", "")
+
 
 class TestSnapshot:
     def test_basic_snapshot(self, tmp_path: Path) -> None:
@@ -532,7 +583,7 @@ class TestDistill:
 
 class TestDeriveCommitType:
     def test_known_categories_map_to_conventional_types(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+        from repogerbil.cli.commands.distill_cmds._helpers import _derive_commit_type
 
         cases = {
             "instantiate": "feat",
@@ -552,25 +603,25 @@ class TestDeriveCommitType:
             assert _derive_commit_type(data) == expected, f"{category} → {expected}"
 
     def test_unknown_category_returns_empty(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+        from repogerbil.cli.commands.distill_cmds._helpers import _derive_commit_type
 
         assert _derive_commit_type({"changes": [{"category": "unknown-xyz"}]}) == ""
 
     def test_empty_changes_returns_empty(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+        from repogerbil.cli.commands.distill_cmds._helpers import _derive_commit_type
 
         assert _derive_commit_type({"changes": []}) == ""
         assert _derive_commit_type({}) == ""
 
     def test_non_dict_change_skipped(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _derive_commit_type
+        from repogerbil.cli.commands.distill_cmds._helpers import _derive_commit_type
 
         # Non-dict entries are skipped; falls through to next entry
         data = {"changes": ["not-a-dict", {"category": "instantiate"}]}
         assert _derive_commit_type(data) == "feat"
 
     def test_changelog_to_message_adds_prefix(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _changelog_to_message
+        from repogerbil.cli.commands.distill_cmds._helpers import _changelog_to_message
 
         data = {
             "title": "Add widget factory",
@@ -581,7 +632,7 @@ class TestDeriveCommitType:
         assert msg.startswith("feat: Add widget factory")
 
     def test_changelog_to_message_no_double_prefix(self) -> None:
-        from repogerbil.cli.commands.distill_cmds import _changelog_to_message
+        from repogerbil.cli.commands.distill_cmds._helpers import _changelog_to_message
 
         data = {
             "title": "feat: Add widget factory",
@@ -591,6 +642,111 @@ class TestDeriveCommitType:
         msg = _changelog_to_message(data)
         assert msg.startswith("feat: Add widget factory")
         assert not msg.startswith("feat: feat:")
+
+    def test_known_prefix_re_includes_all_vocabulary_prefixes(self) -> None:
+        """The compiled prefix regex must cover every prefix in
+        ``vocabulary.PREFIX_TO_CATEGORY`` — including ones the old hardcoded
+        regex missed (scaffold, rename, spec, revert, config, release).
+        """
+        from repogerbil.cli.commands.distill_cmds._helpers import _KNOWN_PREFIX_RE
+        from repogerbil.core.vocabulary import PREFIX_TO_CATEGORY
+
+        for prefix in PREFIX_TO_CATEGORY:
+            assert _KNOWN_PREFIX_RE.match(f"{prefix}: something"), prefix
+
+    def test_changelog_to_message_no_double_prefix_for_vocabulary_prefix(self) -> None:
+        """A title that already begins with a vocabulary prefix not present in
+        the old hardcoded regex (e.g. ``scaffold:``) must not be re-prefixed."""
+        from repogerbil.cli.commands.distill_cmds._helpers import _changelog_to_message
+
+        data = {
+            "title": "scaffold: add boilerplate",
+            "summary": "Initial scaffold.",
+            "changes": [{"category": "instantiate", "points": ["Boilerplate"]}],
+        }
+        msg = _changelog_to_message(data)
+        first_line = msg.splitlines()[0]
+        assert first_line == "scaffold: add boilerplate"
+
+    def test_changelog_to_message_respects_extra_prefix_map(self) -> None:
+        """User ``extra_prefix_map`` in ``VocabularyConfig`` is honoured by the
+        double-prefix guard — preventing ``fix: hotfix: ...`` style smells when
+        a user has registered ``hotfix`` as a known prefix in
+        ``.repogerbil.toml``.
+        """
+        from repogerbil.cli.commands.distill_cmds._helpers import _changelog_to_message
+        from repogerbil.core.config import VocabularyConfig
+
+        vocab = VocabularyConfig(extra_prefix_map={"hotfix": "remediate"})
+        data = {
+            "title": "hotfix: patch widget crash",
+            "summary": "Crash fix.",
+            "changes": [{"category": "remediate", "points": ["Patch crash"]}],
+        }
+        msg = _changelog_to_message(data, vocabulary=vocab)
+        first_line = msg.splitlines()[0]
+        assert first_line == "hotfix: patch widget crash"
+        assert not first_line.startswith("fix: hotfix:")
+
+    def test_changelog_to_message_default_vocabulary_unchanged(self) -> None:
+        """Passing ``vocabulary=None`` (the default) preserves prior behaviour."""
+        from repogerbil.cli.commands.distill_cmds._helpers import _changelog_to_message
+
+        data = {
+            "title": "hotfix: patch widget crash",
+            "summary": "Crash fix.",
+            "changes": [{"category": "remediate", "points": ["Patch crash"]}],
+        }
+        # With default vocabulary, "hotfix" is NOT a known prefix, so the
+        # double-prefix guard does NOT fire and we get a "fix: hotfix:" smell.
+        # This pins legacy behaviour so we know the new kwarg is the cure.
+        msg = _changelog_to_message(data)
+        assert msg.splitlines()[0].startswith("fix: hotfix:")
+
+    def test_load_changelog_messages_passes_vocabulary(self, tmp_path: Path) -> None:
+        """``_load_changelog_messages`` threads ``vocabulary`` through to
+        ``_changelog_to_message`` so per-repo loading also honours user prefixes.
+        """
+        from repogerbil.cli.commands.distill_cmds._helpers import _load_changelog_messages
+        from repogerbil.core.config import VocabularyConfig
+
+        cl_dir = tmp_path / "logs"
+        cl_dir.mkdir()
+        data = {
+            "date": "2026-05-01",
+            "repo": "myrepo",
+            "title": "hotfix: patch widget crash",
+            "summary": "Crash fix.",
+            "changes": [{"category": "remediate", "points": ["Patch crash"]}],
+        }
+        (cl_dir / "2026-05-01-myrepo-changelog.yaml").write_text(yaml.dump(data))
+
+        vocab = VocabularyConfig(extra_prefix_map={"hotfix": "remediate"})
+        messages = _load_changelog_messages(str(cl_dir), "myrepo", vocabulary=vocab)
+        assert messages["2026-05-01"].splitlines()[0] == "hotfix: patch widget crash"
+
+    def test_changelog_to_message_detects_new_vocabulary_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If a new prefix is added to PREFIX_TO_CATEGORY at runtime and the
+        compiled regex is rebuilt, the helper recognizes it without re-prefixing."""
+        import re as _re
+
+        from repogerbil.cli.commands.distill_cmds import _helpers
+        from repogerbil.core import vocabulary
+
+        custom_prefix_map = dict(vocabulary.PREFIX_TO_CATEGORY)
+        custom_prefix_map["frobnicate"] = "baseline"
+        monkeypatch.setattr(vocabulary, "PREFIX_TO_CATEGORY", custom_prefix_map)
+        rebuilt = _re.compile(r"^(" + "|".join(_re.escape(p) for p in custom_prefix_map) + r")\b")
+        monkeypatch.setattr(_helpers, "_KNOWN_PREFIX_RE", rebuilt)
+
+        data = {
+            "title": "frobnicate: rejig widgets",
+            "summary": "Rejigged.",
+            "changes": [{"category": "instantiate", "points": ["Rejig"]}],
+        }
+        msg = _helpers._changelog_to_message(data)
+        first_line = msg.splitlines()[0]
+        assert first_line == "frobnicate: rejig widgets"
 
 
 class TestSnapshotTimeWindow:

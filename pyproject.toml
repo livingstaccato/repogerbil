@@ -136,9 +136,7 @@ addopts = [
     "--cov-fail-under=100",
 ]
 markers = [
-    "unit: fast isolated unit tests",
     "integration: tests requiring git operations",
-    "slow: tests taking >1s",
 ]
 norecursedirs = [".git", "build", "dist", "*.egg-info", ".venv", ".hypothesis"]
 
@@ -149,7 +147,6 @@ source = ["src/repogerbil"]
 branch = true
 omit = [
     "src/repogerbil/cli/commands/vectordb_cmds.py",
-    "src/repogerbil/llm/client.py",
 ]
 
 [tool.coverage.report]

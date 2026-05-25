@@ -1,7 +1,29 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""Commit consolidation — distill daily commits with changelog-based messages."""
+"""Commit consolidation — distill daily commits with changelog-based messages.
+
+.. warning::
+    **This module writes to the SOURCE repository.** ``consolidate()`` creates
+    branches and tags directly on ``repo_path`` (the source repo) — it is *not*
+    a read-only operation. Specifically it will:
+
+    * create a backup branch (``<source>-backup-<timestamp>``) on the source repo
+    * create a backup tag (``repogerbil/pre-distill/<timestamp>``) on the source repo
+    * create / check out a new target branch on the source repo
+    * cherry-pick and commit onto that target branch
+
+    This predates the read-only ``read-tree`` approach implemented in
+    :mod:`repogerbil.core.snapshot`. **For new code, prefer ``gerbil snapshot``**
+    (and the ``snapshot`` / ``multi-snapshot`` CLI commands) — those operate on
+    the source repo strictly read-only and emit a fresh, distilled destination
+    repository instead of mutating the source.
+
+    ``consolidate()`` is retained because the ``gerbil distill`` CLI command
+    still routes through it and external callers may rely on its behavior. New
+    callers should treat invocation of this function as an explicit opt-in to a
+    destructive operation on the source repository.
+"""
 
 from __future__ import annotations
 

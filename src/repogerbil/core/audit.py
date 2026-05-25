@@ -26,6 +26,7 @@ def find_missing(
     changelog_dir: Path,
     repo_overrides: dict[str, RepoOverride] | None = None,
     extra_sources: list[Path] | None = None,
+    today: date | None = None,
 ) -> list[MissingDate]:
     """Find dates with commits but no changelog file.
 
@@ -33,13 +34,19 @@ def find_missing(
         tracked: {repo_name: repo_path} registry. Empty string = archived (no source).
         changelog_dir: Root directory containing per-repo changelog subdirectories.
         repo_overrides: Optional per-repo overrides (for skip_dates).
+        extra_sources: Optional list of additional source repos (e.g. backups).
+        today: Optional override for "today's" date. Defaults to ``date.today()``.
+            Injected for testability — callers that want to audit "as of a
+            specific date" (e.g. snapshots of historical state) can pass a
+            fixed value here without resorting to ``freezegun`` or
+            monkeypatching the ``date`` module.
 
     Returns:
         List of MissingDate sorted by repo then date.
     """
     missing: list[MissingDate] = []
     overrides = repo_overrides or {}
-    today = date.today().isoformat()
+    today_str = (today or date.today()).isoformat()
 
     for repo_name, repo_path in sorted(tracked.items()):
         skip = set((overrides.get(repo_name) or RepoOverride()).skip_dates)
@@ -49,7 +56,7 @@ def find_missing(
             # Active repo: compare git dates against changelogs
             commit_dates = collect_effective_dates(path, extra_sources=extra_sources)
             existing = _get_changelog_dates(changelog_dir / repo_name, repo_name)
-            expected = {d for d in commit_dates if d <= today}
+            expected = {d for d in commit_dates if d <= today_str}
 
             for d in sorted(expected - existing - skip):
                 missing.append(MissingDate(repo=repo_name, date=d))

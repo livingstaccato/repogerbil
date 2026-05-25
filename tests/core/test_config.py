@@ -8,7 +8,14 @@ from unittest.mock import patch
 
 import pytest
 
-from repogerbil.core.config import FileRule, RepoOverride, Settings, find_config_file, load_settings
+from repogerbil.core.config import (
+    ArtifactPatternConfig,
+    FileRule,
+    RepoOverride,
+    Settings,
+    find_config_file,
+    load_settings,
+)
 
 
 class TestFileRule:
@@ -269,3 +276,79 @@ def test_settings_llm_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.llm_model == "gemma4:27b"
     assert s.llm_concurrency == 4
     assert s.llm_refine is True
+
+
+class TestSnapshotAuthorPairValidator:
+    def test_name_without_email_raises(self) -> None:
+        """snapshot_author_name set alone is rejected with an actionable message."""
+        with pytest.raises(ValueError, match=r"snapshot_author_name.*snapshot_author_email"):
+            Settings(snapshot_author_name="Alice")
+
+    def test_email_without_name_raises(self) -> None:
+        """snapshot_author_email set alone is rejected with an actionable message."""
+        with pytest.raises(ValueError, match=r"\.repogerbil\.toml"):
+            Settings(snapshot_author_email="alice@example.invalid")
+
+    def test_both_set_ok(self) -> None:
+        """Setting both fields together is accepted."""
+        s = Settings(snapshot_author_name="Alice", snapshot_author_email="alice@example.invalid")
+        assert s.snapshot_author_name == "Alice"
+        assert s.snapshot_author_email == "alice@example.invalid"
+
+    def test_neither_set_ok(self) -> None:
+        """Defaults (neither set) remain valid."""
+        s = Settings()
+        assert s.snapshot_author_name is None
+        assert s.snapshot_author_email is None
+
+    def test_env_var_only_error_mentions_both_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Half-set env var triggers the validator with a source-agnostic message.
+
+        The same misconfiguration can come from ``.repogerbil.toml`` OR from the
+        ``REPOGERBIL_SNAPSHOT_AUTHOR_NAME`` / ``REPOGERBIL_SNAPSHOT_AUTHOR_EMAIL``
+        env vars — the error must call out both so users know where to look.
+        """
+        monkeypatch.setenv("REPOGERBIL_SNAPSHOT_AUTHOR_NAME", "Alice")
+        monkeypatch.delenv("REPOGERBIL_SNAPSHOT_AUTHOR_EMAIL", raising=False)
+        with pytest.raises(
+            ValueError, match=r"REPOGERBIL_SNAPSHOT_AUTHOR_NAME.*REPOGERBIL_SNAPSHOT_AUTHOR_EMAIL"
+        ):
+            Settings()
+
+
+class TestArtifactPatternConfig:
+    def test_defaults_flag_to_empty(self) -> None:
+        cfg = ArtifactPatternConfig(label="snap", pattern=r"snapshots/")
+        assert cfg.label == "snap"
+        assert cfg.pattern == r"snapshots/"
+        assert cfg.flag == ""
+
+    def test_custom_flag(self) -> None:
+        cfg = ArtifactPatternConfig(label="snap", pattern=r"snapshots/", flag=r"^snapshots/")
+        assert cfg.flag == r"^snapshots/"
+
+    def test_invalid_regex_rejected(self) -> None:
+        with pytest.raises(ValueError, match="Invalid artifact pattern regex"):
+            ArtifactPatternConfig(label="bad", pattern="(unclosed")
+
+    def test_extra_artifact_patterns_loaded_from_toml(self, tmp_path: Path) -> None:
+        config = tmp_path / ".repogerbil.toml"
+        config.write_text(
+            "[[extra_artifact_patterns]]\n"
+            'label = "snapshot tarball"\n'
+            r'pattern = "snapshots/.*\\.tar\\.gz$"' + "\n"
+        )
+        settings = load_settings(config_path=config)
+        assert len(settings.extra_artifact_patterns) == 1
+        assert settings.extra_artifact_patterns[0].label == "snapshot tarball"
+        assert settings.extra_artifact_patterns[0].pattern.endswith(r"\.tar\.gz$")
+
+    def test_invalid_extra_artifact_pattern_in_toml_raises(self, tmp_path: Path) -> None:
+        config = tmp_path / ".repogerbil.toml"
+        config.write_text('[[extra_artifact_patterns]]\nlabel = "broken"\npattern = "(unclosed"\n')
+        with pytest.raises(ValueError, match="Invalid artifact pattern regex"):
+            load_settings(config_path=config)
+
+    def test_extra_artifact_patterns_default_empty(self) -> None:
+        s = Settings()
+        assert s.extra_artifact_patterns == []

@@ -1,7 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI command for commit distillation (consolidation)."""
+"""CLI command for commit distillation (consolidation).
+
+.. warning::
+    ``gerbil distill`` is the **destructive** distillation path — it mutates the
+    *source* repository (creates backup + target branches and tags on it). For a
+    read-only workflow that emits a fresh destination repo instead, use
+    ``gerbil snapshot`` / ``gerbil multi-snapshot``. See
+    :mod:`repogerbil.core.consolidate` for the underlying contract.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +21,18 @@ from repogerbil.core.cadence import group_by_cadence
 from repogerbil.core.config import load_settings
 from repogerbil.core.consolidate import consolidate, generate_consolidation_preview
 from repogerbil.core.git import resolve_head_branch
+
+
+def _warn_source_write(path: Path, confirm_source_write: bool) -> None:
+    if confirm_source_write:
+        return
+    click.echo(
+        "WARNING: `gerbil distill` writes to the SOURCE repository "
+        f"({path}) — creating backup/target branches and tags on it. "
+        "Pass --confirm-source-write to suppress this warning, or use "
+        "`gerbil snapshot` for a read-only workflow.",
+        err=True,
+    )
 
 
 @click.command()
@@ -27,6 +47,17 @@ from repogerbil.core.git import resolve_head_branch
 @click.option(
     "--changelog-dir", type=click.Path(), default=None, help="Dir with changelog YAML for commit messages"
 )
+@click.option(
+    "--confirm-source-write",
+    is_flag=True,
+    default=False,
+    help=(
+        "Acknowledge that distill writes to the SOURCE repository "
+        "(creates backup/target branches and tags on it). Suppresses the "
+        "destructive-operation warning. Prefer `gerbil snapshot` for "
+        "read-only distillation."
+    ),
+)
 def distill(
     repo_path: str,
     cadence: str | None,
@@ -35,9 +66,15 @@ def distill(
     target_branch: str | None,
     dry_run: bool,
     changelog_dir: str | None,
+    confirm_source_write: bool,
 ) -> None:
-    """Distill commits into daily/weekly consolidated commits."""
-    from repogerbil.cli.commands.distill_cmds import _collect_commits, _load_changelog_messages
+    """Distill commits into daily/weekly consolidated commits.
+
+    WARNING: this command WRITES TO THE SOURCE repository (creates branches
+    and tags on it). For read-only distillation that emits a fresh destination
+    repository instead, use `gerbil snapshot` / `gerbil multi-snapshot`.
+    """
+    from repogerbil.cli.commands.distill_cmds._helpers import _collect_commits, _load_changelog_messages
 
     path = Path(repo_path)
     settings = load_settings(repo=path.name)
@@ -53,12 +90,18 @@ def distill(
     groups = group_by_cadence(all_commits, cad)
     click.echo(f"{len(all_commits)} commits → {len(groups)} {cad} groups")
 
-    changelog_messages = _load_changelog_messages(changelog_dir, path.name) if changelog_dir else None
+    changelog_messages = (
+        _load_changelog_messages(changelog_dir, path.name, vocabulary=settings.vocabulary)
+        if changelog_dir
+        else None
+    )
 
     if dry_run:
         for p in generate_consolidation_preview(groups):
             click.echo(f"  {p['date']}: {p['commit_count']} commits, {p['files_affected']} files")
         return
+
+    _warn_source_write(path, confirm_source_write)
 
     result = consolidate(
         path,
@@ -70,7 +113,7 @@ def distill(
         create_backup=settings.create_backup,
     )
     click.echo(f"Consolidated to {result.target_branch}")
-    if result.backup_branch:  # pragma: no branch — backup always on unless configured off
+    if result.backup_branch:
         click.echo(f"Backup: {result.backup_branch}")
-    if result.backup_tag:  # pragma: no branch — tag always on unless configured off
+    if result.backup_tag:
         click.echo(f"Tag: {result.backup_tag}")

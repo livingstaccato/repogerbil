@@ -28,12 +28,16 @@ The jsonl is rewritten atomically (temp file + rename).
 from __future__ import annotations
 
 from collections import defaultdict
+import contextlib
 from dataclasses import dataclass
 from datetime import date as date_type, timedelta
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
+from repogerbil.core._jsonl import iter_jsonl_records
 from repogerbil.core.git import _run_git
 
 
@@ -55,6 +59,7 @@ class RealignResult:
     realigned: int  # matched to a new local hash
     unalignable: int  # no candidate found, unchanged
     exact_matches: int  # of realigned, how many had exact (date, fileset)
+    corrupt_lines: int = 0  # jsonl lines that failed to parse as JSON
 
 
 def _scan_local_commits(repo_path: Path) -> list[_LocalCommit]:
@@ -72,16 +77,22 @@ def _scan_local_commits(repo_path: Path) -> list[_LocalCommit]:
             continue
         timestamps[parts[0]] = (parts[1], ts)
 
-    files_raw = _run_git(repo_path, "log", "--all", "--no-merges", "--format=%H", "--name-only", timeout=120)
+    # NUL-prefixed format sentinel makes hash lines unambiguous regardless of
+    # hash length (SHA-1 vs SHA-256) and even when a file path happens to look
+    # like a hex digest.
+    files_raw = _run_git(
+        repo_path, "log", "--all", "--no-merges", "--format=%x00%H", "--name-only", timeout=120
+    )
     files_map: dict[str, set[str]] = defaultdict(set)
     current: str | None = None
     for line in files_raw.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        if line.startswith("\x00"):
+            current = line[1:].strip()
             continue
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
-            current = stripped
-        elif current is not None:
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped:
             files_map[current].add(stripped)
 
     commits: list[_LocalCommit] = []
@@ -159,9 +170,10 @@ def _find_match(
         if c.files == rec_files:
             return c, True
 
-    # Widening date windows with Jaccard.
-    for radius in (0, 1, 7):
-        dates = _date_window(rec_date, radius) if radius > 0 else {rec_date}
+    # Widening date windows with Jaccard. Radius 0 would only re-check the
+    # exact-fileset same-day pass above, so we start at ±1 day.
+    for radius in (1, 7):
+        dates = _date_window(rec_date, radius)
         candidates: list[_LocalCommit] = []
         for d in dates:
             candidates.extend(commits_by_date.get(d, []))
@@ -199,42 +211,57 @@ def realign_jsonl(
     realigned = 0
     unalignable = 0
     exact_matches = 0
+    corrupt_lines = 0
 
-    with jsonl_path.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            total += 1
-            rec: dict[str, Any] = json.loads(line)
-            h = rec.get("hash", "")
+    # Preserve-and-skip semantics on corrupt lines: keep the raw text so the
+    # atomic rewrite doesn't silently drop data, but count it separately so
+    # the result report surfaces the corruption to the caller.
+    for _lineno, raw_line, parsed in iter_jsonl_records(jsonl_path):
+        if parsed is None:
+            rewritten.append(raw_line)
+            corrupt_lines += 1
+            continue
+        rec: dict[str, Any] = parsed
+        total += 1
+        h = rec.get("hash", "")
 
-            if isinstance(h, str) and len(h) == 40 and _hash_exists(repo_path, h):
-                already += 1
-                rewritten.append(json.dumps(rec))
-                continue
-
-            rec_date = rec.get("date", "")
-            rec_files = frozenset(
-                c.get("file", "") for c in rec.get("changes", []) if isinstance(c, dict) and c.get("file")
-            )
-            match, is_exact = _find_match(commits_by_date, rec_date, rec_files)
-            if match is None:
-                unalignable += 1
-                rewritten.append(json.dumps(rec))
-                continue
-
-            rec["hash"] = match.hash
-            rec["date"] = match.date
-            realigned += 1
-            if is_exact:
-                exact_matches += 1
+        # Accept both SHA-1 (40-char) and SHA-256 (64-char) hashes — repos
+        # may be using either object-format depending on git version/config.
+        if isinstance(h, str) and len(h) in (40, 64) and _hash_exists(repo_path, h):
+            already += 1
             rewritten.append(json.dumps(rec))
+            continue
+
+        rec_date = rec.get("date", "")
+        rec_files = frozenset(
+            c.get("file", "") for c in rec.get("changes", []) if isinstance(c, dict) and c.get("file")
+        )
+        match, is_exact = _find_match(commits_by_date, rec_date, rec_files)
+        if match is None:
+            unalignable += 1
+            rewritten.append(json.dumps(rec))
+            continue
+
+        rec["hash"] = match.hash
+        rec["date"] = match.date
+        realigned += 1
+        if is_exact:
+            exact_matches += 1
+        rewritten.append(json.dumps(rec))
 
     if not dry_run:
-        tmp = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
-        tmp.write_text("\n".join(rewritten) + ("\n" if rewritten else ""), encoding="utf-8")
-        tmp.replace(jsonl_path)
+        # Use a unique mkstemp path so concurrent realign invocations cannot
+        # collide on a deterministic ``.tmp`` name, and so a failed ``replace``
+        # never leaves a stray temp file alongside the real jsonl.
+        fd, tmp_name = tempfile.mkstemp(dir=jsonl_path.parent, prefix=".realign-", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            os.close(fd)
+            tmp_path.write_text("\n".join(rewritten) + ("\n" if rewritten else ""), encoding="utf-8")
+            tmp_path.replace(jsonl_path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
 
     return RealignResult(
         jsonl_path=str(jsonl_path),
@@ -243,4 +270,5 @@ def realign_jsonl(
         realigned=realigned,
         unalignable=unalignable,
         exact_matches=exact_matches,
+        corrupt_lines=corrupt_lines,
     )

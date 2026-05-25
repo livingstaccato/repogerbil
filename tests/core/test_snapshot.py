@@ -294,6 +294,31 @@ class TestCreateSnapshot:
         msg2 = _build_snapshot_message(group2, changelog, used_keys=None)
         assert msg1 == msg2 == "feat(changelog): changelog message for 2026-04-07"
 
+    def test_build_message_mixes_conventional_and_other(self) -> None:
+        """When a group has both well-formed and freeform commits, the trailing
+        ``- (N commits)`` line accounts for the non-conventional ones."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[
+                CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: clean one"),
+                CommitInfo(hash="b" * 40, date="2026-04-07", subject="fix: clean two"),
+                # Freeform / non-conventional subjects:
+                CommitInfo(hash="c" * 40, date="2026-04-07", subject="wip stuff"),
+                CommitInfo(hash="d" * 40, date="2026-04-07", subject="more wip"),
+            ],
+        )
+
+        msg = _build_snapshot_message(group, changelog_messages=None, used_keys=None)
+
+        assert "2026-04-07: 4 commits" in msg
+        assert "- feat: clean one" in msg
+        assert "- fix: clean two" in msg
+        # The two non-conventional commits are bucketed:
+        assert "- (2 commits)" in msg
+
     def test_source_subdir_fallback_to_full_tree(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -528,8 +553,11 @@ class TestCreateSnapshot:
         assert "description" in record["changes"][0]
         assert len(record["hash"]) == 40
 
-    def test_llm_timeout_falls_back_to_builtin_message(self, tmp_path: Path) -> None:
-        """When LLM raises, snapshot falls back to built-in message instead of aborting."""
+    def test_llm_timeout_falls_back_to_builtin_message(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When LLM raises, snapshot falls back to built-in message and logs a warning."""
+        import logging
         from unittest.mock import MagicMock
 
         source = _init_repo(tmp_path)
@@ -546,7 +574,8 @@ class TestCreateSnapshot:
         generator = MagicMock()
         generator.generate.side_effect = TimeoutError("timed out")
 
-        result = create_snapshot(source, dest, groups, llm_generator=generator)
+        with caplog.at_level(logging.WARNING, logger="repogerbil.core.snapshot"):
+            result = create_snapshot(source, dest, groups, llm_generator=generator)
         assert result.commits_created == 1
         log = subprocess.run(
             ["git", "log", "--format=%B", "-1"],
@@ -558,6 +587,12 @@ class TestCreateSnapshot:
         # Fell back to built-in count-only message (no LLM output)
         assert "1 commits" in log
         generator.generate.assert_called_once()
+        # Warning was emitted with the date and the exception
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(
+            "LLM refinement failed" in r.getMessage() and "2026-04-07" in r.getMessage()
+            for r in warning_records
+        ), f"Expected warning log, got: {[r.getMessage() for r in warning_records]}"
 
 
 class TestGetFilesForCommit:

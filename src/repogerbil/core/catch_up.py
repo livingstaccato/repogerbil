@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from repogerbil.core._jsonl import iter_jsonl_records
 from repogerbil.core.git import CommitInfo, _run_git
 
 
@@ -58,23 +59,17 @@ def _read_recorded(jsonl_path: Path) -> tuple[set[str], str | None]:
     """Single pass over the jsonl collecting hashes and the max date."""
     hashes: set[str] = set()
     latest: str | None = None
-    if not jsonl_path.exists():
-        return hashes, latest
-    with jsonl_path.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            h = rec.get("hash")
-            if isinstance(h, str):
-                hashes.add(h)
-            d = rec.get("date")
-            if isinstance(d, str) and (latest is None or d > latest):
-                latest = d
+    # iter_jsonl_records handles missing-file and corrupt-line cases for us;
+    # we use skip-and-continue semantics here (rec is None on bad lines).
+    for _lineno, _raw, rec in iter_jsonl_records(jsonl_path):
+        if rec is None:
+            continue
+        h = rec.get("hash")
+        if isinstance(h, str):
+            hashes.add(h)
+        d = rec.get("date")
+        if isinstance(d, str) and (latest is None or d > latest):
+            latest = d
     return hashes, latest
 
 
@@ -112,22 +107,13 @@ def _record_signature(rec: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] |
 def _read_signatures_for_date(jsonl_path: Path, target_date: str) -> set[tuple[str, str, tuple[str, ...]]]:
     """Return record signatures for a specific date in jsonl."""
     signatures: set[tuple[str, str, tuple[str, ...]]] = set()
-    if not jsonl_path.exists():
-        return signatures
-    with jsonl_path.open("r", encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("date") != target_date:
-                continue
-            sig = _record_signature(rec)
-            if sig is not None:
-                signatures.add(sig)
+    # Skip-and-continue on corrupt lines (rec is None).
+    for _lineno, _raw, rec in iter_jsonl_records(jsonl_path):
+        if rec is None or rec.get("date") != target_date:
+            continue
+        sig = _record_signature(rec)
+        if sig is not None:
+            signatures.add(sig)
     return signatures
 
 
@@ -145,7 +131,9 @@ def _scan_head_commits(
     fmt = "%H%x00%as%x00%at%x00%s%x00%b%x00END"
     log_args = ["log", "--reverse", "--no-merges", f"--format={fmt}"]
     if since_date:
-        log_args.append(f"--since={since_date}")
+        # Pin to midnight to avoid git's approxidate using current time-of-day,
+        # which would exclude same-day commits earlier than "now".
+        log_args.append(f"--since={since_date}T00:00:00")
     if since_ref:
         log_args.append(f"{since_ref}..HEAD")
     output = _run_git(repo_path, *log_args, timeout=120)
@@ -182,10 +170,16 @@ def _attach_files(
     since_ref: str | None,
     since_date: str | None = None,
 ) -> list[CommitInfo]:
-    """Attach per-commit file lists via a single ``git log --name-only`` pass."""
-    log_args = ["log", "--reverse", "--no-merges", "--format=%H", "--name-only"]
+    """Attach per-commit file lists via a single ``git log --name-only`` pass.
+
+    Uses a NUL-prefixed ``--format`` sentinel so hash lines are unambiguous
+    regardless of hash length (SHA-1 vs SHA-256) and even when a file path
+    happens to look like a hex digest.
+    """
+    log_args = ["log", "--reverse", "--no-merges", "--format=%x00%H", "--name-only"]
     if since_date:
-        log_args.append(f"--since={since_date}")
+        # See _scan_head_commits — pin to midnight to bypass git approxidate.
+        log_args.append(f"--since={since_date}T00:00:00")
     if since_ref:
         log_args.append(f"{since_ref}..HEAD")
     output = _run_git(repo_path, *log_args, timeout=120)
@@ -193,13 +187,14 @@ def _attach_files(
     hash_files: dict[str, list[str]] = {}
     current: str | None = None
     for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) == 40 and all(c in "0123456789abcdef" for c in stripped):
-            current = stripped
+        if line.startswith("\x00"):
+            current = line[1:].strip()
             hash_files[current] = []
-        elif current is not None:
+            continue
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped:
             hash_files[current].append(stripped)
 
     return [

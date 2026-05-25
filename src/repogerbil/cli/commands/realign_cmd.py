@@ -24,6 +24,10 @@ def realign_cmd(repo_path: Path, jsonl_path: Path, dry_run: bool) -> None:
     local commit by (date, file-set) and rewrites hash + date. LLM-refined
     subjects, body, and changes are preserved untouched.
 
+    Any malformed (non-JSON) lines in the input are preserved verbatim in the
+    rewritten file and reported as ``corrupt lines (preserved)`` in the output
+    so no data is silently dropped.
+
     Idempotent: re-running realigns nothing new if every record already
     resolves to a current local hash.
     """
@@ -34,3 +38,5 @@ def realign_cmd(repo_path: Path, jsonl_path: Path, dry_run: bool) -> None:
     click.echo(f"  already verified: {result.already_verified}")
     click.echo(f"  {verb}: {result.realigned} (exact match: {result.exact_matches})")
     click.echo(f"  unalignable: {result.unalignable}")
+    if result.corrupt_lines:
+        click.echo(f"  corrupt lines (preserved): {result.corrupt_lines}")

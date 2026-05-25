@@ -6,82 +6,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
-
-class CategoryDefinition(BaseModel):
-    """Definition of a vocabulary category."""
-
-    label: str
-    conventional: str = "chore"
-    verb: str = ""  # imperative verb used in multi-commit section titles, e.g. "Add", "Fix"
-    description: str = ""
-
-
-# ── Default vocabulary builders ───────────────────────────────────────────────
-# Extracted to module-level functions so they are importable, testable, and
-# readable — no logic buried inside Field(default_factory=lambda: {...}).
-
-
-def _default_categories() -> dict[str, CategoryDefinition]:
-    """Return the default category taxonomy."""
-    return {
-        # ── Conventional commit prefix categories ─────────────────────────
-        "feat": CategoryDefinition(label="feat", conventional="feat"),
-        "fix": CategoryDefinition(label="fix", conventional="fix"),
-        "refactor": CategoryDefinition(label="refactor", conventional="refactor"),
-        "test": CategoryDefinition(label="test", conventional="test"),
-        "perf": CategoryDefinition(label="perf", conventional="perf"),
-        "docs": CategoryDefinition(label="docs", conventional="docs"),
-        "chore": CategoryDefinition(label="chore", conventional="chore"),
-        # ── Semantic categories ────────────────────────────────────────────
-        "scaffold": CategoryDefinition(label="feat", conventional="feat", verb="Scaffold"),
-        "instantiate": CategoryDefinition(label="feat", conventional="feat", verb="Add"),
-        "interface": CategoryDefinition(label="feat", conventional="feat", verb="Wire"),
-        "remediate": CategoryDefinition(label="fix", conventional="fix", verb="Fix"),
-        "harden": CategoryDefinition(label="fix", conventional="fix", verb="Harden"),
-        "margin": CategoryDefinition(label="fix", conventional="fix", verb="Buffer"),
-        "decouple": CategoryDefinition(label="refactor", conventional="refactor", verb="Refactor"),
-        "qualify": CategoryDefinition(label="test", conventional="test", verb="Test"),
-        "streamline": CategoryDefinition(label="perf", conventional="perf", verb="Optimize"),
-        "specify": CategoryDefinition(label="docs", conventional="docs", verb="Document"),
-        "baseline": CategoryDefinition(label="chore", conventional="chore", verb="Update"),
-        "deprecate": CategoryDefinition(label="remove", conventional="refactor", verb="Remove"),
-    }
-
-
-def _default_severities() -> dict[str, str | None]:
-    return {
-        "architectural": "major",
-        "behavioral": "minor",
-        "internal": "patch",
-        "errata": None,
-    }
-
-
-def _default_prefix_map() -> dict[str, str]:
-    return {
-        "feat": "instantiate",
-        "fix": "remediate",
-        "refactor": "decouple",
-        "test": "qualify",
-        "perf": "streamline",
-        "docs": "specify",
-        "spec": "specify",
-        "chore": "baseline",
-        "ci": "baseline",
-        "build": "baseline",
-        "style": "baseline",
-        "revert": "deprecate",
-        "rename": "decouple",
-        "config": "baseline",
-        "release": "baseline",
-        "scaffold": "scaffold",
-    }
-
+# Re-exported from vocabulary.py so ``from repogerbil.core.config import
+# CategoryDefinition`` keeps working. Vocabulary is the single source of truth
+# for default categories / severities / prefix mappings — see vocabulary.py.
+from repogerbil.core.vocabulary import (
+    CategoryDefinition as CategoryDefinition,
+    _default_categories,
+    _default_prefix_map,
+    _default_severities,
+)
 
 # ── Vocabulary config ─────────────────────────────────────────────────────────
 
@@ -135,6 +74,38 @@ class FileRule(BaseModel):
     reason: str = ""
 
 
+class ArtifactPatternConfig(BaseModel):
+    """User-supplied artifact pattern, merged with the built-in ``ARTIFACT_RULES``.
+
+    ``pattern`` is a regex passed to ``re.search`` against repo-relative file
+    paths (same semantics as the built-in rules). ``flag`` defaults to
+    ``pattern`` and is the ready-to-paste ``--exclude-path`` value.
+
+    Example ``.repogerbil.toml``:
+
+    .. code-block:: toml
+
+        [[extra_artifact_patterns]]
+        label = "snapshot tarball"
+        pattern = "snapshots/.*\\\\.tar\\\\.gz$"
+    """
+
+    label: str
+    pattern: str
+    flag: str = ""
+
+    @field_validator("pattern")
+    @classmethod
+    def _validate_pattern_compiles(cls, v: str) -> str:
+        """Reject patterns that fail to compile as a regex at config load time."""
+        try:
+            re.compile(v)
+        except re.error as exc:
+            msg = f"Invalid artifact pattern regex {v!r}: {exc}"
+            raise ValueError(msg) from exc
+        return v
+
+
 class RepoOverride(BaseModel):
     """Per-repo configuration overrides."""
 
@@ -176,6 +147,29 @@ class Settings(BaseSettings):
     """repogerbil configuration with layered resolution.
 
     Priority: CLI flags > env vars > walked .repogerbil.toml > ~/.config fallback > defaults.
+
+    **Environment variable convention.** Every top-level field is settable via an
+    env var named ``REPOGERBIL_<FIELD>`` (uppercased). For example,
+    ``llm_model`` is overridden by ``REPOGERBIL_LLM_MODEL``. Nested fields on
+    ``vocabulary`` use the pydantic-settings double-underscore convention:
+    ``REPOGERBIL_VOCABULARY__<NESTED_FIELD>`` (e.g.
+    ``REPOGERBIL_VOCABULARY__EXTRA_CATEGORIES`` — note **two** underscores
+    between the parent and the nested field name).
+
+    **Field organization.** Fields are grouped into sections (General / LLM /
+    Multi-snapshot / Vocabulary / Per-repo) below for readability. The grouping
+    is purely a comment convention — there is no nested sub-model, because
+    introducing one would silently break the existing env-var names that ship
+    with deployed configs.
+
+    **Cross-field validation.** Grouped settings that must be all-set-or-all-None
+    (e.g. ``snapshot_author_name`` / ``snapshot_author_email``) are validated
+    via a ``model_validator(mode="after")`` here in this class — see
+    ``_validate_snapshot_author_pair``. CLI-only group constraints
+    (e.g. ``--time-window-start`` / ``--time-window-end`` on the distill
+    commands) are *not* validated here; they live in the CLI layer because
+    the underlying ``Settings`` fields are independently meaningful and only
+    the CLI surface needs to enforce both-or-neither.
     """
 
     model_config = SettingsConfigDict(
@@ -185,6 +179,7 @@ class Settings(BaseSettings):
     # It is intentionally not consulted by source resolution to avoid global mutable state races.
     _toml_path: ClassVar[str | Path | None] = None
 
+    # ── General — cadence, depths, file rules, registries ────────────────────
     cadence: str = "daily"
     message_depth: Literal["subject", "refs", "full"] = "subject"
     auto_breaking: bool = True
@@ -195,8 +190,13 @@ class Settings(BaseSettings):
     create_backup: bool = True
     target_branch: str = "repogerbil-consolidated"
     file_rules: list[FileRule] = Field(default_factory=list)
+    extra_artifact_patterns: list[ArtifactPatternConfig] = Field(default_factory=list)
+
+    # ── Per-repo overrides and tracked-repo registry ─────────────────────────
     repos: dict[str, RepoOverride] = Field(default_factory=dict)
     tracked: dict[str, str] = Field(default_factory=dict)  # {name: path} registry of tracked repos
+
+    # ── Vocabulary — categories, severities, prefix → category mapping ───────
     vocabulary: VocabularyConfig = Field(default_factory=VocabularyConfig)
 
     # ── LLM / Ollama ─────────────────────────────────────────────────────────
@@ -207,12 +207,53 @@ class Settings(BaseSettings):
     llm_concurrency: int = Field(default=1, ge=1)
     llm_refine: bool = False
 
+    # ── Multi-snapshot — ecosystem label and dest-repo git identity ──────────
+    # Label used in the first line of every multi-snapshot daily commit message,
+    # e.g. "2026-05-24 <label>". Kept generic by default — projects can override
+    # via .repogerbil.toml, the REPOGERBIL_ECOSYSTEM_LABEL env var, or the
+    # CLI --ecosystem-label flag.
+    ecosystem_label: str = "ecosystem"
+    # Git identity for multi-snapshot commits. When both are ``None`` (the
+    # default), the destination repo inherits the user's global git config —
+    # matching the single-snapshot path. Set both to override.
+    snapshot_author_name: str | None = None
+    snapshot_author_email: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_snapshot_author_pair(self) -> Settings:
+        """Reject half-set ``snapshot_author_name`` / ``snapshot_author_email``.
+
+        Both must be provided together so the multi-snapshot destination repo
+        gets a complete git identity — otherwise the partial value was being
+        silently dropped by ``_init_dest_repo``.
+
+        This is the canonical example of the both-or-neither convention noted
+        in the class docstring: pairs of settings that are only meaningful as
+        a unit get a ``model_validator(mode="after")`` here in the Settings
+        model. CLI-only pairings (e.g. ``--time-window-start`` /
+        ``--time-window-end``) instead validate at the CLI layer because the
+        underlying Settings fields are not paired in the same way.
+        """
+        name_set = self.snapshot_author_name is not None
+        email_set = self.snapshot_author_email is not None
+        if name_set != email_set:
+            # Message intentionally lists both config sources — the half-set
+            # value can come from .repogerbil.toml or the
+            # REPOGERBIL_SNAPSHOT_AUTHOR_NAME/EMAIL environment variables.
+            msg = (
+                "snapshot_author_name and snapshot_author_email must be set together "
+                "(both or neither). Check your .repogerbil.toml or "
+                "REPOGERBIL_SNAPSHOT_AUTHOR_NAME/REPOGERBIL_SNAPSHOT_AUTHOR_EMAIL env vars — got "
+                f"snapshot_author_name={self.snapshot_author_name!r}, "
+                f"snapshot_author_email={self.snapshot_author_email!r}"
+            )
+            raise ValueError(msg)
+        return self
+
     @field_validator("cadence")
     @classmethod
     def _validate_cadence(cls, v: str) -> str:
         """Validate cadence value: hourly, daily, weekly, or gap:NNm/gap:NNh."""
-        import re
-
         if v in ("hourly", "daily", "weekly"):
             return v
         if re.match(r"^gap:\d+[mh]$", v):

@@ -3,6 +3,7 @@
 
 """Tests for missing changelog audit."""
 
+from datetime import date
 from pathlib import Path
 import subprocess
 
@@ -140,6 +141,37 @@ class TestArchivedRepos:
 
         result = find_missing({"gone": "/nonexistent/path"}, cl_dir)
         assert MissingDate(repo="gone", date="2026-04-02") in result
+
+    def test_today_parameter_filters_future_commits(self, tmp_path: Path) -> None:
+        """An injected ``today`` lets callers audit "as of" a fixed historical date.
+
+        Commits dated after the injected ``today`` are excluded from the
+        ``expected`` set, even when they exist in the repo. This makes it
+        possible to test future-dated scenarios without ``freezegun`` or
+        monkeypatching the ``date`` module.
+        """
+        # Repo with two commits; the second is "in the future" relative to our
+        # injected today value.
+        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07", "2026-04-09"])
+        cl_dir = tmp_path / "changelogs"
+        # No changelogs exist — both dates would normally be reported missing.
+
+        # Inject today = 2026-04-08: the 04-09 commit is in the future and
+        # must be excluded from the missing set.
+        result = find_missing({"myrepo": str(repo)}, cl_dir, today=date(2026, 4, 8))
+        assert len(result) == 1
+        assert result[0].date == "2026-04-07"
+
+    def test_today_defaults_to_date_today(self, tmp_path: Path) -> None:
+        """Without an explicit ``today``, behavior matches the historical default."""
+        # Use historical dates (long before any plausible "today") so the
+        # default branch always reports them as missing.
+        repo = _init_repo(tmp_path, "myrepo", ["2020-01-01"])
+        cl_dir = tmp_path / "changelogs"
+        # Same call shape as the legacy API (no today=) — must still work.
+        result = find_missing({"myrepo": str(repo)}, cl_dir)
+        assert len(result) == 1
+        assert result[0].date == "2020-01-01"
 
     def test_gap_detection_uses_full_existing_range(self, tmp_path: Path) -> None:
         cl_dir = tmp_path / "changelogs"

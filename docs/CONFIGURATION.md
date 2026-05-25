@@ -53,6 +53,17 @@ llm_timeout_seconds = 120.0
 llm_concurrency = 1
 llm_refine = false                     # auto-enable snapshot LLM refinement when true
 
+# Multi-snapshot — label appended after the date on each daily commit's
+# first line, e.g. "2026-05-24 my-platform". Override via the CLI flag
+# --ecosystem-label or REPOGERBIL_ECOSYSTEM_LABEL.
+ecosystem_label = "ecosystem"
+
+# Multi-snapshot commit identity. When both are unset (the default), the
+# destination repo inherits the user's global git config. Set both to
+# override the author on every multi-snapshot commit.
+snapshot_author_name = "Distill Bot"
+snapshot_author_email = "distill@example.com"
+
 # File rules — control how files are handled during --analyze
 [[file_rules]]
 pattern = "*.lock"
@@ -68,6 +79,15 @@ action = "skip"                      # ignore entirely
 pattern = "tests/**"
 action = "classify"                  # keep in changes, force category
 category = "qualify"
+
+# Extra artifact patterns — appended to the built-in ARTIFACT_RULES used by
+# `gerbil preflight`. Patterns are regex (re.search) applied to repo-relative
+# paths. Built-ins always run first, so user patterns only match paths the
+# built-ins did not classify. Invalid regex is rejected at config load.
+[[extra_artifact_patterns]]
+label = "snapshot tarball"
+pattern = "snapshots/.*\\.tar\\.gz$"
+# flag defaults to `pattern` (the ready-to-paste --exclude-path value)
 
 # Per-repo overrides
 [repos.uwarp-space]

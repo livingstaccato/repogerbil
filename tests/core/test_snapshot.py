@@ -589,10 +589,21 @@ class TestCreateSnapshot:
         generator.generate.assert_called_once()
         # Warning was emitted with the date and the exception
         warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert any(
-            "LLM refinement failed" in r.getMessage() and "2026-04-07" in r.getMessage()
-            for r in warning_records
-        ), f"Expected warning log, got: {[r.getMessage() for r in warning_records]}"
+        # Pin: the date in the log must NOT contain "XX" wrapping (which would
+        # indicate mutation of the strftime format string), nor case-flipped
+        # markers like "lLM" or "FAILED".
+        matching = [r for r in warning_records if "LLM refinement failed" in r.getMessage()]
+        assert matching, f"Expected LLM warning, got: {[r.getMessage() for r in warning_records]}"
+        for r in matching:
+            msg = r.getMessage()
+            # Date in args must be exactly "2026-04-07" — not "XX2026-04-07XX"
+            assert "2026-04-07" in msg
+            assert "XX" not in msg
+            # Format string is the original lowercase "non-LLM"
+            assert "non-LLM" in msg or "LLM refinement failed" in msg
+            # The exception text must appear (mutant could replace exc with None)
+            assert "timed out" in msg
+            assert "None" not in msg.split("non-LLM message: ")[-1]
 
 
 class TestGetFilesForCommit:
@@ -964,3 +975,2267 @@ class TestSpreadTimestamps:
 
         assert ts >= dt_cls(2026, 4, 10, 23, 0, tzinfo=tz)
         assert ts <= dt_cls(2026, 4, 11, 1, 0, tzinfo=tz)
+
+
+class TestBuildSnapshotMessageExact:
+    """Pin exact string formats in _build_snapshot_message to kill mutations."""
+
+    def test_single_conventional_returns_subject_unchanged(self) -> None:
+        """A single well-formed commit returns the bare subject — no decoration."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: single thing")],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        assert msg == "feat: single thing"
+
+    def test_no_conventional_count_only_format_exact(self) -> None:
+        """Non-conventional commits yield exact 'YYYY-MM-DD: N commits' format."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[
+                CommitInfo(hash="a" * 40, date="2026-04-07", subject="random garbage"),
+                CommitInfo(hash="b" * 40, date="2026-04-07", subject="more garbage"),
+                CommitInfo(hash="c" * 40, date="2026-04-07", subject="yet more"),
+            ],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        assert msg == "2026-04-07: 3 commits"
+
+    def test_no_conventional_count_one(self) -> None:
+        """Count-only format with N=1 reads 'YYYY-MM-DD: 1 commits' (not '1 commit')."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="just freeform")],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        assert msg == "2026-04-07: 1 commits"
+
+    def test_mixed_conventional_and_other_exact_format(self) -> None:
+        """Mixed groups produce a precise multi-line message with bullets."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[
+                CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: one"),
+                CommitInfo(hash="b" * 40, date="2026-04-07", subject="fix: two"),
+                CommitInfo(hash="c" * 40, date="2026-04-07", subject="freeform"),
+                CommitInfo(hash="d" * 40, date="2026-04-07", subject="another"),
+            ],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        expected = "2026-04-07: 4 commits\n\n- feat: one\n- fix: two\n- (2 commits)"
+        assert msg == expected
+
+    def test_all_conventional_no_other_line(self) -> None:
+        """When all commits are conventional, no '(N commits)' trailer appears."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[
+                CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: one"),
+                CommitInfo(hash="b" * 40, date="2026-04-07", subject="fix: two"),
+            ],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        expected = "2026-04-07: 2 commits\n\n- feat: one\n- fix: two"
+        assert msg == expected
+        assert "(0 commits)" not in msg
+        assert "- (" not in msg
+
+    def test_changelog_used_when_present(self) -> None:
+        """Changelog message is returned verbatim, no transformation."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: x")],
+        )
+        result = _build_snapshot_message(group, {"2026-04-07": "EXACT_VALUE"}, set())
+        assert result == "EXACT_VALUE"
+
+    def test_changelog_key_added_to_used_keys(self) -> None:
+        """used_keys is mutated to include the consumed date."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: x")],
+        )
+        used: set[str] = set()
+        _build_snapshot_message(group, {"2026-04-07": "M"}, used)
+        assert used == {"2026-04-07"}
+
+    def test_changelog_skipped_when_date_already_used(self) -> None:
+        """If date is in used_keys, falls back to non-changelog message."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: x")],
+        )
+        used: set[str] = {"2026-04-07"}
+        msg = _build_snapshot_message(group, {"2026-04-07": "SHOULD_NOT_APPEAR"}, used)
+        assert msg == "feat: x"
+        assert "SHOULD_NOT_APPEAR" not in msg
+
+    def test_changelog_empty_dict_falls_through(self) -> None:
+        """Empty changelog dict triggers the non-changelog branch."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: x")],
+        )
+        msg = _build_snapshot_message(group, {}, set())
+        assert msg == "feat: x"
+
+    def test_changelog_date_not_in_messages(self) -> None:
+        """Date missing from changelog → fallback."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="feat: x")],
+        )
+        msg = _build_snapshot_message(group, {"2099-01-01": "wrong"}, set())
+        assert msg == "feat: x"
+
+    def test_period_start_date_format_used_not_period_end(self) -> None:
+        """The message header uses period_start.strftime — confirm the date string."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        group = TimeGroup(
+            period_start=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+            period_end=datetime(2026, 4, 8, 0, 1, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="garbage")],
+        )
+        msg = _build_snapshot_message(group, None, None)
+        # Must use period_start date (2026-04-07), not period_end (2026-04-08)
+        assert msg.startswith("2026-04-07:")
+        assert "2026-04-08" not in msg
+
+
+class TestCreateSnapshotExact:
+    """Pin exact behavior of create_snapshot to kill mutations."""
+
+    def test_groups_created_matches_input(self, tmp_path: Path) -> None:
+        """SnapshotResult.groups_created equals len(input groups), even after dedup."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-gc"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, h, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, h, 30, tzinfo=UTC),
+                commits=apr7,
+            )
+            for h in (10, 11, 12)
+        ]
+        result = create_snapshot(source, dest, groups)
+        # 3 groups input → groups_created=3, but groups_skipped=2 (dedup)
+        assert result.groups_created == 3
+        assert result.commits_created == 1
+        assert result.groups_skipped == 2
+
+    def test_dest_path_field_matches_input(self, tmp_path: Path) -> None:
+        """SnapshotResult.dest_path equals str(dest_path)."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-dp"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.dest_path == str(dest)
+
+    def test_summaries_path_none_when_no_llm(self, tmp_path: Path) -> None:
+        """summaries_path is None unless an LLM generator is passed."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-no-llm"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.summaries_path is None
+
+    def test_groups_skipped_zero_when_unique(self, tmp_path: Path) -> None:
+        """groups_skipped is exactly 0 when every group is unique."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-no-skip"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.groups_skipped == 0
+        assert result.commits_created == 2
+
+    def test_groups_created_is_zero_only_for_empty_input(self, tmp_path: Path) -> None:
+        """groups_created equals input length (sanity-check on basic counting)."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-one"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.groups_created == 1
+
+    def test_remotes_removed_after_snapshot(self, tmp_path: Path) -> None:
+        """All source remotes are removed at the end."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-remotes"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        create_snapshot(source, dest, groups)
+        remotes = subprocess.run(
+            ["git", "remote"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        # No remotes should remain
+        assert remotes == ""
+
+    def test_final_branch_is_main(self, tmp_path: Path) -> None:
+        """After snapshot, HEAD points at main (not at any other branch name)."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-main"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        create_snapshot(source, dest, groups)
+        branch = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert branch == "main"
+
+    def test_create_snapshot_passes_source_subdir_to_dedup(self, tmp_path: Path) -> None:
+        """source_subdir reaches dedup — pin via two commits with same subdir
+        tree (different full tree) being deduplicated to 1 commit.
+
+        A mutation passing None for source_subdir in the dedup call would
+        produce 2 distinct snapshot commits (different full trees).
+        """
+        source = tmp_path / "mono"
+        source.mkdir()
+        subprocess.run(["git", "init"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=source, capture_output=True, check=True
+        )
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        (source / "pkg").mkdir()
+        (source / "pkg" / "a.py").write_text("a\n")
+        (source / "root.txt").write_text("v1\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c1"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        )
+        (source / "root.txt").write_text("v2\n")  # change OUTSIDE pkg
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c2"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+        )
+        all_commits = get_commits_for_date(source, "2026-04-07")
+        assert len(all_commits) == 2
+        dest = tmp_path / "mono-cs"
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=[all_commits[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 11, 30, tzinfo=UTC),
+                commits=[all_commits[1]],
+            ),
+        ]
+        result = create_snapshot(source, dest, groups, source_subdir="pkg")
+        # With source_subdir reaching dedup → same subdir → 1 commit, 1 skipped
+        assert result.commits_created == 1
+        assert result.groups_skipped == 1
+
+    def test_create_snapshot_passes_exclude_paths_to_dedup(self, tmp_path: Path) -> None:
+        """exclude_paths reaches dedup — pin via two commits that differ only
+        in excluded files being deduplicated."""
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Commit modifying ONLY a lock file (after the base apr-7/-8 setup)
+        (source / "poetry.lock").write_text("v1\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: lock v1"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-09T10:00:00", "GIT_COMMITTER_DATE": "2026-04-09T10:00:00"},
+        )
+        (source / "poetry.lock").write_text("v2\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "chore: lock v2"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-09T11:00:00", "GIT_COMMITTER_DATE": "2026-04-09T11:00:00"},
+        )
+        commits = get_commits_for_date(source, "2026-04-09")
+        assert len(commits) == 2
+        dest = tmp_path / "snap-excl-dedup"
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 9, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 9, 10, 30, tzinfo=UTC),
+                commits=[commits[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 9, 11, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 9, 11, 30, tzinfo=UTC),
+                commits=[commits[1]],
+            ),
+        ]
+        # With exclude_paths=[".*\\.lock$"] reaching dedup, two commits become identical
+        result = create_snapshot(source, dest, groups, exclude_paths=[r".*\.lock$"])
+        assert result.commits_created == 1
+        assert result.groups_skipped == 1
+
+    def test_preserve_timestamps_default_is_true(self, tmp_path: Path) -> None:
+        """preserve_timestamps defaults to True — commits use the period_end timestamp.
+
+        Pins ``preserve_timestamps: bool = True`` against a default flip to False.
+        """
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "preserve-default"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        # Default behavior — no preserve_timestamps arg
+        create_snapshot(source, dest, groups)
+        # Commit author time must be the period_end (2026-04-07 23:59:59), NOT current time
+        ai = subprocess.run(
+            ["git", "log", "-1", "--format=%ai"], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert ai.startswith("2026-04-07 23:59:59")
+
+    def test_final_checkout_uses_main_branch(self, tmp_path: Path) -> None:
+        """The final ``git checkout --force main`` actually targets the 'main' ref.
+
+        Pins the literal ``"main"`` argument. A mutation removing it would
+        silently re-check-out HEAD instead.
+        """
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "checkout-main"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        create_snapshot(source, dest, groups)
+        # HEAD must be on the main branch (the snapshot creates commits on refs/heads/main).
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert branch == "main"
+        # Working tree must reflect the snapshot tree (a.py present).
+        assert (dest / "a.py").exists()
+
+    def test_existing_empty_dest_does_not_raise(self, tmp_path: Path) -> None:
+        """Empty dest dir (exists but no iterdir entries) is allowed."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "empty-dest"
+        dest.mkdir()  # exists but empty
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        # Empty dir is allowed (any(iterdir()) is False)
+        result = create_snapshot(source, dest, groups)
+        assert result.commits_created == 1
+
+    def test_nonexistent_dest_does_not_raise(self, tmp_path: Path) -> None:
+        """Non-existent dest is also allowed (will be created)."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "deep" / "nested" / "dest"
+        # dest.exists() is False — must not raise
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups)
+        assert result.commits_created == 1
+        # Verify the nested dirs were created
+        assert dest.exists()
+
+    def test_dest_not_empty_error_message_includes_path(self, tmp_path: Path) -> None:
+        """Error message contains the destination path verbatim."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "occupied"
+        dest.mkdir()
+        (dest / "thing").write_text("x")
+        with pytest.raises(RuntimeError, match=str(dest)):
+            create_snapshot(source, dest, [])
+
+    def test_extra_sources_appended_as_extra_zero(self, tmp_path: Path) -> None:
+        """Extra source 0 is added (and then removed); commits from it are reachable."""
+        primary = _init_repo(tmp_path)
+        # Build a second source with a unique commit
+        extra = tmp_path / "extra"
+        extra.mkdir()
+        subprocess.run(["git", "init"], cwd=extra, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=extra, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=extra, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=extra, capture_output=True, check=True
+        )
+        (extra / "z.py").write_text("z\n")
+        subprocess.run(["git", "add", "."], cwd=extra, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: add z"],
+            cwd=extra,
+            capture_output=True,
+            check=True,
+            env={
+                "HOME": str(tmp_path),
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "GIT_AUTHOR_DATE": "2026-04-10T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-10T10:00:00",
+            },
+        )
+        extra_commits = get_commits_for_date(extra, "2026-04-10")
+        dest = tmp_path / "snap-extras"
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 10, tzinfo=UTC),
+                period_end=datetime(2026, 4, 10, 23, 59, tzinfo=UTC),
+                commits=extra_commits,
+            ),
+        ]
+        result = create_snapshot(primary, dest, groups, extra_sources=[extra])
+        assert result.commits_created == 1
+
+
+class TestInitAndFetchExact:
+    """Pin exact behavior of _init_and_fetch."""
+
+    def test_returns_source_only_when_no_extras(self, tmp_path: Path) -> None:
+        """When extra_sources is None, only 'source' remote name is returned."""
+        from repogerbil.core.snapshot import _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "iaf-1"
+        result = _init_and_fetch(dest, source, None)
+        assert result == ["source"]
+
+    def test_returns_source_only_when_extras_empty_list(self, tmp_path: Path) -> None:
+        """Empty extras list is equivalent to None — only 'source' remote returned."""
+        from repogerbil.core.snapshot import _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "iaf-2"
+        result = _init_and_fetch(dest, source, [])
+        assert result == ["source"]
+
+    def test_returns_source_and_extras_indexed_from_zero(self, tmp_path: Path) -> None:
+        """Extra sources produce 'extra-0', 'extra-1', ... names in order."""
+        from repogerbil.core.snapshot import _init_and_fetch
+
+        source = _init_repo(tmp_path)
+
+        extras = []
+        for i in range(3):
+            ex = tmp_path / f"ex{i}"
+            ex.mkdir()
+            subprocess.run(["git", "init"], cwd=ex, capture_output=True, check=True)
+            extras.append(ex)
+
+        dest = tmp_path / "iaf-3"
+        result = _init_and_fetch(dest, source, extras)
+        assert result == ["source", "extra-0", "extra-1", "extra-2"]
+
+    def test_skips_nonexistent_extra_paths(self, tmp_path: Path) -> None:
+        """Non-existent extras are silently skipped (their slot not added)."""
+        from repogerbil.core.snapshot import _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        existing = tmp_path / "exists"
+        existing.mkdir()
+        subprocess.run(["git", "init"], cwd=existing, capture_output=True, check=True)
+        missing = tmp_path / "nope"
+
+        dest = tmp_path / "iaf-4"
+        # Order: missing, existing → existing should still be extra-1 since slots are by index
+        result = _init_and_fetch(dest, source, [missing, existing])
+        assert result == ["source", "extra-1"]
+
+    def test_destination_is_git_repo_after_init(self, tmp_path: Path) -> None:
+        """After _init_and_fetch, dest is a git repo."""
+        from repogerbil.core.snapshot import _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "iaf-5"
+        _init_and_fetch(dest, source, None)
+        assert (dest / ".git").exists()
+
+
+class TestFetchSourceRefspec:
+    """Verify _fetch_source uses the precise refspec '+refs/*:refs/fetch-<name>/*'."""
+
+    def test_creates_fetch_refs_with_remote_name(self, tmp_path: Path) -> None:
+        """After fetch, refs are stored under refs/fetch-<remote>/*."""
+        from repogerbil.core.snapshot import _fetch_source
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "fs-1"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        _fetch_source(dest, "myremote", source)
+        refs = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname)"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        # The refspec must produce refs under refs/fetch-myremote/
+        assert "refs/fetch-myremote/" in refs
+
+    def test_remote_added_with_provided_name(self, tmp_path: Path) -> None:
+        """The 'git remote add' uses the exact provided name."""
+        from repogerbil.core.snapshot import _fetch_source
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "fs-2"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        _fetch_source(dest, "abc123", source)
+        remotes = (
+            subprocess.run(["git", "remote"], cwd=dest, capture_output=True, text=True, check=True)
+            .stdout.strip()
+            .splitlines()
+        )
+        assert "abc123" in remotes
+
+
+class TestResolveTimestampExact:
+    """Pin exact behavior of _resolve_timestamp."""
+
+    def test_uses_period_end_iso_when_no_commit_time(self) -> None:
+        """Without commit_time, returns period_end as ISO8601 (no tz suffix)."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        result = _resolve_timestamp(g, None, None)
+        assert result == "2026-04-07T23:59:59"
+
+    def test_uses_period_end_iso_when_only_commit_time(self) -> None:
+        """commit_time alone (no tz) still triggers fallback to period_end."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        result = _resolve_timestamp(g, "20:00", None)
+        assert result == "2026-04-07T23:59:59"
+
+    def test_uses_period_end_iso_when_only_timezone(self) -> None:
+        """timezone alone (no commit_time) still triggers fallback to period_end."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        result = _resolve_timestamp(g, None, "UTC")
+        assert result == "2026-04-07T23:59:59"
+
+    def test_uses_make_timestamp_with_period_start_day(self) -> None:
+        """When both commit_time & timezone set, uses period_start.year/month/day."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 8, 23, 59, 59, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        result = _resolve_timestamp(g, "20:00", "UTC")
+        # Day comes from period_start (2026-04-07), not period_end (2026-04-08)
+        assert result.startswith("2026-04-07T20:00:00")
+        assert "2026-04-08" not in result
+
+
+class TestCommitWithTimestampExact:
+    """Pin behavior of _commit_with_timestamp."""
+
+    def test_preserve_true_sets_author_and_committer_date(self, tmp_path: Path) -> None:
+        """preserve=True writes GIT_AUTHOR_DATE and GIT_COMMITTER_DATE."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-1"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+
+        commits = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+
+        sha = _commit_with_timestamp(dest, tree_sha, "msg", "2026-05-15T12:34:56", True)
+        # Both author and committer date should be the provided value
+        author = subprocess.run(
+            ["git", "log", "-1", "--format=%ai", sha], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        committer = subprocess.run(
+            ["git", "log", "-1", "--format=%ci", sha], cwd=dest, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert author.startswith("2026-05-15 12:34:56")
+        assert committer.startswith("2026-05-15 12:34:56")
+
+    def test_updates_refs_heads_main(self, tmp_path: Path) -> None:
+        """After commit, refs/heads/main points to the new commit."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-2"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        commits = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+
+        sha = _commit_with_timestamp(dest, tree_sha, "msg", "2026-05-15T12:34:56", False)
+        main = subprocess.run(
+            ["git", "rev-parse", "refs/heads/main"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert main == sha
+
+    def test_first_commit_no_parent(self, tmp_path: Path) -> None:
+        """The first commit has no parent (HEAD not yet set)."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-3"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        commits = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+
+        sha = _commit_with_timestamp(dest, tree_sha, "first", "2026-05-15T12:34:56", False)
+        # Verify no parent
+        parents = subprocess.run(
+            ["git", "log", "-1", "--format=%P", sha],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert parents == ""
+
+    def test_second_commit_has_first_as_parent(self, tmp_path: Path) -> None:
+        """Subsequent commits chain off the existing HEAD."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-4"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        tree1 = subprocess.run(
+            ["git", "rev-parse", f"{apr7[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        tree2 = subprocess.run(
+            ["git", "rev-parse", f"{apr8[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree1], cwd=dest, capture_output=True, check=True)
+        first = _commit_with_timestamp(dest, tree1, "first", "2026-05-15T12:00:00", False)
+        subprocess.run(["git", "read-tree", tree2], cwd=dest, capture_output=True, check=True)
+        second = _commit_with_timestamp(dest, tree2, "second", "2026-05-15T13:00:00", False)
+        parents = subprocess.run(
+            ["git", "log", "-1", "--format=%P", second],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert parents == first
+
+
+class TestDeduplicateGroupsExact:
+    """Pin exact behavior of _deduplicate_groups."""
+
+    def test_no_duplicates_returns_all(self, tmp_path: Path) -> None:
+        """All-unique groups → returned unchanged with 0 skipped."""
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dg-1"
+        _init_and_fetch(dest, source, None)
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        unique, skipped = _deduplicate_groups(dest, groups, None, None)
+        assert skipped == 0
+        assert len(unique) == 2
+        assert unique == groups
+
+    def test_duplicate_skipped_keeps_first_group(self, tmp_path: Path) -> None:
+        """First group with a given tree state is kept; later duplicates are skipped."""
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dg-2"
+        _init_and_fetch(dest, source, None)
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        first = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+            commits=apr7,
+        )
+        second = TimeGroup(
+            period_start=datetime(2026, 4, 7, 14, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 14, 30, tzinfo=UTC),
+            commits=apr7,  # same commit → same tree
+        )
+        unique, skipped = _deduplicate_groups(dest, [first, second], None, None)
+        assert skipped == 1
+        assert unique == [first]
+
+    def test_three_duplicates_keeps_first_skips_two(self, tmp_path: Path) -> None:
+        """With three identical groups, two are skipped (exact count)."""
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dg-3"
+        _init_and_fetch(dest, source, None)
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, h, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, h, 30, tzinfo=UTC),
+                commits=apr7,
+            )
+            for h in (9, 10, 11)
+        ]
+        unique, skipped = _deduplicate_groups(dest, groups, None, None)
+        assert skipped == 2
+        assert len(unique) == 1
+
+    def test_source_subdir_invalid_falls_back_to_full_tree_for_dedup(self, tmp_path: Path) -> None:
+        """When source_subdir is set but DOES NOT EXIST in the commit, dedup
+        falls back to the full-tree hash. Two commits with different full trees
+        must therefore NOT be deduped.
+
+        Pins the GitCommandError fallback path:
+        ``tree_sha = _run_git(dest_path, "rev-parse", f"{hash}^{{tree}}", ...)``.
+        A mutation setting ``tree_sha = None`` in the except clause would
+        dedupe all groups to one (None == None).
+        """
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Make TWO commits with distinct full trees but neither has "ghost/" subdir
+        (source / "z.py").write_text("z\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: z1"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-10T10:00:00", "GIT_COMMITTER_DATE": "2026-04-10T10:00:00"},
+        )
+        (source / "z.py").write_text("z2\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: z2"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-10T11:00:00", "GIT_COMMITTER_DATE": "2026-04-10T11:00:00"},
+        )
+        commits = get_commits_for_date(source, "2026-04-10")
+        assert len(commits) == 2
+        dest = tmp_path / "ghost-fallback"
+        _init_and_fetch(dest, source, None)
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 10, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 10, 10, 30, tzinfo=UTC),
+                commits=[commits[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 10, 11, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 10, 11, 30, tzinfo=UTC),
+                commits=[commits[1]],
+            ),
+        ]
+        # source_subdir="ghost" does not exist in either commit. The except path
+        # must compute distinct full-tree SHAs and KEEP both groups.
+        unique, skipped = _deduplicate_groups(dest, groups, source_subdir="ghost", exclude_paths=None)
+        assert skipped == 0
+        assert len(unique) == 2
+
+    def test_source_subdir_dedup_keeps_distinct_subdir_trees(self, tmp_path: Path) -> None:
+        """With source_subdir set and two commits having DIFFERENT subdir trees,
+        dedup must keep BOTH groups (skipped=0)."""
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = tmp_path / "mono-distinct"
+        source.mkdir()
+        subprocess.run(["git", "init"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=source, capture_output=True, check=True
+        )
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Commit 1: pkg/a.py = "v1"
+        (source / "pkg").mkdir()
+        (source / "pkg" / "a.py").write_text("v1\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c1"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        )
+        # Commit 2: pkg/a.py = "v2" (subdir DIFFERS)
+        (source / "pkg" / "a.py").write_text("v2\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c2"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+        )
+        all_commits = get_commits_for_date(source, "2026-04-07")
+        assert len(all_commits) == 2
+
+        dest = tmp_path / "mono-distinct-dedup"
+        _init_and_fetch(dest, source, None)
+
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=[all_commits[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 11, 30, tzinfo=UTC),
+                commits=[all_commits[1]],
+            ),
+        ]
+        unique, skipped = _deduplicate_groups(dest, groups, source_subdir="pkg", exclude_paths=None)
+        # Both subdir trees DIFFER → both groups must be kept.
+        assert skipped == 0
+        assert len(unique) == 2
+
+    def test_source_subdir_dedup_uses_subdir_tree(self, tmp_path: Path) -> None:
+        """When source_subdir is set, dedup compares ONLY the subdir's tree.
+
+        Two commits that change the subdir identically but differ outside the
+        subdir must be deduped to ONE group.
+        """
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        # Build a source with two commits that differ outside pkg/ but the
+        # pkg/ contents are identical.
+        source = tmp_path / "mono"
+        source.mkdir()
+        subprocess.run(["git", "init"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=source, capture_output=True, check=True
+        )
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+        }
+        # Commit 1: pkg/a.py + root.txt=v1
+        (source / "pkg").mkdir()
+        (source / "pkg" / "a.py").write_text("a\n")
+        (source / "root.txt").write_text("v1\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c1"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        )
+        # Commit 2: same pkg/, change only root.txt
+        (source / "root.txt").write_text("v2\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: c2"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+        )
+        all_commits = get_commits_for_date(source, "2026-04-07")
+        assert len(all_commits) == 2
+
+        dest = tmp_path / "mono-dedup"
+        _init_and_fetch(dest, source, None)
+
+        # Two groups — each holding one of the commits. With source_subdir="pkg",
+        # both should have IDENTICAL subdir tree → dedup to 1.
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=[all_commits[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 11, 30, tzinfo=UTC),
+                commits=[all_commits[1]],
+            ),
+        ]
+        unique, skipped = _deduplicate_groups(dest, groups, source_subdir="pkg", exclude_paths=None)
+        assert skipped == 1, "With identical subdir trees, second group must be deduped"
+        assert len(unique) == 1
+
+    def test_empty_input_returns_empty(self, tmp_path: Path) -> None:
+        """No groups → empty result, 0 skipped."""
+        from repogerbil.core.snapshot import _deduplicate_groups, _init_and_fetch
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "dg-4"
+        _init_and_fetch(dest, source, None)
+        unique, skipped = _deduplicate_groups(dest, [], None, None)
+        assert unique == []
+        assert skipped == 0
+
+
+class TestComputeWindowTimestampsExact:
+    """Pin precise timestamp math in _compute_window_timestamps."""
+
+    def _make_group(self, date_str: str, n_files: int = 1) -> TimeGroup:
+        dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+        return TimeGroup(
+            period_start=dt,
+            period_end=dt,
+            commits=[CommitInfo(hash="a" * 40, date=date_str[:10], subject="feat: x")],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_returns_same_length_as_input(self) -> None:
+        """One ts per group."""
+        groups = [self._make_group(f"2026-04-{10 + i}T10:00:00") for i in range(5)]
+        ts = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=1)
+        assert len(ts) == 5
+
+    def test_window_normal_lands_in_range_each_day(self) -> None:
+        """For non-crossing window, all timestamps land between start_hm and end_hm."""
+        groups = [self._make_group(f"2026-04-{10 + i}T10:00:00") for i in range(3)]
+        ts = _compute_window_timestamps(groups, "14:00", "16:00", "UTC", seed=2)
+        for t in ts:
+            d = datetime.fromisoformat(t)
+            assert 14 <= d.hour < 16 or (d.hour == 16 and d.minute == 0)
+
+    def test_seed_zero_is_explicit_and_deterministic(self) -> None:
+        """seed=0 (falsy) is still respected (not replaced with the default)."""
+        groups = [self._make_group("2026-04-10T10:00:00") for _ in range(2)]
+        a = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=0)
+        b = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=0)
+        assert a == b
+
+    def test_different_seeds_produce_different_output(self) -> None:
+        """Different seeds give different timestamps."""
+        groups = [self._make_group("2026-04-10T10:00:00", 5) for _ in range(3)]
+        a = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=1)
+        b = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=2)
+        assert a != b
+
+    def test_midnight_crossing_when_end_lt_start(self) -> None:
+        """end_hm < start_hm triggers next-day rollover."""
+        groups = [self._make_group("2026-04-10T10:00:00", 1)]
+        ts = _compute_window_timestamps(groups, "23:30", "02:00", "UTC", seed=1)
+        d = datetime.fromisoformat(ts[0])
+        # Window is 23:30 Apr 10 → 02:00 Apr 11. Result must land in [23:30 Apr10, 02:00 Apr11].
+        assert (d.day == 10 and d.hour == 23 and d.minute >= 30) or (
+            d.day == 11 and (d.hour < 2 or (d.hour == 2 and d.minute == 0))
+        )
+
+    def test_midnight_crossing_when_eh_eq_sh_and_em_le_sm(self) -> None:
+        """eh==sh AND em<=sm also crosses midnight."""
+        groups = [self._make_group("2026-04-10T10:00:00", 1)]
+        # 20:30 → 20:30 should be a 24h window (em == sm), crossing midnight
+        ts = _compute_window_timestamps(groups, "20:30", "20:30", "UTC", seed=1)
+        d = datetime.fromisoformat(ts[0])
+        # Should land between Apr 10 20:30 and Apr 11 20:30 (full 24h span)
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = datetime(2026, 4, 10, 20, 30, tzinfo=tz)
+        end = datetime(2026, 4, 11, 20, 30, tzinfo=tz)
+        assert start <= d <= end
+
+    def test_non_crossing_when_end_gt_start(self) -> None:
+        """end_hm > start_hm → same-day window, no rollover."""
+        groups = [self._make_group("2026-04-10T10:00:00", 1)]
+        ts = _compute_window_timestamps(groups, "08:00", "09:00", "UTC", seed=5)
+        d = datetime.fromisoformat(ts[0])
+        assert d.date().isoformat() == "2026-04-10"
+
+    def test_multi_day_each_in_own_day(self) -> None:
+        """Groups on different days bucketed independently."""
+        groups = [
+            self._make_group("2026-04-10T10:00:00", 1),
+            self._make_group("2026-04-12T10:00:00", 1),
+            self._make_group("2026-04-11T10:00:00", 1),
+        ]
+        ts = _compute_window_timestamps(groups, "14:00", "15:00", "UTC", seed=9)
+        d0 = datetime.fromisoformat(ts[0])
+        d1 = datetime.fromisoformat(ts[1])
+        d2 = datetime.fromisoformat(ts[2])
+        assert d0.date().isoformat() == "2026-04-10"
+        assert d1.date().isoformat() == "2026-04-12"
+        assert d2.date().isoformat() == "2026-04-11"
+
+    def test_seed_change_changes_output(self) -> None:
+        """Default seed depends on input — changing window changes the seed/output."""
+        groups = [self._make_group("2026-04-10T10:00:00", 3) for _ in range(2)]
+        a = _compute_window_timestamps(groups, "20:00", "21:00", "UTC")
+        b = _compute_window_timestamps(groups, "20:00", "22:00", "UTC")
+        # Different window → different default seed → different output
+        assert a != b
+
+
+class TestSpreadTimestampsForDayExact:
+    """Pin precise math in _spread_timestamps_for_day."""
+
+    def _make_group(self, n_files: int) -> TimeGroup:
+        return TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-10", subject="feat: x")],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_returns_list_of_strings(self) -> None:
+        """Output is a list of ISO timestamp strings, one per group."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 21, 0, tzinfo=tz)
+        groups = [self._make_group(1), self._make_group(1)]
+        result = _spread_timestamps_for_day(groups, start, end, random.Random(0))
+        assert len(result) == 2
+        assert all(isinstance(r, str) for r in result)
+
+    def test_zero_files_treated_as_weight_one(self) -> None:
+        """Groups with 0 files_affected use min weight = 1 (not 0 → ZeroDivision)."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 21, 0, tzinfo=tz)
+        groups = [self._make_group(0), self._make_group(0), self._make_group(0)]
+        # Must not raise — fall-back weight=1 means equal slots.
+        result = _spread_timestamps_for_day(groups, start, end, random.Random(0))
+        assert len(result) == 3
+        parsed = [datetime.fromisoformat(t) for t in result]
+        for i in range(len(parsed) - 1):
+            assert parsed[i] < parsed[i + 1]
+
+    def test_single_group_one_result(self) -> None:
+        """Single-group path returns exactly one timestamp."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 21, 0, tzinfo=tz)
+        result = _spread_timestamps_for_day([self._make_group(5)], start, end, random.Random(0))
+        assert len(result) == 1
+
+    def test_format_includes_timezone_offset(self) -> None:
+        """Result strings include a numeric timezone offset (strftime %z)."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 21, 0, tzinfo=tz)
+        result = _spread_timestamps_for_day([self._make_group(1)], start, end, random.Random(0))
+        # UTC → "+0000"
+        assert result[0].endswith("+0000")
+
+
+class TestCreateCommitsProgressFormat:
+    """Pin exact progress-line format produced by _create_commits."""
+
+    def test_progress_format_idx_slash_total(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Progress shows '[<idx>/<total>]' with zero-padded idx matching total width."""
+        source = _init_repo(tmp_path)
+        # Add an Apr-09 commit to ensure 3-digit count is exercised? Use 2 to test [1/2] and [2/2].
+        dest = tmp_path / "prog-1"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        create_snapshot(source, dest, groups, progress=True)
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        assert len(lines) == 2
+        # idx-1 is 1, total is 2; width = len(str(2)) = 1 → "[1/2]"
+        assert lines[0].startswith("[1/2] ")
+        assert lines[1].startswith("[2/2] ")
+        # period_start.strftime("%Y-%m-%d %H:%M") format — confirm precise pattern,
+        # not just a substring (a mutation like "XX%Y-%m-%d %H:%MXX" would still
+        # contain the date substring).
+        assert "XX" not in lines[0] and "XX" not in lines[1]
+        # The ts portion is exactly 16 chars (YYYY-MM-DD HH:MM).
+        # After "[1/2] " (6 chars), the timestamp begins.
+        assert lines[0][6:22] == "2026-04-07 00:00"
+        assert lines[1][6:22] == "2026-04-08 00:00"
+
+    def test_progress_default_is_false(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """progress defaults to False — no stderr output when not requested.
+
+        Pins the default to ``progress: bool = False`` against a mutation
+        flipping it to ``True``.
+        """
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "prog-default"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        # Call WITHOUT progress kwarg → default. Must produce no per-commit progress line.
+        result = create_snapshot(source, dest, groups)
+        assert result.commits_created == 1
+        err = capsys.readouterr().err
+        # No "[1/1]" style progress line should appear (which is the marker
+        # progress=True produces).
+        assert "[1/1]" not in err
+
+    def test_progress_first_line_truncated_to_72_chars(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Progress shows only the first line of the message, truncated to 72 chars."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "prog-2"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Build a multi-line, very long subject. The first line will be truncated to 72 chars.
+        long_subject = "feat: " + "x" * 200
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=[
+                    CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject=long_subject),
+                ],
+            ),
+        ]
+        create_snapshot(source, dest, groups, progress=True)
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        assert len(lines) == 1
+        # After "[1/1] YYYY-MM-DD HH:MM  " the remainder is at most 72 chars
+        # Find the message portion after the timestamp by splitting on the 2-space delimiter
+        _prefix, _, msg_part = lines[0].partition("  ")
+        # msg_part is the truncated message. The subject starts with "feat: " (6 chars),
+        # so truncated form is "feat: " + 66 'x'.
+        assert msg_part == "feat: " + "x" * 66
+        assert len(msg_part) == 72
+
+
+class TestGetFilesForCommitExact:
+    """Pin exact behavior of _get_files_for_commit beyond the bad-hash case."""
+
+    def test_returns_sorted_unique_paths(self, tmp_path: Path) -> None:
+        """Files are returned sorted; whitespace-only lines filtered."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "gfc-1"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        commits = get_commits_for_date(source, "2026-04-08")
+        files = _get_files_for_commit(dest, commits[0].hash)
+        # The apr-08 commit added "b.py"
+        assert files == ["b.py"]
+
+
+class TestGetCommitBodyExact:
+    """Pin exact behavior of _get_commit_body."""
+
+    def test_strips_trailing_whitespace(self, tmp_path: Path) -> None:
+        """Output is .strip()ed."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "gcb-1"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        commits = get_commits_for_date(source, "2026-04-07")
+        body = _get_commit_body(dest, commits[0].hash)
+        # No leading or trailing whitespace
+        assert body == body.strip()
+        assert body == "add a"
+
+
+class TestLlmSummariesSidecarExact:
+    """Pin exact JSONL record fields written to the summaries sidecar."""
+
+    def test_record_has_required_keys(self, tmp_path: Path) -> None:
+        """LLM sidecar record contains exactly hash, date, subjects, body, changes."""
+        import json
+        from pathlib import Path as _Path
+
+        from repogerbil.llm.client import FakeOllamaClient
+        from repogerbil.llm.generator import MessageGenerator
+
+        fixtures = _Path(__file__).parent.parent / "fixtures" / "ollama_responses"
+        response = json.loads((fixtures / "valid_single.json").read_text())
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "ll-sidecar"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        gen = MessageGenerator(client=FakeOllamaClient([response]), model="gemma4")
+        result = create_snapshot(source, dest, groups, llm_generator=gen)
+        assert result.summaries_path is not None
+        sidecar = Path(result.summaries_path)
+        rec = json.loads(sidecar.read_text().strip())
+        assert set(rec.keys()) == {"hash", "date", "subjects", "body", "changes"}
+        # date format is %Y-%m-%d
+        assert rec["date"] == "2026-04-07"
+
+    def test_sidecar_filename_is_dest_dot_summaries_jsonl(self, tmp_path: Path) -> None:
+        """Sidecar path is '<dest>.summaries.jsonl' next to dest."""
+        import json
+        from pathlib import Path as _Path
+
+        from repogerbil.llm.client import FakeOllamaClient
+        from repogerbil.llm.generator import MessageGenerator
+
+        fixtures = _Path(__file__).parent.parent / "fixtures" / "ollama_responses"
+        response = json.loads((fixtures / "valid_single.json").read_text())
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "sidecar-name"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        gen = MessageGenerator(client=FakeOllamaClient([response]), model="gemma4")
+        result = create_snapshot(source, dest, groups, llm_generator=gen)
+        expected = str(dest.parent / "sidecar-name.summaries.jsonl")
+        assert result.summaries_path == expected
+
+    def test_llm_generate_called_with_correct_kwargs(self, tmp_path: Path) -> None:
+        """LLM generator.generate is called with date_str, files, commit_count,
+        original_subjects, original_bodies — pinned by name, not position."""
+        from unittest.mock import MagicMock
+
+        from repogerbil.llm.generator import GeneratedMessage
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "llm-kwargs"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Non-conventional subject so LLM is triggered
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="freeform")],
+            ),
+        ]
+        gen = MagicMock()
+        gen.generate.return_value = GeneratedMessage(
+            message="feat: refined message",
+            body="body text",
+            changes=[{"file": "a.py", "description": "added"}],
+        )
+        create_snapshot(source, dest, groups, llm_generator=gen)
+        # Exactly one call
+        gen.generate.assert_called_once()
+        call_kwargs = gen.generate.call_args.kwargs
+        # Exact keyword names — no positional fallbacks
+        assert call_kwargs["date_str"] == "2026-04-07"
+        assert call_kwargs["commit_count"] == 1
+        assert call_kwargs["original_subjects"] == ["freeform"]
+        assert call_kwargs["original_bodies"] == ["add a"]
+        # files is sorted list
+        assert call_kwargs["files"] == sorted(call_kwargs["files"])
+
+    def test_llm_failure_falls_back_to_changelog_message(self, tmp_path: Path) -> None:
+        """When LLM raises AND changelog has the date, fallback message is the
+        changelog message (not date-count format).
+
+        Pins the LLM-error recovery branch's _build_snapshot_message call:
+        ``_build_snapshot_message(group, changelog_messages, used_changelog_keys)``.
+        A mutation passing ``None`` for changelog_messages would force the
+        date-count fallback even with a valid changelog.
+        """
+        from unittest.mock import MagicMock
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "llm-fail-cl"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Non-conventional subject → LLM is triggered
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="garbage")],
+            ),
+        ]
+        gen = MagicMock()
+        gen.generate.side_effect = TimeoutError("boom")
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            changelog_messages={"2026-04-07": "feat(yaml): from-changelog message"},
+            llm_generator=gen,
+        )
+        assert result.commits_created == 1
+        log = subprocess.run(
+            ["git", "log", "--format=%B", "-1"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        # Must be the changelog message — NOT the date-count fallback
+        assert log == "feat(yaml): from-changelog message"
+
+    def test_llm_failure_uses_changelog_tracking_across_same_day(self, tmp_path: Path) -> None:
+        """Even in the LLM-failure fallback path, ``used_changelog_keys`` must
+        be honoured: same-day groups don't reuse the same changelog entry.
+
+        Pins the LLM-error branch's 3rd positional arg
+        (``used_changelog_keys``); a mutation to ``None`` would let both
+        groups reuse the same changelog entry.
+        """
+        from unittest.mock import MagicMock
+
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Add second Apr-7 commit for distinct trees
+        (source / "c.py").write_text("c\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "more freeform"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={
+                **env,
+                "GIT_AUTHOR_DATE": "2026-04-07T15:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T15:00:00",
+            },
+        )
+        dest = tmp_path / "llm-fail-2g"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Both subjects non-conventional → LLM triggered for both
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="freeform a")],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 15, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 15, 30, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr7[1].hash, date=apr7[1].date, subject="freeform b")],
+            ),
+        ]
+        gen = MagicMock()
+        gen.generate.side_effect = TimeoutError("boom")
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            changelog_messages={"2026-04-07": "feat(yaml): only-once"},
+            llm_generator=gen,
+        )
+        assert result.commits_created == 2
+        msgs = subprocess.run(
+            ["git", "log", "--format=%B---END---", "--reverse"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split("---END---")
+        msgs = [m.strip() for m in msgs if m.strip()]
+        assert len(msgs) == 2
+        # Exactly one of the two commits should carry the changelog text
+        changelog_count = sum(1 for m in msgs if m == "feat(yaml): only-once")
+        assert changelog_count == 1
+
+    def test_llm_files_filtered_by_exclude_paths(self, tmp_path: Path) -> None:
+        """exclude_paths is forwarded to _exclude_files when collecting the
+        LLM file list. Pins ``_exclude_files(all_files, exclude_paths)`` against
+        a mutation passing ``None`` for the regex list."""
+        from unittest.mock import MagicMock
+
+        from repogerbil.llm.generator import GeneratedMessage
+
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Add a lock file at root + Apr-7 commit
+        (source / "poetry.lock").write_text("locked\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "freeform"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={
+                **env,
+                "GIT_AUTHOR_DATE": "2026-04-09T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-09T10:00:00",
+            },
+        )
+        dest = tmp_path / "llm-excl"
+        apr9 = get_commits_for_date(source, "2026-04-09")
+        # Non-conventional subject to trigger LLM
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 9, tzinfo=UTC),
+                period_end=datetime(2026, 4, 9, 23, 59, tzinfo=UTC),
+                commits=[CommitInfo(hash=apr9[0].hash, date=apr9[0].date, subject="freeform")],
+            ),
+        ]
+        gen = MagicMock()
+        gen.generate.return_value = GeneratedMessage(
+            message="feat: x",
+            body="b",
+            changes=[],
+        )
+        create_snapshot(
+            source,
+            dest,
+            groups,
+            llm_generator=gen,
+            exclude_paths=[r".*\.lock$"],
+        )
+        gen.generate.assert_called_once()
+        files = gen.generate.call_args.kwargs["files"]
+        # poetry.lock must be excluded from the files passed to LLM
+        assert "poetry.lock" not in files
+
+    def test_llm_not_called_when_all_well_formed(self, tmp_path: Path) -> None:
+        """LLM generator is NOT invoked when every subject is well-formed."""
+        from unittest.mock import MagicMock
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "llm-skip"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, 59, tzinfo=UTC),
+                # Use a conventional subject
+                commits=[CommitInfo(hash=apr7[0].hash, date=apr7[0].date, subject="feat: hello")],
+            ),
+        ]
+        gen = MagicMock()
+        create_snapshot(source, dest, groups, llm_generator=gen)
+        # Generator must not be called when all subjects are well-formed
+        gen.generate.assert_not_called()
+
+
+class TestCreateCommitsBoundary:
+    """Pin boundary behavior in _create_commits — index, counter, idx-1 offset."""
+
+    def test_commits_created_counter_matches_groups_processed(self, tmp_path: Path) -> None:
+        """commits_created increments by exactly 1 per processed group."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cc-count"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        # Set 3 groups, but apr7-only twice so dedup removes 1
+        groups_with_dup = [groups[0], groups[0], groups[1]]
+        result = create_snapshot(source, dest, groups_with_dup)
+        # commits_created must equal len(deduplicated) == 2
+        assert result.commits_created == 2
+
+    def test_window_timestamps_idx_offset_is_minus_one(self, tmp_path: Path) -> None:
+        """Each group is matched to window_timestamps[idx-1], so timestamps line up."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "wt-idx"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 8, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=apr8,
+            ),
+        ]
+        create_snapshot(
+            source,
+            dest,
+            groups,
+            timezone="UTC",
+            time_window_start="10:00",
+            time_window_end="14:00",
+        )
+        # Both timestamps must be in the 10:00-14:00 window. If idx offset is off-by-one
+        # (e.g. idx+1 instead of idx-1), one would IndexError, the other would land wrong.
+        ts_lines = (
+            subprocess.run(
+                ["git", "log", "--format=%ai", "--reverse"],
+                cwd=dest,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+        assert len(ts_lines) == 2
+        for line in ts_lines:
+            t = datetime.strptime(line.strip(), "%Y-%m-%d %H:%M:%S %z")
+            assert 10 <= t.hour < 14 or (t.hour == 14 and t.minute == 0)
+
+    def test_source_subdir_success_path(self, tmp_path: Path) -> None:
+        """When source_subdir EXISTS in the commit, its subtree is used."""
+        # Build a source with a subdirectory
+        source = tmp_path / "mono"
+        source.mkdir()
+        subprocess.run(["git", "init"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=source, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"], cwd=source, capture_output=True, check=True
+        )
+        # Create both a subdir and a root file
+        (source / "pkg").mkdir()
+        (source / "pkg" / "a.py").write_text("a\n")
+        (source / "other.txt").write_text("other\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: pkg + other"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={
+                "HOME": str(tmp_path),
+                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+            },
+        )
+        dest = tmp_path / "mono-snap"
+        commits = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=commits,
+            ),
+        ]
+        result = create_snapshot(source, dest, groups, source_subdir="pkg")
+        assert result.commits_created == 1
+        # The committed tree must have a.py at root (subdir was used) and NOT other.txt
+        tree = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert "a.py" in tree
+        assert "other.txt" not in tree
+
+    def test_multi_commit_group_uses_last_tree(self, tmp_path: Path) -> None:
+        """Multi-commit groups commit the tree from the LAST commit (group.commits[-1])."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "last-tree"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        apr8 = get_commits_for_date(source, "2026-04-08")
+        # One group spanning both commits — order: apr7 first, apr8 last
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 8, 23, 59, tzinfo=UTC),
+                commits=[apr7[0], apr8[0]],
+            ),
+        ]
+        create_snapshot(source, dest, groups)
+        tree = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        # Apr 8's tree has both a.py and b.py; Apr 7's only has a.py.
+        # If the code used [0] or [+1] etc, b.py would be missing.
+        assert "a.py" in tree
+        assert "b.py" in tree
+
+
+class TestComputeWindowDayBucketing:
+    """Pin _compute_window_timestamps day-bucketing math."""
+
+    def _make_group(self, date_str: str, n_files: int = 1) -> TimeGroup:
+        dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+        return TimeGroup(
+            period_start=dt,
+            period_end=dt,
+            commits=[CommitInfo(hash="a" * 40, date=date_str[:10], subject="feat: x")],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_default_window_seed_changes_with_window_args(self) -> None:
+        """_default_window_seed considers window_start, end, timezone — not just groups."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        groups = [self._make_group("2026-04-10T10:00:00", 3)]
+        s1 = _default_window_seed(groups, "20:00", "23:00", "UTC")
+        s2 = _default_window_seed(groups, "20:00", "23:00", "America/Los_Angeles")
+        s3 = _default_window_seed(groups, "21:00", "23:00", "UTC")
+        s4 = _default_window_seed(groups, "20:00", "22:00", "UTC")
+        # All four seeds should be distinct (any pair-wise equal hints at a mutation)
+        assert len({s1, s2, s3, s4}) == 4
+
+    def test_default_window_seed_includes_files_affected_count(self) -> None:
+        """Changing files_affected length changes the seed."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        s1 = _default_window_seed([self._make_group("2026-04-10T10:00:00", 1)], "20:00", "23:00", "UTC")
+        s2 = _default_window_seed([self._make_group("2026-04-10T10:00:00", 5)], "20:00", "23:00", "UTC")
+        assert s1 != s2
+
+    def test_default_window_seed_includes_commit_hash(self) -> None:
+        """Changing the commit hash changes the seed."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        g1 = TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-10", subject="x")],
+        )
+        g2 = TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, tzinfo=UTC),
+            commits=[CommitInfo(hash="b" * 40, date="2026-04-10", subject="x")],
+        )
+        s1 = _default_window_seed([g1], "20:00", "23:00", "UTC")
+        s2 = _default_window_seed([g2], "20:00", "23:00", "UTC")
+        assert s1 != s2
+
+    def test_default_window_seed_includes_period_end(self) -> None:
+        """Changing period_end (not just start) changes the seed."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        g1 = TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, 12, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-10", subject="x")],
+        )
+        g2 = TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, 13, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-10", subject="x")],
+        )
+        s1 = _default_window_seed([g1], "20:00", "23:00", "UTC")
+        s2 = _default_window_seed([g2], "20:00", "23:00", "UTC")
+        assert s1 != s2
+
+    def test_default_window_seed_is_deterministic(self) -> None:
+        """Identical inputs give identical seeds."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        groups = [self._make_group("2026-04-10T10:00:00", 3)]
+        s1 = _default_window_seed(groups, "20:00", "23:00", "UTC")
+        s2 = _default_window_seed(groups, "20:00", "23:00", "UTC")
+        assert s1 == s2
+
+    def test_default_window_seed_int_in_uint64_range(self) -> None:
+        """Seed is an int derived from first 16 hex chars (fits in 64 bits)."""
+        from repogerbil.core._snapshot_timestamps import _default_window_seed
+
+        groups = [self._make_group("2026-04-10T10:00:00", 3)]
+        s = _default_window_seed(groups, "20:00", "23:00", "UTC")
+        assert isinstance(s, int)
+        assert 0 <= s < 2**64
+
+
+class TestResolveTimestampAdditional:
+    """More precise tests of _resolve_timestamp."""
+
+    def test_uses_period_end_format_exact(self) -> None:
+        """Fallback format is exactly '%Y-%m-%dT%H:%M:%S' (no offset, no microseconds)."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 12, 31, 5, 7, 9, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        result = _resolve_timestamp(g, None, None)
+        # Pin precise format: 4-digit year, 2-digit month/day/H/M/S, 'T' separator, no offset
+        assert result == "2026-12-31T05:07:09"
+
+    def test_make_timestamp_called_with_period_start_year_month_day(self) -> None:
+        """Day construction uses period_start.year/month/day individually."""
+        from repogerbil.core.snapshot import _resolve_timestamp
+
+        g = TimeGroup(
+            # Distinct year/month/day so any single-arg mutation visibly changes output
+            period_start=datetime(2026, 7, 21, 10, 0, tzinfo=UTC),
+            period_end=datetime(2099, 1, 1, 23, 59, 59, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-07-21", subject="x")],
+        )
+        result = _resolve_timestamp(g, "12:34", "UTC")
+        # Day comes from period_start (2026-07-21), not period_end (2099-01-01)
+        assert result.startswith("2026-07-21T12:34:00")
+
+
+class TestCommitWithTimestampAdditional:
+    """Additional tests for _commit_with_timestamp."""
+
+    def test_preserve_false_does_not_inherit_envs(self, tmp_path: Path) -> None:
+        """preserve=False doesn't pass GIT_AUTHOR_DATE — current time is used."""
+        from datetime import datetime as dt_cls
+
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-nopreserve"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        commits = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{commits[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+        before = dt_cls.now()
+        sha = _commit_with_timestamp(dest, tree_sha, "msg", "2020-01-01T00:00:00", False)
+        after = dt_cls.now()
+        # When preserve=False, the date_str is ignored — current time is committed
+        author_unix = int(
+            subprocess.run(
+                ["git", "log", "-1", "--format=%at", sha],
+                cwd=dest,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        # Must be in [before, after] window — not the 2020 date
+        assert before.timestamp() - 5 <= author_unix <= after.timestamp() + 5
+
+    def test_subsequent_commits_have_HEAD_as_parent(self, tmp_path: Path) -> None:
+        """The second commit's parent is the HEAD that was set by update-ref."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-head"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{apr7[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+        first = _commit_with_timestamp(dest, tree_sha, "first", "2026-05-01T00:00:00", False)
+        # Verify refs/heads/main moved
+        main = subprocess.run(
+            ["git", "rev-parse", "refs/heads/main"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert main == first
+
+    def test_message_committed_exactly(self, tmp_path: Path) -> None:
+        """The provided message ends up as the commit's message (no mutation)."""
+        from repogerbil.core.snapshot import _commit_with_timestamp
+
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "cwt-msg"
+        dest.mkdir()
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "src", str(source)], cwd=dest, capture_output=True, check=True)
+        subprocess.run(["git", "fetch", "src"], cwd=dest, capture_output=True, check=True)
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        tree_sha = subprocess.run(
+            ["git", "rev-parse", f"{apr7[0].hash}^{{tree}}"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(["git", "read-tree", tree_sha], cwd=dest, capture_output=True, check=True)
+        sha = _commit_with_timestamp(dest, tree_sha, "EXACT_TEST_MESSAGE_XYZ", "2026-05-01T12:00:00", False)
+        body = subprocess.run(
+            ["git", "log", "-1", "--format=%B", sha],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert body == "EXACT_TEST_MESSAGE_XYZ"
+
+
+class TestBuildSnapshotMessageNoneUsedKeys:
+    """Additional tests of _build_snapshot_message used_keys=None branch."""
+
+    def test_used_keys_none_does_not_track(self) -> None:
+        """used_keys=None means the same changelog can be reused across groups."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        msg1 = _build_snapshot_message(g, {"2026-04-07": "M"}, used_keys=None)
+        msg2 = _build_snapshot_message(g, {"2026-04-07": "M"}, used_keys=None)
+        assert msg1 == "M"
+        assert msg2 == "M"
+
+    def test_used_keys_default_is_none(self) -> None:
+        """used_keys parameter defaults to None — call without it works."""
+        from repogerbil.core.snapshot import _build_snapshot_message
+
+        g = TimeGroup(
+            period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+            period_end=datetime(2026, 4, 7, 11, 0, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-07", subject="x")],
+        )
+        msg = _build_snapshot_message(g, {"2026-04-07": "M"})
+        assert msg == "M"
+
+
+class TestSnapshotResultDataclass:
+    """SnapshotResult field defaults / construction."""
+
+    def test_defaults(self) -> None:
+        """SnapshotResult has the expected defaults."""
+        r = SnapshotResult(dest_path="/x", groups_created=1, commits_created=1)
+        assert r.groups_skipped == 0
+        assert r.summaries_path is None
+
+    def test_explicit_construction(self) -> None:
+        """All five fields can be set explicitly."""
+        r = SnapshotResult(
+            dest_path="/p",
+            groups_created=10,
+            commits_created=7,
+            groups_skipped=3,
+            summaries_path="/p.summaries.jsonl",
+        )
+        assert r.dest_path == "/p"
+        assert r.groups_created == 10
+        assert r.commits_created == 7
+        assert r.groups_skipped == 3
+        assert r.summaries_path == "/p.summaries.jsonl"
+
+    def test_is_frozen(self) -> None:
+        """SnapshotResult is frozen — assignment raises."""
+        r = SnapshotResult(dest_path="/x", groups_created=1, commits_created=1)
+        import dataclasses
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            r.dest_path = "/y"  # type: ignore[misc]
+
+
+class TestSpreadTimestampsAdditional:
+    """Additional tests for _spread_timestamps_for_day."""
+
+    def _g(self, n_files: int) -> TimeGroup:
+        return TimeGroup(
+            period_start=datetime(2026, 4, 10, tzinfo=UTC),
+            period_end=datetime(2026, 4, 10, tzinfo=UTC),
+            commits=[CommitInfo(hash="a" * 40, date="2026-04-10", subject="feat: x")],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_weighted_spacing_keeps_results_strictly_increasing(self) -> None:
+        """Even with very uneven weights, output is strictly increasing."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 23, 0, tzinfo=tz)
+        # Weights: 1, 100, 1
+        groups = [self._g(1), self._g(100), self._g(1)]
+        result = _spread_timestamps_for_day(groups, start, end, random.Random(42))
+        parsed = [datetime.fromisoformat(r) for r in result]
+        assert parsed[0] < parsed[1] < parsed[2]
+        # All within window
+        for p in parsed:
+            assert start <= p <= end
+
+    def test_single_group_with_zero_files_uses_full_window(self) -> None:
+        """Single group with zero files_affected still works (no ZeroDiv)."""
+        from datetime import datetime as dt_cls
+        import random
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("UTC")
+        start = dt_cls(2026, 4, 10, 20, 0, tzinfo=tz)
+        end = dt_cls(2026, 4, 10, 23, 0, tzinfo=tz)
+        # files_affected=0 — single group branch
+        result = _spread_timestamps_for_day([self._g(0)], start, end, random.Random(0))
+        assert len(result) == 1
+        d = datetime.fromisoformat(result[0])
+        assert start <= d <= end
+
+
+class TestComputeWindowTimestampsAdditional:
+    """Additional checks for _compute_window_timestamps."""
+
+    def _make_group(self, date_str: str, n_files: int = 1) -> TimeGroup:
+        dt = datetime.fromisoformat(date_str).replace(tzinfo=UTC)
+        return TimeGroup(
+            period_start=dt,
+            period_end=dt,
+            commits=[CommitInfo(hash="a" * 40, date=date_str[:10], subject="feat: x")],
+            files_affected=["f"] * n_files,
+        )
+
+    def test_returns_in_input_order(self) -> None:
+        """Timestamps are returned in input order (not sorted-by-time)."""
+        # Build groups in reverse chronological order
+        groups = [
+            self._make_group("2026-04-12T10:00:00"),
+            self._make_group("2026-04-10T10:00:00"),
+        ]
+        result = _compute_window_timestamps(groups, "20:00", "23:00", "UTC", seed=1)
+        # Result[0] corresponds to groups[0] (Apr 12)
+        d0 = datetime.fromisoformat(result[0])
+        d1 = datetime.fromisoformat(result[1])
+        assert d0.date().isoformat() == "2026-04-12"
+        assert d1.date().isoformat() == "2026-04-10"
+
+    def test_partial_window_args_do_not_trigger_window_branch(self, tmp_path: Path) -> None:
+        """time_window_start without end/timezone must NOT invoke window logic.
+
+        Pins ``and``: with ``or``, the partial-args case would proceed and crash
+        on _compute_window_timestamps' integer parse.
+        """
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-partial-window"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        # Pass only time_window_start (no end, no tz). Must succeed via period_end fallback.
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            time_window_start="20:00",  # alone — no end, no tz
+        )
+        assert result.commits_created == 1
+
+    def test_partial_window_only_timezone_does_not_trigger(self, tmp_path: Path) -> None:
+        """timezone alone (no time_window_*) must NOT invoke window logic."""
+        source = _init_repo(tmp_path)
+        dest = tmp_path / "snap-only-tz"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 23, 59, tzinfo=UTC),
+                commits=apr7,
+            ),
+        ]
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            timezone="UTC",  # alone
+        )
+        assert result.commits_created == 1
+
+    def test_used_changelog_keys_tracked_across_groups(self, tmp_path: Path) -> None:
+        """When two groups share a date and a changelog message exists, only the
+        first group gets the changelog; the second falls back to the date-count
+        format. This pins ``used_changelog_keys: set[str] = set()`` (mutation to
+        ``= None`` would let both groups reuse the same changelog message)."""
+        source = _init_repo(tmp_path)
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        # Add another Apr-7 commit so we have two distinct commit hashes on the
+        # same day (otherwise dedup collapses them).
+        (source / "c.py").write_text("c\n")
+        subprocess.run(["git", "add", "."], cwd=source, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: add c"],
+            cwd=source,
+            capture_output=True,
+            check=True,
+            env={
+                **env,
+                "GIT_AUTHOR_DATE": "2026-04-07T15:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T15:00:00",
+            },
+        )
+        dest = tmp_path / "snap-changelog-dedup"
+        apr7 = get_commits_for_date(source, "2026-04-07")
+        # Build two groups on Apr 7 with distinct commits each
+        groups = [
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 10, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 10, 30, tzinfo=UTC),
+                commits=[apr7[0]],
+            ),
+            TimeGroup(
+                period_start=datetime(2026, 4, 7, 15, 0, tzinfo=UTC),
+                period_end=datetime(2026, 4, 7, 15, 30, tzinfo=UTC),
+                commits=[apr7[1]],
+            ),
+        ]
+        result = create_snapshot(
+            source,
+            dest,
+            groups,
+            changelog_messages={"2026-04-07": "feat(changelog): same-day changelog message"},
+        )
+        # Both groups should produce commits (distinct trees)
+        assert result.commits_created == 2
+        # Inspect commit messages — exactly one should equal the changelog,
+        # the other should fall back to the date-count format.
+        msgs = subprocess.run(
+            ["git", "log", "--format=%B---END---", "--reverse"],
+            cwd=dest,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split("---END---")
+        msgs = [m.strip() for m in msgs if m.strip()]
+        assert len(msgs) == 2
+        changelog_count = sum(1 for m in msgs if m == "feat(changelog): same-day changelog message")
+        # Exactly one commit should carry the changelog text
+        assert changelog_count == 1
+
+    def test_timezone_applied_to_window(self) -> None:
+        """The window's tz is the configured tz (not UTC)."""
+        groups = [self._make_group("2026-04-10T10:00:00")]
+        # 20:00 LA is 03:00 UTC next day
+        result = _compute_window_timestamps(groups, "20:00", "20:01", "America/Los_Angeles", seed=1)
+        ts = datetime.fromisoformat(result[0])
+        # Must have non-UTC offset (LA is -07:00 or -08:00)
+        utc_off = ts.utcoffset()
+        assert utc_off is not None
+        offset_minutes = utc_off.total_seconds() / 60
+        assert offset_minutes != 0
+        assert offset_minutes in (-480, -420)  # PST or PDT

@@ -188,7 +188,13 @@ paths_to_mutate = [
     "src/repogerbil/core/state.py",
     "src/repogerbil/core/summary.py",
     "src/repogerbil/core/verify.py",
-    "src/repogerbil/core/vocabulary.py",
+    # vocabulary.py intentionally omitted: the three dict-literal factory
+    # functions (_default_categories, _default_severities, _default_prefix_map)
+    # produce ~185 string-case mutations that all time out because the
+    # baseline test time × 15 (mutmut's hardcoded timeout multiplier) is
+    # exceeded by hypothesis property tests in test_hypothesis_fuzz.py
+    # exploring the perturbed prefix dict. Structural correctness is pinned
+    # by the explicit per-prefix tests in tests/core/test_vocabulary.py.
 ]
 tests_dir = ["tests/"]
 also_copy = [

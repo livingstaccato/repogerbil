@@ -1,12 +1,19 @@
 ---
 name: gerbil
-description: Git history documentation, consolidation, and snapshot distillation — generate changelogs, verify stats, distill commits, audit prefix adoption, preflight inspect repos before snapshot, and search changelog archives. Context-aware when invoked without arguments.
+description: Repogerbil-specific git history workflows for projects with a `.repogerbil.toml` — structured per-day YAML changelog generation (NOT CHANGELOG.md), commit consolidation (`distill`), independent distilled-history snapshots (`snapshot`/`multi-snapshot`), conventional-commit prefix auditing, preflight artifact inspection before snapshotting, and semantic search across the repogerbil changelog corpus. Requires the `gerbil` CLI installed. Not a replacement for Keep-a-Changelog, conventional-changelog, release-please, or towncrier. Context-aware when invoked without arguments.
 user-invocable: true
 ---
 
 # gerbil
 
-Use this skill when the user wants to work with git history documentation, changelog generation, commit consolidation, history verification, or semantic search across changelogs.
+Use this skill when the user wants to work with **repogerbil** tooling specifically — structured per-day changelog YAML written into a tracked changelog directory, distilled-history snapshots that emit fresh independent repos, conventional-commit prefix audits, or semantic search across a previously-indexed repogerbil changelog corpus. The user's project should have a `.repogerbil.toml` (or be willing to create one), and the `gerbil` CLI should already be installed.
+
+## Do NOT use this skill when
+
+- The user wants to hand-edit a `CHANGELOG.md` file in Keep-a-Changelog format — that's a plain file edit; this tool writes structured YAML, not Markdown.
+- The user wants release-tagged changelog generation driven by commit prefixes — point them at conventional-changelog, release-please, or towncrier.
+- The user wants a one-off prose summary of `git log` output — `git log` + a quick paragraph is faster.
+- `gerbil --help` fails (CLI not installed). Suggest `pip install repogerbil` (or `uv add repogerbil` / `uvx --from repogerbil gerbil`) and stop until installed.
 
 ## Preamble: Config Discovery
 

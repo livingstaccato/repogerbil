@@ -196,6 +196,9 @@ also_copy = [
     "scripts/",
     "pyproject.toml",
     "VERSION",
+    # Required by tests that read project-root metadata:
+    "LICENSE",                   # test_pyproject_config.test_license_file_is_mit
+    ".github/workflows/",        # test_release_workflow.py
 ]
 runner = "pytest"
 pytest_add_cli_args = ["-o", "addopts=", "--no-cov", "-q"]

@@ -7,15 +7,19 @@ from pathlib import Path
 import tomllib
 
 
-def test_mutmut_copies_assistant_plugins_package() -> None:
+def test_mutmut_copies_repogerbil_package() -> None:
+    """The mutmut sandbox must contain the whole repogerbil package.
+
+    Listing the package wholesale (rather than enumerating subdirectories)
+    avoids drift when new subpackages are added — a recurring failure mode
+    we hit when ``llm/`` was added without updating the config.
+    """
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     data = tomllib.loads(pyproject.read_text())
 
     mutmut = data["tool"]["mutmut"]
 
-    assert "src/repogerbil/assistant_plugins/" in mutmut.get("also_copy", [])
-    assert "src/repogerbil/core/" in mutmut.get("also_copy", [])
-    assert "src/repogerbil/cli/commands/" in mutmut.get("also_copy", [])
+    assert "src/repogerbil/" in mutmut.get("also_copy", [])
 
 
 def test_mutmut_only_mutates_covered_lines() -> None:

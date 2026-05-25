@@ -86,6 +86,12 @@ combine-as-imports = true
 quote-style = "double"
 indent-style = "space"
 
+# ── Codespell ────────────────────────────────────────────────────────────────
+
+[tool.codespell]
+# Partial-word regex prefixes in classify.py / lint.py, and dual-spelling words.
+ignore-words-list = "clos,secur,delet,updat,ned,increas,bloc,unparseable,re-used"
+
 # ── MyPy ─────────────────────────────────────────────────────────────────────
 
 [tool.mypy]
@@ -186,16 +192,10 @@ paths_to_mutate = [
 ]
 tests_dir = ["tests/"]
 also_copy = [
-    "src/repogerbil/assistant_plugins/",
-    "src/repogerbil/core/",
-    "src/repogerbil/cli/commands/",
-    "VERSION",
-    "LICENSE",
-    "REUSE.toml",
-    ".gitignore",
+    "src/repogerbil/",
+    "scripts/",
     "pyproject.toml",
-    "Makefile",
-    ".github/",
+    "VERSION",
 ]
 runner = "pytest"
 pytest_add_cli_args = ["-o", "addopts=", "--no-cov", "-q"]

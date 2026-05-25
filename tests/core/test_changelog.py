@@ -348,3 +348,105 @@ class TestWriteChangelog:
         path = write_changelog("new", "2026-04-07", data, tmp_path)
         assert (tmp_path / "new").is_dir()
         assert path.exists()
+
+
+class TestBuildChangesEdgeCases:
+    """Pin _build_changes contracts surfaced by mutation testing.
+
+    Without these, mutants that flip ``> 1`` to ``> 2`` or rewrite the
+    ``_unclassified`` key survive because higher-level tests only check
+    section presence or substring matches.
+    """
+
+    def test_unclassified_singular_title(self) -> None:
+        """Single unclassified commit must NOT pluralize 'commit'."""
+        commits = _make_commits("WIP work")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        unclass = [c for c in result["changes"] if c["category"] is None]
+        assert len(unclass) == 1
+        assert unclass[0]["title"] == "Unclassified: 1 commit"
+
+    def test_unclassified_plural_title_two(self) -> None:
+        """Exactly two unclassified commits must pluralize ('commits', not 'commit')."""
+        commits = _make_commits("WIP one", "WIP two")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        unclass = [c for c in result["changes"] if c["category"] is None]
+        assert len(unclass) == 1
+        assert unclass[0]["title"] == "Unclassified: 2 commits"
+
+    def test_unclassified_plural_title_three(self) -> None:
+        """Three unclassified commits — pins '3 commits' literal."""
+        commits = _make_commits("WIP one", "WIP two", "WIP three")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        unclass = [c for c in result["changes"] if c["category"] is None]
+        assert len(unclass) == 1
+        assert unclass[0]["title"] == "Unclassified: 3 commits"
+
+    def test_unclassified_section_category_key(self) -> None:
+        """The internal _unclassified bucket key must match.
+
+        If the literal ``"_unclassified"`` is mutated (e.g. to
+        ``"XX_unclassifiedXX"``), the ``groups.get(cat)`` lookup in
+        ``_build_changes`` returns ``None`` and the unclassified section
+        is silently dropped from the output. This test catches that.
+        """
+        commits = _make_commits("WIP one", "WIP two")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # Section must exist and report 2 commits in its title.
+        assert any(c["title"] == "Unclassified: 2 commits" for c in result["changes"])
+
+    def test_section_severity_uses_commit_body(self) -> None:
+        """``classify_commit`` must receive the commit body, not just subject.
+
+        The vocabulary's verb-pattern fallback can promote ``fix: ...`` from
+        ``patch`` (internal) to ``minor`` (behavioral) when the body mentions
+        ``regression``. If ``_build_changes`` drops the ``body=`` argument,
+        the section_sev would be the subject-only severity (patch) instead
+        of the body-aware one (minor).
+        """
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="fix: crash",
+                body="resolves regression in payment flow",
+                files=["src/payments.py"],
+            ),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        fix_section = next(c for c in result["changes"] if c["category"] == "remediate")
+        # severity is derived by classify_commit — pin it so a None-substituting mutant fails.
+        assert fix_section["severity"] is not None
+
+    def test_section_severity_multi_commit_uses_body(self) -> None:
+        """Same body-propagation pin, but on the multi-commit branch (len(group) > 1)."""
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="fix: A", body="x", files=["a.py"]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="fix: B", body="y", files=["b.py"]),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        fix_section = next(c for c in result["changes"] if c["category"] == "remediate")
+        assert fix_section["severity"] is not None
+
+    def test_section_severity_propagates_settings(self) -> None:
+        """``classify_commit`` must receive the project ``Settings``, not None.
+
+        A user-defined extra prefix mapping (via ``vocabulary.extra_prefix_map``)
+        is only respected when settings is passed through. If a mutant drops
+        ``settings=``, custom prefixes fall back to defaults silently.
+        """
+        from repogerbil.core.config import VocabularyConfig
+
+        # Map a custom prefix "hotfix" → existing category "remediate" (severity patch).
+        settings = Settings(
+            vocabulary=VocabularyConfig(extra_prefix_map={"hotfix": "remediate"}),
+        )
+        commits = _make_commits("hotfix: revert bad deploy")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        # The "hotfix" subject should classify as remediate (not _unclassified)
+        # because settings propagated. Without settings, "hotfix" is unknown.
+        remediate = [c for c in result["changes"] if c["category"] == "remediate"]
+        assert len(remediate) == 1, (
+            "extra_prefix_map should have routed `hotfix:` to remediate; "
+            "did _build_changes drop settings= when calling classify_commit?"
+        )

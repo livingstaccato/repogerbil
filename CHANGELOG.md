@@ -240,7 +240,14 @@ hierarchical, configurable vocabulary.
   rounds of targeted survivor-killing. Remaining 118 are documented as
   semantically equivalent (typing.cast no-ops, PyYAML default-format
   detection, max()/min() invariants, fallback-masked git mutations,
-  pragma:no-cover branches).
+  pragma:no-cover branches). The 95.6% figure was measured prior to the
+  conftest fixture migration (which only changed how tests construct
+  git repos, not what they assert); a post-migration re-verification on
+  the dev machine was inconclusive because mutmut 3.5.0's hardcoded
+  per-mutant CPU rlimit gets exceeded by the now-larger test suite
+  (mutmut classifies the SIGKILLed children as `segfault`). The nightly
+  CI workflow runs on a clean runner so it does not accumulate parent
+  CPU time the same way.
 - **Mutation-score CI gate**: `scripts/check_mutation_score.py` reads
   `mutants/mutmut-cicd-stats.json` and fails the nightly mutation
   workflow if killed/(total - no_tests - skipped) drops below the

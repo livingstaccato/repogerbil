@@ -1,8 +1,26 @@
 # repogerbil
 
-Git history documentation and consolidation tool.
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![uv](https://img.shields.io/badge/uv-package_manager-FF6B35.svg)](https://github.com/astral-sh/uv)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![CI](https://github.com/livingstaccato/repogerbil/actions/workflows/ci.yml/badge.svg)](https://github.com/livingstaccato/repogerbil/actions/workflows/ci.yml)
+[![Mutation](https://github.com/livingstaccato/repogerbil/actions/workflows/mutation.yml/badge.svg)](https://github.com/livingstaccato/repogerbil/actions/workflows/mutation.yml)
 
-Turns messy git histories into clean, documented daily commits by combining changelog generation with commit consolidation.
+**Git history documentation and consolidation tool.**
+
+Turns messy git histories into clean, documented daily commits by combining changelog generation with commit consolidation. Use it to produce per-day YAML changelog records, distill a noisy branch in place, or emit an entirely fresh repo with a clean derived history (private→public, monorepo→public, ecosystem→single timeline).
+
+- **Source**: <https://github.com/livingstaccato/repogerbil>
+- **Issues**: <https://github.com/livingstaccato/repogerbil/issues>
+- **Releases**: <https://github.com/livingstaccato/repogerbil/releases>
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
+- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Configuration**: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- **Schema reference**: [docs/SCHEMA.md](docs/SCHEMA.md)
+- **Vocabulary**: [docs/VOCABULARY.md](docs/VOCABULARY.md)
+- **Vector DB design**: [docs/VECTOR-DB-DESIGN.md](docs/VECTOR-DB-DESIGN.md)
+- **Assistant integration**: [docs/INTEGRATION.md](docs/INTEGRATION.md)
 
 ## Install
 
@@ -359,4 +377,4 @@ make mutation         # mutmut
 
 ## License
 
-Apache-2.0
+[Apache-2.0](LICENSE) — © 2026 provide.io llc. See [REUSE.toml](REUSE.toml) for SPDX metadata.

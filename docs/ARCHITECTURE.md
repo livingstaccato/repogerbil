@@ -36,18 +36,32 @@ repogerbil/
 │   ├── catch_up.py        Forward-only `.summaries.jsonl` sidecar metadata catch-up
 │   ├── append.py          Legacy compatibility re-export for catch-up API
 │   ├── realign.py         Legacy sidecar hash realignment to current commits
+│   ├── _jsonl.py          Shared JSONL record iterator used by catch_up + realign
 │   └── llm_runner.py      Thin external LLM command runner for changelog-span
-├── llm/               Ollama prompt/schema/client/generator for snapshot message refinement
+├── llm/               Ollama integration for snapshot message refinement
+│   ├── client.py          OllamaClient Protocol + HTTPOllamaClient + FakeOllamaClient
+│   ├── generator.py       MessageGenerator — orchestrates prompt + response handling
+│   ├── prompt.py          Prompt template + well-formed conventional-commit regex
+│   └── schema.py          Pydantic schema for the LLM's JSON output
 ├── cli/               Click CLI — thin wrappers around core
-│   ├── main.py            CLI group and command registration
+│   ├── main.py            CLI group, command registration, `_configure_cli_logging`
 │   └── commands/
-│       ├── distill_cmds/     snapshot, multi-snapshot, preview, export-cadence
-│       ├── preflight_cmd.py  preflight — repo inspection before distilling
+│       ├── audit_cmds.py        `audit` + `missing`
+│       ├── backfill_cmds.py     `backfill`
+│       ├── changelog_cmds.py    `changelog` + `fix-stats` + `status`
 │       ├── changelog_span_cmd.py  release-span prompt/synthesis workflow
-│       ├── catch_up_cmd.py   sidecar metadata catch-up CLI
-│       ├── append_cmd.py     legacy compatibility re-export for catch-up CLI
-│       ├── realign_cmd.py    sidecar realignment CLI
-│       └── vectordb_cmds.py  Optional vector DB commands (index, search, related, similar, impact)
+│       ├── catch_up_cmd.py      sidecar metadata catch-up CLI
+│       ├── append_cmd.py        legacy compatibility re-export for catch-up CLI
+│       ├── distill_cmd.py       `distill` — destructive in-place consolidation
+│       ├── distill_cmds/        snapshot, multi-snapshot, distill-ecosystem, preview, export-cadence, probe
+│       ├── enrich_cmds.py       `enrich`
+│       ├── lint_cmd.py          `lint` — changelog YAML schema validation
+│       ├── plugin_cmd.py        `plugin` — export/install bundled assistant plugin files
+│       ├── preflight_cmd.py     `preflight` — repo inspection before distilling
+│       ├── realign_cmd.py       sidecar realignment CLI
+│       ├── summary_cmds.py      `summary`
+│       ├── vectordb_cmds.py     Optional vector DB commands (index, search, related, similar, impact)
+│       └── verify_cmds.py       `verify`
 ```
 
 `core/git/` re-exports the stable git helper API from smaller internal files (`_commits.py`, `_stats.py`, `_trees.py`, `_runner.py`, and `_types.py`).

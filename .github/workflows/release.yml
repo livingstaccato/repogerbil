@@ -3,17 +3,135 @@
 
 name: Release
 
+# Driven by a user-created GitHub Release (or manual dispatch for dry runs).
+# Trigger model matches the provide-io family: cut a Release in the GH UI,
+# the rest of the pipeline (build -> TestPyPI -> verify -> PyPI -> sign +
+# attach) runs automatically. Tag-push auto-release is intentionally not
+# wired up here — flip when ready.
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
 
 jobs:
+  # Delegate tests + build + (optional) GH release to the ci-tooling reusable.
+  # GH release creation is suppressed because `release: published` means one
+  # already exists.
   release:
-    uses: provide-io/ci-tooling/workflows/python-release.yml@v0
+    uses: provide-io/ci-tooling/.github/workflows/python-release.yml@v0.4.2
+    permissions:
+      contents: write
     with:
-      python-version: "3.11"
-      build-backend: "uv"
-      run-tests: true
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      create-github-release: false
+    secrets: inherit
+
+  # TestPyPI publish runs in the caller so PyPI Trusted Publishing matches
+  # the OIDC job_workflow_ref against this repo's release.yml (reusable
+  # workflows are not matched by PyPI's publisher config).
+  publish-testpypi:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/repogerbil
+    steps:
+      # Pull the built wheel + sdist that the reusable workflow uploaded.
+      - name: 📦 Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: dist
+      # Trusted-publish to TestPyPI; skip-existing keeps re-runs idempotent.
+      - name: 📤 Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # Install from TestPyPI and assert the installed version matches the
+  # release tag. Uses helper scripts from ci-tooling/scripts/release/.
+  verify-testpypi:
+    needs: publish-testpypi
+    runs-on: ubuntu-24.04
+    steps:
+      # Fetch the ci-tooling helpers into a side path so we can call them.
+      - name: 📥 Checkout ci-tooling helpers
+        uses: actions/checkout@v6
+        with:
+          repository: provide-io/ci-tooling
+          ref: v0.4.2
+          path: .ci-tooling
+      # Pin Python via uv (matches the rest of CI).
+      - name: 🐍 Setup uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.11"
+          enable-cache: false
+      # Resolve the version from the release tag for the verify step.
+      - name: 🔖 Resolve version
+        id: ver
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: .ci-tooling/scripts/release/resolve-tag-version.sh >> "$GITHUB_OUTPUT"
+      # Install from TestPyPI and confirm __version__ matches the tag.
+      - name: ✅ Install from TestPyPI and verify
+        run: .ci-tooling/scripts/release/verify-testpypi.sh repogerbil "${{ steps.ver.outputs.version }}" "import repogerbil; v = repogerbil.__version__"
+
+  # Final PyPI publish via trusted publisher bound to this repo's
+  # release.yml + the `pypi` environment.
+  publish-pypi:
+    needs: verify-testpypi
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+      url: https://pypi.org/p/repogerbil
+    steps:
+      - name: 📦 Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: dist
+      - name: 📤 Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  # Generate SBOM, sign artifacts with sigstore, attach to the GH release.
+  sign-and-upload:
+    needs: [publish-pypi]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+      - name: 🐍 Setup uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          python-version: "3.11"
+      - name: 📦 Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-artifacts
+          path: dist
+      - name: 🧾 Generate Python SBOM
+        run: uvx cyclonedx-py environment --output-format json -o sbom-python.cdx.json
+      - name: 🔏 Sigstore sign artifacts
+        uses: sigstore/gh-action-sigstore-python@v3
+        with:
+          inputs: dist/*.whl dist/*.tar.gz
+      # Attach wheel + sdist + sigstore bundle + SBOM to the GH release.
+      - name: ⬆️ Attach artifacts to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/*.whl dist/*.tar.gz dist/*.sigstore.json sbom-python.cdx.json --repo "$GITHUB_REPOSITORY" --clobber

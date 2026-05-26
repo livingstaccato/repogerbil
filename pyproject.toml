@@ -51,7 +51,7 @@ where = ["src"]
 include = ["repogerbil*"]
 
 [tool.setuptools.dynamic]
-version = {file = ["VERSION"]}
+version = {file = "VERSION"}
 
 [tool.setuptools.package-data]
 repogerbil = [

@@ -44,7 +44,8 @@ def test_build_backend_uses_setuptools_and_version_file() -> None:
     assert "setuptools>=77" in build_system["requires"]
     assert "wheel>=0.43" in build_system["requires"]
     assert project["dynamic"] == ["version"]
-    assert dynamic["file"] == ["VERSION"]
+    # Match the provide-io family convention: string form, not list.
+    assert dynamic["file"] == "VERSION"
     assert setuptools["include-package-data"] is True
 
 

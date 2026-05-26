@@ -3,6 +3,7 @@
 
 """Tests for stats verification and coverage checking."""
 
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -17,14 +18,8 @@ from repogerbil.core.verify import (
 )
 
 
-def _init_verify_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_verify_repo(repo: Path) -> Path:
+    """Seed an existing git repo with a single 2026-04-07 commit adding ``f.py``."""
     (repo / "f.py").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -32,7 +27,7 @@ def _init_verify_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        env={"GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
     )
     return repo
 
@@ -176,8 +171,8 @@ class TestHasCoverageGap:
 
 
 class TestVerifyChangelog:
-    def test_valid_changelog(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_valid_changelog(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -203,38 +198,38 @@ class TestVerifyChangelog:
         assert result.repo == "repo"
         assert result.stats_match is True
 
-    def test_invalid_yaml(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_invalid_yaml(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "bad.yaml"
         yaml_path.write_text("not: [valid: yaml: {{")
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_not_a_dict(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_not_a_dict(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "list.yaml"
         yaml_path.write_text("- item1\n- item2\n")
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_missing_stats(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_missing_stats(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "nostats.yaml"
         yaml_path.write_text(yaml.dump({"date": "2026-04-07", "repo": "repo"}))
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_stats_not_dict(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_stats_not_dict(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "badstats.yaml"
         yaml_path.write_text(yaml.dump({"date": "2026-04-07", "repo": "repo", "stats": "nope"}))
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_missing_files_changed(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_missing_files_changed(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "nofc.yaml"
         yaml_path.write_text(yaml.dump({"date": "2026-04-07", "repo": "repo", "stats": {"insertions": 1}}))
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_non_numeric_files_changed_returns_none(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_non_numeric_files_changed_returns_none(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "bad-files.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -243,14 +238,14 @@ class TestVerifyChangelog:
         )
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_missing_date(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_missing_date(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "nodate.yaml"
         yaml_path.write_text(yaml.dump({"repo": "repo", "stats": {"files_changed": 1}}))
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_no_commits_for_date(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_no_commits_for_date(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "nocommits.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -263,20 +258,15 @@ class TestVerifyChangelog:
         )
         assert verify_changelog(yaml_path, repo) is None
 
-    def test_zero_actual_files(self, tmp_path: Path) -> None:
+    def test_zero_actual_files(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
         """Test tolerance check when actual files is 0."""
-        repo = tmp_path / "zrepo"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo = make_git_repo("zrepo")
         subprocess.run(
             ["git", "commit", "--allow-empty", "-m", "empty"],
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+            env={"GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
         )
         yaml_path = tmp_path / "zero.yaml"
         yaml_path.write_text(
@@ -292,8 +282,8 @@ class TestVerifyChangelog:
         assert result is not None
         assert result.stats_match is True
 
-    def test_stats_mismatch(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_stats_mismatch(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "mismatch.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -308,8 +298,8 @@ class TestVerifyChangelog:
         assert result is not None
         assert result.stats_match is False
 
-    def test_insertions_mismatch_affects_stats_match(self, tmp_path: Path) -> None:
-        repo = _init_verify_repo(tmp_path)
+    def test_insertions_mismatch_affects_stats_match(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -333,9 +323,9 @@ class TestVerifyChangelog:
         assert result is not None
         assert result.stats_match is False
 
-    def test_default_tolerance_is_exactly_20(self, tmp_path: Path) -> None:
+    def test_default_tolerance_is_exactly_20(self, tmp_path: Path, git_repo: Path) -> None:
         """A 20% diff must pass at default tolerance; 21% must fail. Pins tolerance=20."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -379,9 +369,9 @@ class TestVerifyChangelog:
         sig = inspect.signature(verify.verify_changelog)
         assert sig.parameters["tolerance"].default == 20
 
-    def test_deletions_key_is_read_and_used(self, tmp_path: Path) -> None:
+    def test_deletions_key_is_read_and_used(self, tmp_path: Path, git_repo: Path) -> None:
         """The 'deletions' key must be read literally and propagate into reported_deletions."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -406,9 +396,9 @@ class TestVerifyChangelog:
         # The "deletions" key must be read correctly to propagate to reported_deletions
         assert result.reported_deletions == 42
 
-    def test_repo_default_empty_string(self, tmp_path: Path) -> None:
+    def test_repo_default_empty_string(self, tmp_path: Path, git_repo: Path) -> None:
         """When repo key is missing, default repo must be exactly empty string ''."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "no-repo-key.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -424,9 +414,9 @@ class TestVerifyChangelog:
         assert result.repo == ""
         assert isinstance(result.repo, str)
 
-    def test_date_normalized_to_first_ten_chars(self, tmp_path: Path) -> None:
+    def test_date_normalized_to_first_ten_chars(self, tmp_path: Path, git_repo: Path) -> None:
         """A date longer than 10 chars (e.g. ISO datetime) must be truncated to exactly [:10]."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "long-date.yaml"
         # Date string longer than 10 chars; [:10] truncates correctly, [:11] gives extra char
         yaml_path.write_text(
@@ -444,9 +434,9 @@ class TestVerifyChangelog:
         assert result.date == "2026-04-07"
         assert len(result.date) == 10
 
-    def test_accounted_files_propagates_exactly(self, tmp_path: Path) -> None:
+    def test_accounted_files_propagates_exactly(self, tmp_path: Path, git_repo: Path) -> None:
         """count_accounted_files result must flow into accounted_files."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "with-bulk.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -463,9 +453,9 @@ class TestVerifyChangelog:
         # If accounted = None or wrong, this fails
         assert result.accounted_files == 7
 
-    def test_all_fields_propagate_exactly(self, tmp_path: Path) -> None:
+    def test_all_fields_propagate_exactly(self, tmp_path: Path, git_repo: Path) -> None:
         """All VerifyResult fields must contain the right value, not None."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -497,9 +487,9 @@ class TestVerifyChangelog:
         assert result.reported_insertions == actual.insertions
         assert result.reported_deletions == actual.deletions
 
-    def test_reported_insertions_falls_back_to_zero_not_one(self, tmp_path: Path) -> None:
+    def test_reported_insertions_falls_back_to_zero_not_one(self, tmp_path: Path, git_repo: Path) -> None:
         """When insertions key missing/None, reported_insertions must be 0 exactly (not 1)."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "no-insertions.yaml"
         # insertions missing entirely → _safe_int(None) returns None → `None or 0` = 0
         yaml_path.write_text(
@@ -517,10 +507,10 @@ class TestVerifyChangelog:
         assert result.reported_insertions == 0
         assert result.reported_deletions == 0
 
-    def test_reported_insertions_propagates_when_truthy(self, tmp_path: Path) -> None:
+    def test_reported_insertions_propagates_when_truthy(self, tmp_path: Path, git_repo: Path) -> None:
         """When insertions provided and truthy, reported_insertions must equal the value
         (not 0 from `and 0`)."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         yaml_path = tmp_path / "with-insertions.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -538,9 +528,9 @@ class TestVerifyChangelog:
         # `7 or 0` == 7; `7 and 0` == 0. Must be 7.
         assert result.reported_deletions == 7
 
-    def test_tolerance_argument_propagates_to_deletions_check(self, tmp_path: Path) -> None:
+    def test_tolerance_argument_propagates_to_deletions_check(self, tmp_path: Path, git_repo: Path) -> None:
         """The tolerance arg must be passed into the deletions _within_tolerance check (not None)."""
-        repo = _init_verify_repo(tmp_path)
+        repo = _seed_verify_repo(git_repo)
         from repogerbil.core.git import get_commits_for_date, get_diff_stats
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -554,13 +544,12 @@ class TestVerifyChangelog:
             capture_output=True,
             check=True,
         )
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
         subprocess.run(
             ["git", "commit", "-m", "remove"],
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+            env={"GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
         )
         commits = get_commits_for_date(repo, "2026-04-07")
         actual = get_diff_stats(repo, commits[0].hash, commits[-1].hash)

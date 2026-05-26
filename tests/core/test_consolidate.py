@@ -19,17 +19,8 @@ from repogerbil.core.consolidate import (
 from repogerbil.core.git import CommitInfo
 
 
-def _init_repo(tmp_path: Path) -> Path:
-    """Create a temp git repo with 3 commits across 2 days."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-
-    env_base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
-
+def _seed_three_commits(repo: Path) -> Path:
+    """Seed an existing repo with 3 commits across 2 days (2026-04-07 / 04-08)."""
     (repo / "f1.py").write_text("a\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -38,7 +29,6 @@ def _init_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True,
         env={
-            **env_base,
             "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
             "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
         },
@@ -52,7 +42,6 @@ def _init_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True,
         env={
-            **env_base,
             "GIT_AUTHOR_DATE": "2026-04-07T11:00:00",
             "GIT_COMMITTER_DATE": "2026-04-07T11:00:00",
         },
@@ -66,7 +55,6 @@ def _init_repo(tmp_path: Path) -> Path:
         capture_output=True,
         check=True,
         env={
-            **env_base,
             "GIT_AUTHOR_DATE": "2026-04-08T09:00:00",
             "GIT_COMMITTER_DATE": "2026-04-08T09:00:00",
         },
@@ -76,8 +64,8 @@ def _init_repo(tmp_path: Path) -> Path:
 
 
 class TestConsolidateDryRun:
-    def test_dry_run_returns_preview(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_dry_run_returns_preview(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")
@@ -101,8 +89,8 @@ class TestConsolidateDryRun:
         assert result.commits_consolidated == 3
         assert result.target_branch == "repogerbil-consolidated"
 
-    def test_dry_run_doesnt_create_branch(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_dry_run_doesnt_create_branch(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         commits = get_commits_for_date(repo, "2026-04-07")
@@ -151,8 +139,8 @@ class TestGeneratePreview:
 
 
 class TestConsolidateReal:
-    def test_creates_branch_with_backup(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_creates_branch_with_backup(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")
@@ -179,8 +167,8 @@ class TestConsolidateReal:
         assert result.backup_branch in branches
         assert "repogerbil-consolidated" in branches
 
-    def test_no_backup(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_no_backup(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")
@@ -196,8 +184,8 @@ class TestConsolidateReal:
         assert result.backup_branch == ""
         assert result.backup_tag == ""
 
-    def test_changelog_message_used(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_changelog_message_used(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")
@@ -222,8 +210,8 @@ class TestConsolidateReal:
         ).stdout.strip()
         assert log_output == "feat: custom changelog message for Apr 7"
 
-    def test_no_timestamp_preservation(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_no_timestamp_preservation(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr8 = get_commits_for_date(repo, "2026-04-08")
@@ -238,8 +226,8 @@ class TestConsolidateReal:
         result = consolidate(repo, groups, target_branch="no-ts-test", preserve_timestamps=False)
         assert result.groups_consolidated == 1
 
-    def test_auto_message_single_commit(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_auto_message_single_commit(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr8 = get_commits_for_date(repo, "2026-04-08")
@@ -261,8 +249,8 @@ class TestConsolidateReal:
         ).stdout.strip()
         assert log_output == "chore: add f3"
 
-    def test_failure_restores_original_branch_and_removes_target(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path)
+    def test_failure_restores_original_branch_and_removes_target(self, git_repo: Path) -> None:
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")
@@ -296,10 +284,10 @@ class TestConsolidateReal:
         ).stdout.strip()
         assert branches == ""
 
-    def test_failure_before_target_creation_skips_delete_branch(self, tmp_path: Path) -> None:
+    def test_failure_before_target_creation_skips_delete_branch(self, git_repo: Path) -> None:
         from repogerbil.core.git import _run_git as git_run
 
-        repo = _init_repo(tmp_path)
+        repo = _seed_three_commits(git_repo)
         from repogerbil.core.git import get_commits_for_date
 
         apr7 = get_commits_for_date(repo, "2026-04-07")

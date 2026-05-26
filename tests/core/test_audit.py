@@ -3,6 +3,7 @@
 
 """Tests for missing changelog audit."""
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 import subprocess
@@ -13,14 +14,8 @@ from repogerbil.core.audit import MissingDate, find_missing
 from repogerbil.core.config import RepoOverride
 
 
-def _init_repo(tmp_path: Path, name: str, dates: list[str]) -> Path:
-    repo = tmp_path / name
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _add_dated_commits(repo: Path, dates: list[str]) -> Path:
+    """Add one commit per supplied date string (``YYYY-MM-DD``) to ``repo``."""
     for d in dates:
         (repo / f"{d}.txt").write_text(d)
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -29,9 +24,14 @@ def _init_repo(tmp_path: Path, name: str, dates: list[str]) -> Path:
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": f"{d}T10:00:00", "GIT_COMMITTER_DATE": f"{d}T10:00:00"},
+            env={"GIT_AUTHOR_DATE": f"{d}T10:00:00", "GIT_COMMITTER_DATE": f"{d}T10:00:00"},
         )
     return repo
+
+
+def _make_repo(make_git_repo: Callable[[str], Path], name: str, dates: list[str]) -> Path:
+    """Create a named repo via the shared fixture and seed it with dated commits."""
+    return _add_dated_commits(make_git_repo(name), dates)
 
 
 def _write_changelog(cl_dir: Path, repo_name: str, date: str) -> None:
@@ -41,8 +41,8 @@ def _write_changelog(cl_dir: Path, repo_name: str, date: str) -> None:
 
 
 class TestFindMissing:
-    def test_finds_missing_dates(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07", "2026-04-08"])
+    def test_finds_missing_dates(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07", "2026-04-08"])
         cl_dir = tmp_path / "changelogs"
         _write_changelog(cl_dir, "myrepo", "2026-04-07")
 
@@ -51,8 +51,8 @@ class TestFindMissing:
         assert len(result) == 1
         assert result[0] == MissingDate(repo="myrepo", date="2026-04-08")
 
-    def test_all_up_to_date(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07"])
+    def test_all_up_to_date(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07"])
         cl_dir = tmp_path / "changelogs"
         _write_changelog(cl_dir, "myrepo", "2026-04-07")
 
@@ -63,14 +63,14 @@ class TestFindMissing:
         result = find_missing({"gone": "/nonexistent/path"}, tmp_path / "changelogs")
         assert result == []
 
-    def test_no_changelog_dir(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07"])
+    def test_no_changelog_dir(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07"])
         result = find_missing({"myrepo": str(repo)}, tmp_path / "changelogs")
         assert len(result) == 1
 
-    def test_multiple_repos(self, tmp_path: Path) -> None:
-        repo_a = _init_repo(tmp_path, "repo-a", ["2026-04-07"])
-        repo_b = _init_repo(tmp_path, "repo-b", ["2026-04-07", "2026-04-08"])
+    def test_multiple_repos(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo_a = _make_repo(make_git_repo, "repo-a", ["2026-04-07"])
+        repo_b = _make_repo(make_git_repo, "repo-b", ["2026-04-07", "2026-04-08"])
         tracked = {"repo-a": str(repo_a), "repo-b": str(repo_b)}
         result = find_missing(tracked, tmp_path / "changelogs")
         repos = {m.repo for m in result}
@@ -79,8 +79,8 @@ class TestFindMissing:
 
 
 class TestSkipDates:
-    def test_skip_dates_filters_results(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07", "2026-04-08"])
+    def test_skip_dates_filters_results(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07", "2026-04-08"])
         cl_dir = tmp_path / "changelogs"
         # No changelogs at all — both dates missing
 
@@ -89,14 +89,16 @@ class TestSkipDates:
         assert len(result) == 1
         assert result[0].date == "2026-04-08"
 
-    def test_skip_dates_empty_list(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07"])
+    def test_skip_dates_empty_list(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07"])
         overrides = {"myrepo": RepoOverride(skip_dates=[])}
         result = find_missing({"myrepo": str(repo)}, tmp_path / "changelogs", repo_overrides=overrides)
         assert len(result) == 1
 
-    def test_skip_dates_no_override_for_repo(self, tmp_path: Path) -> None:
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07"])
+    def test_skip_dates_no_override_for_repo(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07"])
         overrides = {"other": RepoOverride(skip_dates=["2026-04-07"])}
         result = find_missing({"myrepo": str(repo)}, tmp_path / "changelogs", repo_overrides=overrides)
         assert len(result) == 1
@@ -142,7 +144,9 @@ class TestArchivedRepos:
         result = find_missing({"gone": "/nonexistent/path"}, cl_dir)
         assert MissingDate(repo="gone", date="2026-04-02") in result
 
-    def test_today_parameter_filters_future_commits(self, tmp_path: Path) -> None:
+    def test_today_parameter_filters_future_commits(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
         """An injected ``today`` lets callers audit "as of" a fixed historical date.
 
         Commits dated after the injected ``today`` are excluded from the
@@ -152,7 +156,7 @@ class TestArchivedRepos:
         """
         # Repo with two commits; the second is "in the future" relative to our
         # injected today value.
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-07", "2026-04-09"])
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-07", "2026-04-09"])
         cl_dir = tmp_path / "changelogs"
         # No changelogs exist — both dates would normally be reported missing.
 
@@ -162,11 +166,11 @@ class TestArchivedRepos:
         assert len(result) == 1
         assert result[0].date == "2026-04-07"
 
-    def test_today_defaults_to_date_today(self, tmp_path: Path) -> None:
+    def test_today_defaults_to_date_today(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
         """Without an explicit ``today``, behavior matches the historical default."""
         # Use historical dates (long before any plausible "today") so the
         # default branch always reports them as missing.
-        repo = _init_repo(tmp_path, "myrepo", ["2020-01-01"])
+        repo = _make_repo(make_git_repo, "myrepo", ["2020-01-01"])
         cl_dir = tmp_path / "changelogs"
         # Same call shape as the legacy API (no today=) — must still work.
         result = find_missing({"myrepo": str(repo)}, cl_dir)
@@ -190,13 +194,15 @@ class TestArchivedRepos:
 class TestMutationKillers:
     """Targeted tests pinning exact boundaries to kill mutation survivors."""
 
-    def test_today_boundary_includes_equal_date(self, tmp_path: Path) -> None:
+    def test_today_boundary_includes_equal_date(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
         """Commit dated exactly on `today` must be included in expected (`<=` not `<`).
 
         Kills mutant `find_missing__mutmut_26` (`d <= today_str` -> `d < today_str`).
         """
         # A repo with a single commit dated 2026-04-08 and today=2026-04-08.
-        repo = _init_repo(tmp_path, "myrepo", ["2026-04-08"])
+        repo = _make_repo(make_git_repo, "myrepo", ["2026-04-08"])
         cl_dir = tmp_path / "changelogs"
         # No changelog exists. With `<=`, 2026-04-08 must be missing.
         # With `<`, the date would be excluded and result empty.

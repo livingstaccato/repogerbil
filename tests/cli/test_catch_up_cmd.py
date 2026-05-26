@@ -5,23 +5,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 
 from click.testing import CliRunner
 
 from repogerbil.cli.main import cli
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir()
-    for cmd in [
-        ["git", "init", "-q", "-b", "main"],
-        ["git", "config", "user.email", "t@t.test"],
-        ["git", "config", "user.name", "T"],
-        ["git", "config", "commit.gpgsign", "false"],
-    ]:
-        subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
 
 
 def _commit(repo: Path, file: str, content: str, message: str) -> None:
@@ -31,9 +21,8 @@ def _commit(repo: Path, file: str, content: str, message: str) -> None:
 
 
 class TestCatchUpCmd:
-    def test_basic_run_writes_jsonl(self, tmp_path: Path) -> None:
-        repo = tmp_path / "r"
-        _init_repo(repo)
+    def test_basic_run_writes_jsonl(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = make_git_repo("r")
         _commit(repo, "a.txt", "1", "feat: one")
         _commit(repo, "b.txt", "2", "fix: two")
         jsonl = tmp_path / "r.summaries.jsonl"
@@ -45,9 +34,8 @@ class TestCatchUpCmd:
         assert len(lines) == 2
         assert "recorded: 2" in result.output
 
-    def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
-        repo = tmp_path / "r"
-        _init_repo(repo)
+    def test_dry_run_does_not_write(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = make_git_repo("r")
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -56,9 +44,10 @@ class TestCatchUpCmd:
         assert not jsonl.exists()
         assert "would record: 1" in result.output
 
-    def test_idempotent_second_run_reports_zero(self, tmp_path: Path) -> None:
-        repo = tmp_path / "r"
-        _init_repo(repo)
+    def test_idempotent_second_run_reports_zero(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = make_git_repo("r")
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -69,9 +58,10 @@ class TestCatchUpCmd:
         assert "recorded: 0" in second.output
         assert "already recorded: 1" in second.output
 
-    def test_legacy_append_alias_still_works(self, tmp_path: Path) -> None:
-        repo = tmp_path / "r"
-        _init_repo(repo)
+    def test_legacy_append_alias_still_works(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = make_git_repo("r")
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 

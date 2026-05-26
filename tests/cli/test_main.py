@@ -3,6 +3,7 @@
 
 """Tests for CLI commands."""
 
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -14,15 +15,21 @@ import yaml
 from repogerbil.cli.main import _handle_prompt_mode, _report_verification, cli
 
 
-def _init_test_repo(tmp_path: Path) -> Path:
-    """Create a minimal git repo for CLI testing."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_two_commits(repo: Path) -> Path:
+    """Add the two canonical commits (feat + WIP) used by most tests in this module.
+
+    Accepts a repo already initialised by the shared ``git_repo`` /
+    ``make_git_repo`` fixtures. The fixture sets user identity,
+    ``commit.gpgsign=false`` and ``init.defaultBranch=main`` — this helper
+    only adds the commits.
+
+    The ``HOME`` / ``PATH`` env-isolation env-dict is kept for the
+    ``git commit`` calls below as a defensive belt-and-braces guard on top
+    of the session-scoped ``GIT_CONFIG_GLOBAL`` isolation in ``conftest.py``;
+    earlier breakage from CI runners without a global identity makes this
+    cheap insurance.
+    """
+    env = {"HOME": str(repo.parent), "PATH": "/usr/bin:/bin:/usr/local/bin"}
     (repo / "f.py").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -49,14 +56,9 @@ def _generate_changelog(runner: CliRunner, repo: Path, out: Path) -> None:
     runner.invoke(cli, ["changelog", str(repo), "--date", "2026-04-07", "--output-dir", str(out), "--analyze"])
 
 
-def _repo_with_hidden_commit(tmp_path: Path) -> Path:
-    repo = tmp_path / "hidden"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_repo_with_hidden_commit(repo: Path) -> Path:
+    """Seed a pre-initialised repo with a visible commit and a deleted hidden branch."""
+    env = {"HOME": str(repo.parent), "PATH": "/usr/bin:/bin:/usr/local/bin"}
     (repo / "visible.py").write_text("visible\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -308,8 +310,8 @@ class TestRealign:
 
 
 class TestStatus:
-    def test_with_dates(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_with_dates(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["status", str(repo)])
         assert result.exit_code == 0
         assert "Active dates" in result.output
@@ -328,8 +330,8 @@ class TestStatus:
 
 
 class TestChangelog:
-    def test_draft_mode(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_draft_mode(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         result = CliRunner().invoke(
@@ -338,8 +340,8 @@ class TestChangelog:
         assert result.exit_code == 0
         assert "Wrote" in result.output
 
-    def test_analyze_mode(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_analyze_mode(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         result = CliRunner().invoke(
@@ -349,13 +351,13 @@ class TestChangelog:
         assert result.exit_code == 0
         assert "Wrote" in result.output
 
-    def test_no_commits(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_no_commits(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["changelog", str(repo), "--date", "2020-01-01"])
         assert "No commits" in result.output
 
-    def test_exists_no_force(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_exists_no_force(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -363,8 +365,8 @@ class TestChangelog:
         result = runner.invoke(cli, ["changelog", str(repo), "--date", "2026-04-07", "--output-dir", str(out)])
         assert "Exists" in result.output
 
-    def test_force_overwrite(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_force_overwrite(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -375,8 +377,8 @@ class TestChangelog:
         )
         assert "Wrote" in result.output
 
-    def test_prompt_mode(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_prompt_mode(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         result = CliRunner().invoke(
@@ -386,8 +388,8 @@ class TestChangelog:
         assert result.exit_code == 0
         assert "Wrote" in result.output
 
-    def test_prompt_with_thorough_config(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_prompt_with_thorough_config(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         config = tmp_path / ".repogerbil.toml"
@@ -406,8 +408,8 @@ class TestChangelog:
         finally:
             Settings._toml_path = None
 
-    def test_message_depth_flag(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_message_depth_flag(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         result = CliRunner().invoke(
@@ -425,25 +427,9 @@ class TestChangelog:
         )
         assert result.exit_code == 0
 
-    def test_extra_source_flag(self, tmp_path: Path) -> None:
-        primary = tmp_path / "primary"
-        primary.mkdir()
-        subprocess.run(["git", "init"], cwd=primary, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "user.email", "t@t.com"], cwd=primary, capture_output=True, check=True
-        )
-        subprocess.run(["git", "config", "user.name", "T"], cwd=primary, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "commit.gpgsign", "false"], cwd=primary, capture_output=True, check=True
-        )
-        backup = tmp_path / "backup"
-        backup.mkdir()
-        subprocess.run(["git", "init"], cwd=backup, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=backup, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=backup, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "config", "commit.gpgsign", "false"], cwd=backup, capture_output=True, check=True
-        )
+    def test_extra_source_flag(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        primary = make_git_repo("primary")
+        backup = make_git_repo("backup")
         env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
         (backup / "old.py").write_text("x\n")
         subprocess.run(["git", "add", "."], cwd=backup, capture_output=True, check=True)
@@ -475,8 +461,10 @@ class TestChangelog:
 
 
 class TestHandlePromptMode:
-    def test_uses_empty_diff_content_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_uses_empty_diff_content_by_default(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         seen: dict[str, object] = {}
 
@@ -507,8 +495,8 @@ class TestHandlePromptMode:
 
 
 class TestProbe:
-    def test_hidden_ref_probe(self, tmp_path: Path) -> None:
-        repo = _repo_with_hidden_commit(tmp_path)
+    def test_hidden_ref_probe(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_repo_with_hidden_commit(make_git_repo("hidden"))
         result = CliRunner().invoke(cli, ["probe", str(repo), "--date", "2025-07-28"])
         assert result.exit_code == 0
         assert "hidden_ref" in result.output
@@ -524,8 +512,8 @@ class TestReportVerification:
 
 
 class TestVerify:
-    def test_verify_clean(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_clean(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -533,8 +521,8 @@ class TestVerify:
         result = runner.invoke(cli, ["verify", str(out / repo.name), str(repo)])
         assert result.exit_code == 0
 
-    def test_verify_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -542,8 +530,8 @@ class TestVerify:
         result = runner.invoke(cli, ["verify", str(out / repo.name), str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
 
-    def test_verify_with_tolerance(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_with_tolerance(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -628,8 +616,8 @@ class TestVerify:
         assert _safe_int("7") == 7
         assert _safe_int(object()) is None
 
-    def test_verify_stats_mismatch(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_stats_mismatch(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -642,8 +630,8 @@ class TestVerify:
         result = runner.invoke(cli, ["verify", str(out / repo.name), str(repo), "--tolerance", "1"])
         assert "Stats mismatches" in result.output
 
-    def test_verify_coverage_gap(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_coverage_gap(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -654,19 +642,19 @@ class TestVerify:
 
 
 class TestAudit:
-    def test_audit(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_audit(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["audit", str(repo)])
         assert result.exit_code == 0
         assert "classifiable" in result.output
 
-    def test_audit_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_audit_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["audit", str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
 
-    def test_audit_show_bad(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_audit_show_bad(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["audit", str(repo), "--show-bad"])
         assert result.exit_code == 0
         # Should have at least "WIP stuff" as ambiguous
@@ -681,19 +669,19 @@ class TestAudit:
 
 
 class TestDistill:
-    def test_dry_run(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_dry_run(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
         assert result.exit_code == 0
         assert "groups" in result.output
 
-    def test_dry_run_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_dry_run_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run", "--since", "2026-04-07"])
         assert result.exit_code == 0
 
-    def test_dry_run_with_cadence(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_dry_run_with_cadence(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run", "--cadence", "weekly"])
         assert result.exit_code == 0
 
@@ -704,16 +692,16 @@ class TestDistill:
         result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
         assert "No commits" in result.output
 
-    def test_real_distill(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_real_distill(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--target-branch", "test-distill"])
         assert result.exit_code == 0
         assert "Consolidated" in result.output
         assert "Backup" in result.output
         assert "Tag" in result.output
 
-    def test_confirm_source_write_suppresses_warning(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_confirm_source_write_suppresses_warning(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(
             cli,
             ["distill", str(repo), "--target-branch", "test-distill-confirmed", "--confirm-source-write"],
@@ -721,8 +709,8 @@ class TestDistill:
         assert result.exit_code == 0
         assert "WARNING" not in result.output
 
-    def test_distill_with_changelog_dir(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_distill_with_changelog_dir(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -735,13 +723,13 @@ class TestDistill:
         assert "Consolidated" in result.output
 
     def test_distill_without_backup_omits_backup_lines(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When create_backup=False, consolidate() returns empty backup_branch/tag
         and the CLI must NOT print the 'Backup:' / 'Tag:' lines (exercises the
         falsy branch of the post-distill conditionals)."""
         monkeypatch.setenv("REPOGERBIL_CREATE_BACKUP", "false")
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(
             cli,
             ["distill", str(repo), "--target-branch", "no-backup-distill", "--confirm-source-write"],
@@ -753,9 +741,9 @@ class TestDistill:
 
 
 class TestFixStatsEdgeCases:
-    def test_fix_stats_since_filters(self, tmp_path: Path) -> None:
+    def test_fix_stats_since_filters(self, tmp_path: Path, git_repo: Path) -> None:
         """Since filter skips earlier dates."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -763,9 +751,9 @@ class TestFixStatsEdgeCases:
         result = runner.invoke(cli, ["fix-stats", str(out / repo.name), str(repo), "--since", "2027-01-01"])
         assert "0 files updated" in result.output
 
-    def test_fix_stats_actually_fixes(self, tmp_path: Path) -> None:
+    def test_fix_stats_actually_fixes(self, tmp_path: Path, git_repo: Path) -> None:
         """Stats that differ from git truth get corrected."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -780,9 +768,9 @@ class TestFixStatsEdgeCases:
 
 
 class TestVerifyEdgeCases:
-    def test_verify_stat_and_coverage_report(self, tmp_path: Path) -> None:
+    def test_verify_stat_and_coverage_report(self, tmp_path: Path, git_repo: Path) -> None:
         """Verify reports both stat mismatches and coverage gaps."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -796,8 +784,8 @@ class TestVerifyEdgeCases:
         result = runner.invoke(cli, ["verify", str(out / repo.name), str(repo), "--tolerance", "1"])
         assert "stat issues" in result.output or "Stats mismatches" in result.output
 
-    def test_verify_all_good(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_verify_all_good(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -807,17 +795,17 @@ class TestVerifyEdgeCases:
 
 
 class TestDistillEdgeCases:
-    def test_distill_backup_output(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_distill_backup_output(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--target-branch", "backup-test"])
         assert "Backup:" in result.output
         assert "Tag:" in result.output
 
 
 class TestAuditEdgeCases:
-    def test_audit_with_bad_messages(self, tmp_path: Path) -> None:
+    def test_audit_with_bad_messages(self, tmp_path: Path, git_repo: Path) -> None:
         """Repo with WIP messages should show ambiguous count."""
-        repo = _init_test_repo(tmp_path)  # Has "WIP stuff" commit
+        repo = _seed_two_commits(git_repo)  # Has "WIP stuff" commit
         result = CliRunner().invoke(cli, ["audit", str(repo), "--show-bad"])
         assert "ambiguous" in result.output
 
@@ -830,8 +818,8 @@ class TestAuditEdgeCases:
 
 
 class TestSummary:
-    def test_summary_markdown(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_summary_markdown(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -845,8 +833,8 @@ class TestSummary:
         assert result.exit_code == 0
         assert "Wrote" in result.output
 
-    def test_summary_prompt(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_summary_prompt(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -884,8 +872,8 @@ class TestMissing:
         result = CliRunner().invoke(cli, ["missing", str(cl_dir)])
         assert "No tracked repos" in result.output
 
-    def test_with_config(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_with_config(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl"
         cl_dir.mkdir()
         config = tmp_path / "test.toml"
@@ -897,8 +885,8 @@ class TestMissing:
 
 
 class TestEnrich:
-    def test_enrich(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_enrich(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -915,8 +903,8 @@ class TestBackfill:
         result = CliRunner().invoke(cli, ["backfill", str(cl_dir)])
         assert "No tracked repos" in result.output
 
-    def test_with_config(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_with_config(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl"
         cl_dir.mkdir()
         config = tmp_path / "test.toml"
@@ -925,8 +913,8 @@ class TestBackfill:
         assert result.exit_code == 0
         assert "generated" in result.output
 
-    def test_prompt_writes_prompt_files_not_yaml(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_prompt_writes_prompt_files_not_yaml(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl"
         cl_dir.mkdir()
         config = tmp_path / "test.toml"
@@ -941,8 +929,8 @@ class TestBackfill:
 
 
 class TestFixStats:
-    def test_fix_stats(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_fix_stats(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -951,8 +939,8 @@ class TestFixStats:
         assert result.exit_code == 0
         assert "updated" in result.output
 
-    def test_fix_stats_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_fix_stats_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         out.mkdir()
         runner = CliRunner()
@@ -962,8 +950,8 @@ class TestFixStats:
 
 
 class TestSummaryForce:
-    def test_summary_exists_no_force(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_summary_exists_no_force(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -978,8 +966,8 @@ class TestSummaryForce:
         )
         assert "Exists" in result.output
 
-    def test_summary_force_overwrite(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_summary_force_overwrite(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "cl"
         out.mkdir()
         runner = CliRunner()
@@ -1007,9 +995,9 @@ class TestSummaryForce:
 
 
 class TestLintCommand:
-    def test_lint_valid_files(self, tmp_path: Path) -> None:
+    def test_lint_valid_files(self, tmp_path: Path, git_repo: Path) -> None:
         runner = CliRunner()
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         _generate_changelog(runner, repo, out)
 
@@ -1199,10 +1187,10 @@ class TestHandlePromptModeMutationSurvivors:
     """Pin thorough-branch string literal and mkdir kwargs for ``_handle_prompt_mode``."""
 
     def test_thorough_backfill_depth_triggers_diff_collection(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``settings.backfill_depth == 'thorough'`` (exact, lowercase) routes through get_diff_content."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
 
         seen: dict[str, object] = {}
@@ -1235,10 +1223,10 @@ class TestHandlePromptModeMutationSurvivors:
         assert seen["diff_content"] == {"f.py": "diff-body"}
 
     def test_non_thorough_backfill_depth_skips_diff_collection(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Any non-``'thorough'`` value (incl. ``'THOROUGH'``) must NOT call get_diff_content."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         called: list[bool] = []
 
@@ -1262,10 +1250,10 @@ class TestHandlePromptModeMutationSurvivors:
         assert called == []
 
     def test_mkdir_succeeds_when_parent_already_exists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``exist_ok=True`` must hold — pre-existing parent dir must NOT raise."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         out = tmp_path / "out"
         # Pre-create the prompt parent directory so exist_ok=False would raise.
         (out / repo.name).mkdir(parents=True)
@@ -1281,10 +1269,10 @@ class TestHandlePromptModeMutationSurvivors:
         assert (out / repo.name / "2026-04-07-repo-prompt.md").exists()
 
     def test_mkdir_creates_nested_missing_parents(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``parents=True`` must hold — deeply nested missing parents must be created."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         # Use a 3-level-deep output directory; parents=False would raise.
         out = tmp_path / "deep" / "nest" / "out"
 

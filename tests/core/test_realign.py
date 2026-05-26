@@ -17,17 +17,6 @@ from repogerbil.core import realign as realign_mod
 from repogerbil.core.realign import _LocalCommit, realign_jsonl
 
 
-def _init_repo(repo: Path) -> None:
-    repo.mkdir()
-    for cmd in [
-        ["git", "init", "-q", "-b", "main"],
-        ["git", "config", "user.email", "t@t.test"],
-        ["git", "config", "user.name", "T"],
-        ["git", "config", "commit.gpgsign", "false"],
-    ]:
-        subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
-
-
 def _commit(
     repo: Path,
     files: dict[str, str],
@@ -56,18 +45,16 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 class TestRealignBasic:
-    def test_missing_jsonl_returns_empty_result(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_missing_jsonl_returns_empty_result(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
 
         r = realign_jsonl(repo, tmp_path / "missing.jsonl")
 
         assert r.total_records == 0
         assert r.realigned == 0
 
-    def test_already_verified_unchanged(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_already_verified_unchanged(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1"}, "feat: one")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -86,9 +73,8 @@ class TestRealignBasic:
         assert r.already_verified == 1
         assert r.realigned == 0
 
-    def test_exact_match_realigns(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_exact_match_realigns(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1", "b.txt": "2"}, "feat: add", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -116,9 +102,8 @@ class TestRealignBasic:
         assert after[0]["subjects"] == ["feat: better worded"]
         assert after[0]["body"] == "body"
 
-    def test_fuzzy_match_within_one_day(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_fuzzy_match_within_one_day(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -141,9 +126,8 @@ class TestRealignBasic:
         # Date updated to the matched commit's date:
         assert after[0]["date"] == "2025-10-15"
 
-    def test_unalignable_preserved(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_unalignable_preserved(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -164,9 +148,8 @@ class TestRealignBasic:
         after = _read_jsonl(jsonl)
         assert after[0]["hash"] == "f" * 40  # unchanged
 
-    def test_record_without_file_evidence_not_realigned(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_record_without_file_evidence_not_realigned(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -185,9 +168,8 @@ class TestRealignBasic:
         assert r.realigned == 0
         assert r.unalignable == 1
 
-    def test_dry_run_no_write(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_dry_run_no_write(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -207,9 +189,8 @@ class TestRealignBasic:
         assert r.realigned == 1
         assert jsonl.read_text() == original  # unchanged on disk
 
-    def test_idempotent(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_idempotent(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -232,10 +213,9 @@ class TestRealignBasic:
 
 
 class TestRealignPicking:
-    def test_picks_exact_over_fuzzy(self, tmp_path: Path) -> None:
+    def test_picks_exact_over_fuzzy(self, tmp_path: Path, git_repo: Path) -> None:
         """When one candidate is exact and another is date-match only, exact wins."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "c1", date="2025-10-15")  # fileset differs
         sha_exact = _commit(repo, {"b.txt": "1", "c.txt": "2"}, "c2", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
@@ -258,9 +238,8 @@ class TestRealignPicking:
         after = _read_jsonl(jsonl)
         assert after[0]["hash"] == sha_exact
 
-    def test_mixed_records(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_mixed_records(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha1 = _commit(repo, {"a.txt": "1"}, "c1", date="2025-10-15")
         sha2 = _commit(repo, {"b.txt": "1"}, "c2", date="2025-10-16")
         jsonl = tmp_path / "s.jsonl"
@@ -300,10 +279,9 @@ class TestRealignPicking:
         assert after[1]["hash"] == sha2
         assert after[2]["hash"] == "e" * 40  # unchanged
 
-    def test_corrupt_jsonl_line_is_preserved_and_skipped(self, tmp_path: Path) -> None:
+    def test_corrupt_jsonl_line_is_preserved_and_skipped(self, tmp_path: Path, git_repo: Path) -> None:
         """A non-JSON line is skipped (no exception) and preserved in the rewrite."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         good_record = json.dumps(
@@ -330,9 +308,8 @@ class TestRealignPicking:
         parsed = [json.loads(line) for line in rewritten_lines if line.startswith("{")]
         assert parsed[0]["hash"] == sha
 
-    def test_blank_jsonl_lines_are_ignored(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_blank_jsonl_lines_are_ignored(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1"}, "c1", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         jsonl.write_text(
@@ -430,10 +407,11 @@ class TestRealignInternals:
             )
         ]
 
-    def test_realign_jsonl_accepts_sha256_hash(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_realign_jsonl_accepts_sha256_hash(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A 64-char (SHA-256) hash must pass the length guard."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
 
         sha256 = "b" * 64
@@ -467,10 +445,9 @@ class TestRealignInternals:
         assert r.already_verified == 1
         assert r.realigned == 0
 
-    def test_realign_jsonl_corrupt_lines_counter(self, tmp_path: Path) -> None:
+    def test_realign_jsonl_corrupt_lines_counter(self, tmp_path: Path, git_repo: Path) -> None:
         """A jsonl with one corrupt line yields corrupt_lines == 1 and accurate total."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         sha = _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         good = json.dumps(
@@ -522,9 +499,8 @@ class TestRealignAtomicWrite:
     ``Path.replace`` raises.
     """
 
-    def test_no_leftover_tmp_file_after_success(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+    def test_no_leftover_tmp_file_after_success(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -544,15 +520,14 @@ class TestRealignAtomicWrite:
         leftovers = sorted(tmp_path.glob(".realign-*.tmp"))
         assert leftovers == []
 
-    def test_two_writers_no_tmp_leak(self, tmp_path: Path) -> None:
+    def test_two_writers_no_tmp_leak(self, tmp_path: Path, git_repo: Path) -> None:
         """Two sequential rewrites succeed and leave no stray ``.tmp`` files behind.
 
         Stand-in for true concurrency: previously both writers shared a fixed
         ``.tmp`` path; with unique mkstemp temp files neither writer collides
         and no temp file remains in the directory after either save completes.
         """
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(
@@ -572,12 +547,13 @@ class TestRealignAtomicWrite:
         leftovers = sorted(tmp_path.glob(".realign-*.tmp"))
         assert leftovers == []
 
-    def test_cleans_tmp_when_replace_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cleans_tmp_when_replace_fails(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """If ``Path.replace`` raises, the unique tmp file is still cleaned up."""
         import contextlib
 
-        repo = tmp_path / "repo"
-        _init_repo(repo)
+        repo = git_repo
         _commit(repo, {"a.txt": "1"}, "feat: one", date="2025-10-15")
         jsonl = tmp_path / "s.jsonl"
         _write_jsonl(

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 from pathlib import Path
 import subprocess
@@ -16,15 +17,12 @@ import yaml
 from repogerbil.cli.main import cli
 
 
-def _init_test_repo(tmp_path: Path) -> Path:
-    """Create a minimal git repo with two commits on the same date."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_two_commits(repo: Path) -> Path:
+    """Add the two canonical same-date commits to a pre-initialised repo."""
+    env = {
+        "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+        "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+    }
     (repo / "f.py").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -32,8 +30,12 @@ def _init_test_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        env={**env},
     )
+    env2 = {
+        "GIT_AUTHOR_DATE": "2026-04-07T11:00:00",
+        "GIT_COMMITTER_DATE": "2026-04-07T11:00:00",
+    }
     (repo / "g.py").write_text("y\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -41,20 +43,26 @@ def _init_test_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+        env={**env2},
     )
     return repo
 
 
-def _init_test_repo_on_master(tmp_path: Path) -> Path:
-    """Create a minimal repo with default branch set to master."""
-    repo = tmp_path / "repo-master"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-b", "master"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_repo_on_master(make_git_repo: Callable[[str], Path]) -> Path:
+    """Create a repo whose default branch is master with one commit."""
+    repo = make_git_repo("repo-master")
+    # Rename default branch from main → master so the source-branch detection
+    # under test sees ``master`` (the shared fixture initialises with ``main``).
+    subprocess.run(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/master"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    env = {
+        "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+        "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+    }
     (repo / "f.py").write_text("x\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -62,21 +70,18 @@ def _init_test_repo_on_master(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        env={**env},
     )
     return repo
 
 
-def _init_repo_with_unmerged_feature_commit(tmp_path: Path) -> Path:
-    """Create repo with one commit on main and one unmerged commit on feature branch."""
-    repo = tmp_path / "repo-branch-scope"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
-
+def _seed_repo_with_unmerged_feature_commit(make_git_repo: Callable[[str], Path]) -> Path:
+    """Repo with one commit on main and an unmerged commit on a feature branch."""
+    repo = make_git_repo("repo-branch-scope")
+    env = {
+        "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+        "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+    }
     (repo / "main.txt").write_text("main\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -84,14 +89,14 @@ def _init_repo_with_unmerged_feature_commit(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={
-            **env,
-            "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
-            "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
-        },
+        env={**env},
     )
 
     subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, capture_output=True, check=True)
+    env2 = {
+        "GIT_AUTHOR_DATE": "2026-04-08T10:00:00",
+        "GIT_COMMITTER_DATE": "2026-04-08T10:00:00",
+    }
     (repo / "feature.txt").write_text("feature\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
     subprocess.run(
@@ -99,26 +104,22 @@ def _init_repo_with_unmerged_feature_commit(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={
-            **env,
-            "GIT_AUTHOR_DATE": "2026-04-08T10:00:00",
-            "GIT_COMMITTER_DATE": "2026-04-08T10:00:00",
-        },
+        env={**env2},
     )
     subprocess.run(["git", "checkout", "main"], cwd=repo, capture_output=True, check=True)
     return repo
 
 
 class TestMultiSnapshot:
-    def test_basic_invocation(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_basic_invocation(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "multi"
         result = CliRunner().invoke(cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}"])
         assert result.exit_code == 0
         assert "Multi-snapshot created" in result.output
 
-    def test_dry_run(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_dry_run(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "multi"
         result = CliRunner().invoke(
             cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}", "--dry-run"]
@@ -126,8 +127,8 @@ class TestMultiSnapshot:
         assert result.exit_code == 0
         assert "Would create" in result.output
 
-    def test_dry_run_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_dry_run_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "multi"
         result = CliRunner().invoke(
             cli,
@@ -136,14 +137,9 @@ class TestMultiSnapshot:
         assert result.exit_code == 0
         assert "Would create" in result.output
 
-    def test_dry_run_many_dates(self, tmp_path: Path) -> None:
+    def test_dry_run_many_dates(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
         """Dry run with > 10 dates shows overflow message."""
-        repo = tmp_path / "many"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo = make_git_repo("many")
         for i in range(12):
             (repo / f"f{i}.py").write_text(f"x{i}\n")
             subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -153,7 +149,6 @@ class TestMultiSnapshot:
                 capture_output=True,
                 check=True,
                 env={
-                    **env,
                     "GIT_AUTHOR_DATE": f"2026-01-{10 + i:02d}T12:00:00",
                     "GIT_COMMITTER_DATE": f"2026-01-{10 + i:02d}T12:00:00",
                 },
@@ -173,8 +168,8 @@ class TestMultiSnapshot:
         result = CliRunner().invoke(cli, ["multi-snapshot", str(dest), "--repo", "nocolon"])
         assert result.exit_code == 1
 
-    def test_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_with_since(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "multi"
         result = CliRunner().invoke(
             cli, ["multi-snapshot", str(dest), "--repo", f"testrepo:{repo}", "--since", "2026-04-07"]
@@ -182,8 +177,8 @@ class TestMultiSnapshot:
         assert result.exit_code == 0
         assert "Multi-snapshot created" in result.output
 
-    def test_with_changelog_dir(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_with_changelog_dir(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl" / "testrepo"
         cl_dir.mkdir(parents=True)
         changelog = {
@@ -208,18 +203,13 @@ class TestMultiSnapshot:
         assert result.exit_code == 0
         assert "Multi-snapshot created" in result.output
 
-    def test_ecosystem_label_flag(self, tmp_path: Path) -> None:
+    def test_ecosystem_label_flag(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
         """The --ecosystem-label CLI flag overrides the Settings default."""
         # Use TWO source repos so the single-repo short-circuit in _build_message
         # (which returns "<date> <reponame>") is not taken — the ecosystem label
         # only appears when len(active_repos) > 1 OR a changelog is present.
-        repo_a = _init_test_repo(tmp_path)
-        repo_b = tmp_path / "other"
-        repo_b.mkdir()
-        subprocess.run(["git", "init"], cwd=repo_b, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo_b, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo_b, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo_a = _seed_two_commits(make_git_repo("repo"))
+        repo_b = make_git_repo("other")
         (repo_b / "z.py").write_text("z\n")
         subprocess.run(["git", "add", "."], cwd=repo_b, capture_output=True, check=True)
         subprocess.run(
@@ -228,7 +218,6 @@ class TestMultiSnapshot:
             capture_output=True,
             check=True,
             env={
-                **env,
                 "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
                 "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
             },
@@ -261,28 +250,25 @@ class TestMultiSnapshot:
 
 
 class TestSnapshot:
-    def test_basic_snapshot(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_basic_snapshot(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
-    def test_snapshot_auto_detects_non_main_source_branch(self, tmp_path: Path) -> None:
-        repo = _init_test_repo_on_master(tmp_path)
+    def test_snapshot_auto_detects_non_main_source_branch(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = _seed_repo_on_master(make_git_repo)
         dest = tmp_path / "snap-master"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
         assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
 
-    def test_snapshot_with_extra_source(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
-        extra = tmp_path / "extra"
-        extra.mkdir()
-        subprocess.run(["git", "init"], cwd=extra, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=extra, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=extra, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    def test_snapshot_with_extra_source(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_two_commits(make_git_repo("repo"))
+        extra = make_git_repo("extra")
         (extra / "old.py").write_text("old\n")
         subprocess.run(["git", "add", "."], cwd=extra, capture_output=True, check=True)
         subprocess.run(
@@ -290,16 +276,19 @@ class TestSnapshot:
             cwd=extra,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-01-01T10:00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:00:00"},
+            env={
+                "GIT_AUTHOR_DATE": "2026-01-01T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-01-01T10:00:00",
+            },
         )
         dest = tmp_path / "snap"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--extra-source", str(extra)])
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
-    def test_snapshot_with_changelog_full_content(self, tmp_path: Path) -> None:
+    def test_snapshot_with_changelog_full_content(self, tmp_path: Path, git_repo: Path) -> None:
         """Changelog with changes/points produces rich commit messages."""
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl" / "repo"
         cl_dir.mkdir(parents=True)
         changelog = {
@@ -328,8 +317,8 @@ class TestSnapshot:
         assert "feat: add widget factory" in log
         assert "fix: resolve widget leak" in log
 
-    def test_snapshot_with_commit_time(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_snapshot_with_commit_time(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap"
         result = CliRunner().invoke(
             cli,
@@ -351,14 +340,9 @@ class TestSnapshot:
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest)])
         assert "No commits" in result.output
 
-    def test_snapshot_with_since(self, tmp_path: Path) -> None:
+    def test_snapshot_with_since(self, tmp_path: Path, make_git_repo: Callable[[str], Path]) -> None:
         """Since filters early commits on the branch path."""
-        repo = tmp_path / "multi"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo = make_git_repo("multi")
         (repo / "a.py").write_text("a\n")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
         subprocess.run(
@@ -366,7 +350,10 @@ class TestSnapshot:
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-01-01T10:00:00", "GIT_COMMITTER_DATE": "2026-01-01T10:00:00"},
+            env={
+                "GIT_AUTHOR_DATE": "2026-01-01T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-01-01T10:00:00",
+            },
         )
         (repo / "b.py").write_text("b\n")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -375,15 +362,18 @@ class TestSnapshot:
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+            env={
+                "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+                "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+            },
         )
         dest = tmp_path / "snap"
         result = CliRunner().invoke(cli, ["snapshot", str(repo), str(dest), "--since", "2026-04-07"])
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
-    def test_snapshot_with_changelog_dir(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_snapshot_with_changelog_dir(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         cl_dir = tmp_path / "cl" / "repo"
         cl_dir.mkdir(parents=True)
         changelog = {
@@ -400,10 +390,9 @@ class TestSnapshot:
         assert result.exit_code == 0
         assert "Snapshot created" in result.output
 
-    def test_snapshot_exclude_path_regex_removes_files(self, tmp_path: Path) -> None:
+    def test_snapshot_exclude_path_regex_removes_files(self, tmp_path: Path, git_repo: Path) -> None:
         """--exclude-path regex strips matching files from every committed tree."""
-        repo = _init_test_repo(tmp_path)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo = _seed_two_commits(git_repo)
 
         # Add a lock file to the source repo
         (repo / "poetry.lock").write_text("lock\n")
@@ -414,7 +403,6 @@ class TestSnapshot:
             capture_output=True,
             check=True,
             env={
-                **env,
                 "GIT_AUTHOR_DATE": "2026-04-07T12:00:00",
                 "GIT_COMMITTER_DATE": "2026-04-07T12:00:00",
             },
@@ -441,14 +429,14 @@ class TestSnapshot:
 
 
 class TestExportCadence:
-    def test_export_to_stdout(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_export_to_stdout(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["export-cadence", str(repo)])
         assert result.exit_code == 0
         assert "date" in result.output  # JSON contains date fields
 
-    def test_export_to_file(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_export_to_file(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         out_file = tmp_path / "cadence.json"
         result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--output", str(out_file)])
         assert result.exit_code == 0
@@ -462,18 +450,18 @@ class TestExportCadence:
         result = CliRunner().invoke(cli, ["export-cadence", str(repo)])
         assert "No commits" in result.output
 
-    def test_export_with_cadence(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_export_with_cadence(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--cadence", "weekly"])
         assert result.exit_code == 0
 
-    def test_export_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_export_with_since(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
 
-    def test_export_defaults_to_head_branch_scope(self, tmp_path: Path) -> None:
-        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+    def test_export_defaults_to_head_branch_scope(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_repo_with_unmerged_feature_commit(make_git_repo)
         result = CliRunner().invoke(cli, ["export-cadence", str(repo)])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
@@ -481,8 +469,10 @@ class TestExportCadence:
         assert "feat: mainline" in subjects
         assert "feat: branch-only" not in subjects
 
-    def test_export_all_branches_override_includes_unmerged_commits(self, tmp_path: Path) -> None:
-        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+    def test_export_all_branches_override_includes_unmerged_commits(
+        self, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = _seed_repo_with_unmerged_feature_commit(make_git_repo)
         result = CliRunner().invoke(cli, ["export-cadence", str(repo), "--all-branches"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
@@ -490,8 +480,8 @@ class TestExportCadence:
         assert "feat: mainline" in subjects
         assert "feat: branch-only" in subjects
 
-    def test_export_all_branches_since_filters_date_path(self, tmp_path: Path) -> None:
-        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+    def test_export_all_branches_since_filters_date_path(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_repo_with_unmerged_feature_commit(make_git_repo)
         result = CliRunner().invoke(
             cli,
             ["export-cadence", str(repo), "--all-branches", "--since", "2026-04-08"],
@@ -503,14 +493,9 @@ class TestExportCadence:
 
 
 class TestPreview:
-    def _init_many_commits(self, tmp_path: Path) -> Path:
+    def _init_many_commits(self, make_git_repo: Callable[[str], Path]) -> Path:
         """Create a repo with 4 commits on the same day to exercise the overflow line."""
-        repo = tmp_path / "many"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        repo = make_git_repo("many")
         for i in range(4):
             (repo / f"f{i}.py").write_text(f"x{i}\n")
             subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -520,22 +505,21 @@ class TestPreview:
                 capture_output=True,
                 check=True,
                 env={
-                    **env,
                     "GIT_AUTHOR_DATE": f"2026-04-07T1{i}:00:00",
                     "GIT_COMMITTER_DATE": f"2026-04-07T1{i}:00:00",
                 },
             )
         return repo
 
-    def test_preview_output(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_preview_output(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo)])
         assert result.exit_code == 0
         assert "commits" in result.output
         assert "groups" in result.output
 
-    def test_preview_many_commits_shows_overflow(self, tmp_path: Path) -> None:
-        repo = self._init_many_commits(tmp_path)
+    def test_preview_many_commits_shows_overflow(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = self._init_many_commits(make_git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo)])
         assert result.exit_code == 0
         assert "more" in result.output
@@ -547,26 +531,28 @@ class TestPreview:
         result = CliRunner().invoke(cli, ["preview", str(repo)])
         assert "No commits" in result.output
 
-    def test_preview_with_since(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_preview_with_since(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo), "--since", "2026-04-07"])
         assert result.exit_code == 0
 
-    def test_preview_with_cadence(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_preview_with_cadence(self, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo), "--cadence", "weekly"])
         assert result.exit_code == 0
         assert "groups" in result.output
 
-    def test_preview_defaults_to_head_branch_scope(self, tmp_path: Path) -> None:
-        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+    def test_preview_defaults_to_head_branch_scope(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_repo_with_unmerged_feature_commit(make_git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo)])
         assert result.exit_code == 0, result.output
         assert "feat: mainline" in result.output
         assert "feat: branch-only" not in result.output
 
-    def test_preview_all_branches_override_includes_unmerged_commits(self, tmp_path: Path) -> None:
-        repo = _init_repo_with_unmerged_feature_commit(tmp_path)
+    def test_preview_all_branches_override_includes_unmerged_commits(
+        self, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = _seed_repo_with_unmerged_feature_commit(make_git_repo)
         result = CliRunner().invoke(cli, ["preview", str(repo), "--all-branches"])
         assert result.exit_code == 0, result.output
         assert "feat: mainline" in result.output
@@ -574,8 +560,8 @@ class TestPreview:
 
 
 class TestDistill:
-    def test_distill_auto_detects_non_main_source_branch(self, tmp_path: Path) -> None:
-        repo = _init_test_repo_on_master(tmp_path)
+    def test_distill_auto_detects_non_main_source_branch(self, make_git_repo: Callable[[str], Path]) -> None:
+        repo = _seed_repo_on_master(make_git_repo)
         result = CliRunner().invoke(cli, ["distill", str(repo), "--dry-run"])
         assert result.exit_code == 0, result.output
         assert "groups" in result.output
@@ -750,8 +736,8 @@ class TestDeriveCommitType:
 
 
 class TestSnapshotTimeWindow:
-    def test_time_window_flags_accepted(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_time_window_flags_accepted(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-tw"
         result = CliRunner().invoke(
             cli,
@@ -770,8 +756,8 @@ class TestSnapshotTimeWindow:
         assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
 
-    def test_commit_time_and_window_mutually_exclusive(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_commit_time_and_window_mutually_exclusive(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-ex"
         result = CliRunner().invoke(
             cli,
@@ -790,8 +776,8 @@ class TestSnapshotTimeWindow:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
-    def test_window_start_without_end_raises(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_window_start_without_end_raises(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-ex2"
         result = CliRunner().invoke(
             cli,
@@ -800,8 +786,8 @@ class TestSnapshotTimeWindow:
         assert result.exit_code != 0
         assert "must both be provided" in result.output
 
-    def test_window_end_without_start_raises(self, tmp_path: Path) -> None:
-        repo = _init_test_repo(tmp_path)
+    def test_window_end_without_start_raises(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-ex3"
         result = CliRunner().invoke(
             cli,
@@ -812,11 +798,11 @@ class TestSnapshotTimeWindow:
 
 
 class TestSnapshotLLMRefine:
-    def test_llm_refine_skips_llm_when_all_well_formed(self, tmp_path: Path) -> None:
+    def test_llm_refine_skips_llm_when_all_well_formed(self, tmp_path: Path, git_repo: Path) -> None:
         """LLM is not called when every commit in a group already has a well-formed subject."""
         from unittest.mock import MagicMock, patch
 
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-bypass"
         mock_gen = MagicMock()
 
@@ -830,10 +816,10 @@ class TestSnapshotLLMRefine:
         # The test repo has "feat: initial" — well-formed, so generator.generate is never called
         mock_gen.generate.assert_not_called()
 
-    def test_llm_refine_flag_accepted(self, tmp_path: Path) -> None:
+    def test_llm_refine_flag_accepted(self, tmp_path: Path, git_repo: Path) -> None:
         from unittest.mock import patch
 
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-llm"
         from repogerbil.llm.generator import GeneratedMessage
 
@@ -849,10 +835,12 @@ class TestSnapshotLLMRefine:
         assert result.exit_code == 0, result.output
         assert "Snapshot created" in result.output
 
-    def test_llm_refine_auto_from_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_llm_refine_auto_from_config(
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from unittest.mock import patch
 
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "snap-llm-auto"
         monkeypatch.setenv("REPOGERBIL_LLM_REFINE", "true")
         from repogerbil.llm.generator import GeneratedMessage
@@ -871,10 +859,10 @@ class TestSnapshotLLMRefine:
 
 
 class TestMultiSnapshotLLMRefine:
-    def test_llm_refine_flag_imports_and_creates_generator(self, tmp_path: Path) -> None:
+    def test_llm_refine_flag_imports_and_creates_generator(self, tmp_path: Path, git_repo: Path) -> None:
         from unittest.mock import MagicMock, patch
 
-        repo = _init_test_repo(tmp_path)
+        repo = _seed_two_commits(git_repo)
         dest = tmp_path / "multi-llm"
         from repogerbil.llm.generator import GeneratedMessage
 

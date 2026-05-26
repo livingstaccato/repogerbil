@@ -3,6 +3,7 @@
 
 """Tests for changelog enrichment."""
 
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 
@@ -13,14 +14,8 @@ from repogerbil.core.enrich import _run_file_shortstat, enrich_changelog
 from repogerbil.core.errors import GitCommandError
 
 
-def _init_enrich_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+def _seed_enrich_repo(repo: Path) -> Path:
+    """Seed an existing repo with 2 commits modifying ``src/main.py`` / ``src/utils.py``."""
     (repo / "src").mkdir()
     (repo / "src" / "main.py").write_text("import utils\nprint('hello')\n")
     (repo / "src" / "utils.py").write_text("def helper(): pass\n")
@@ -30,7 +25,7 @@ def _init_enrich_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        env={"GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
     )
     (repo / "src" / "main.py").write_text("import utils\nprint('updated')\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -39,14 +34,14 @@ def _init_enrich_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
+        env={"GIT_AUTHOR_DATE": "2026-04-07T11:00:00", "GIT_COMMITTER_DATE": "2026-04-07T11:00:00"},
     )
     return repo
 
 
 class TestEnrichChangelog:
-    def test_adds_section_stats(self, tmp_path: Path) -> None:
-        repo = _init_enrich_repo(tmp_path)
+    def test_adds_section_stats(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "test.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -71,8 +66,8 @@ class TestEnrichChangelog:
         data = yaml.safe_load(yaml_path.read_text())
         assert "stats" in data["changes"][0]
 
-    def test_no_changes(self, tmp_path: Path) -> None:
-        repo = _init_enrich_repo(tmp_path)
+    def test_no_changes(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "empty.yaml"
         yaml_path.write_text(yaml.dump({"date": "2026-04-07", "repo": "repo", "changes": []}))
         assert enrich_changelog(yaml_path, repo) is False
@@ -87,8 +82,8 @@ class TestEnrichChangelog:
         yaml_path.write_text(yaml.dump({"repo": "x", "changes": [{"title": "t", "files": [{"path": "f"}]}]}))
         assert enrich_changelog(yaml_path, tmp_path) is False
 
-    def test_no_commits(self, tmp_path: Path) -> None:
-        repo = _init_enrich_repo(tmp_path)
+    def test_no_commits(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "nocommits.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -101,8 +96,8 @@ class TestEnrichChangelog:
         )
         assert enrich_changelog(yaml_path, repo) is False
 
-    def test_section_without_files(self, tmp_path: Path) -> None:
-        repo = _init_enrich_repo(tmp_path)
+    def test_section_without_files(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "nofiles.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -116,12 +111,12 @@ class TestEnrichChangelog:
         assert enrich_changelog(yaml_path, repo) is False
 
     def test_impact_not_attached_when_find_importers_returns_empty(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When _find_importers returns {}, change must not gain an 'impact' key."""
         from repogerbil.core import enrich as enrich_mod
 
-        repo = _init_enrich_repo(tmp_path)
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "empty_impact.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -144,12 +139,12 @@ class TestEnrichChangelog:
         assert "impact" not in data["changes"][0]
 
     def test_impact_attached_when_find_importers_returns_files(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When _find_importers returns non-empty, change gains an 'impact' key."""
         from repogerbil.core import enrich as enrich_mod
 
-        repo = _init_enrich_repo(tmp_path)
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "with_impact.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -171,8 +166,8 @@ class TestEnrichChangelog:
         data = yaml.safe_load(yaml_path.read_text())
         assert data["changes"][0]["impact"] == {"files": ["src/other.py"]}
 
-    def test_package_depth(self, tmp_path: Path) -> None:
-        repo = _init_enrich_repo(tmp_path)
+    def test_package_depth(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = _seed_enrich_repo(git_repo)
         yaml_path = tmp_path / "pkg.yaml"
         yaml_path.write_text(
             yaml.dump(
@@ -194,13 +189,10 @@ class TestEnrichChangelog:
         change = data["changes"][0]
         assert "stats" in change or "impact" in change
 
-    def test_single_commit_day_enriches_stats(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo_single"
-        repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    def test_single_commit_day_enriches_stats(
+        self, tmp_path: Path, make_git_repo: Callable[[str], Path]
+    ) -> None:
+        repo = make_git_repo("repo_single")
         (repo / "src").mkdir()
         (repo / "src" / "only.py").write_text("print('x')\n")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -209,7 +201,7 @@ class TestEnrichChangelog:
             cwd=repo,
             capture_output=True,
             check=True,
-            env={**env, "GIT_AUTHOR_DATE": "2026-04-08T10:00:00", "GIT_COMMITTER_DATE": "2026-04-08T10:00:00"},
+            env={"GIT_AUTHOR_DATE": "2026-04-08T10:00:00", "GIT_COMMITTER_DATE": "2026-04-08T10:00:00"},
         )
 
         yaml_path = tmp_path / "single.yaml"

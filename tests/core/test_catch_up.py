@@ -26,16 +26,6 @@ from repogerbil.core.catch_up import (
 from repogerbil.core.git import CommitInfo
 
 
-def _init_repo(repo: Path) -> None:
-    for cmd in [
-        ["git", "init", "-q", "-b", "main"],
-        ["git", "config", "user.email", "t@t.test"],
-        ["git", "config", "user.name", "T"],
-        ["git", "config", "commit.gpgsign", "false"],
-    ]:
-        subprocess.run(cmd, cwd=repo, capture_output=True, check=False)
-
-
 def _commit(repo: Path, file: str, content: str, message: str, date: str = "2026-04-07T10:00:00") -> str:
     (repo / file).write_text(content)
     subprocess.run(["git", "add", file], cwd=repo, capture_output=True, check=True)
@@ -112,10 +102,8 @@ class TestBuildRecord:
 
 
 class TestRecordMissingCommits:
-    def test_fresh_repo_creates_jsonl(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_fresh_repo_creates_jsonl(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         _commit(repo, "b.txt", "2", "fix: two")
 
@@ -129,10 +117,8 @@ class TestRecordMissingCommits:
         lines = [json.loads(line) for line in jsonl.read_text().splitlines() if line.strip()]
         assert [r["subjects"][0] for r in lines] == ["feat: one", "fix: two"]
 
-    def test_idempotent(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_idempotent(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -144,10 +130,8 @@ class TestRecordMissingCommits:
         assert second.skipped_dedup == 1
         assert count_jsonl_entries(jsonl) == 1
 
-    def test_catch_up_adds_only_new_commits(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_catch_up_adds_only_new_commits(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -222,10 +206,8 @@ class TestRecordMissingCommits:
         [attached] = catch_up_mod._attach_files(tmp_path, [commit], since_ref=None)
         assert attached.files == ["file.py"]
 
-    def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_dry_run_does_not_write(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -233,10 +215,8 @@ class TestRecordMissingCommits:
         assert result.new_entries == 1  # would-be count
         assert not jsonl.exists()
 
-    def test_records_body_and_files(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_records_body_and_files(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         (repo / "a.txt").write_text("hello")
         (repo / "b.txt").write_text("world")
         subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -254,10 +234,8 @@ class TestRecordMissingCommits:
         assert "Body line 1" in rec["body"]
         assert sorted(c["file"] for c in rec["changes"]) == ["a.txt", "b.txt"]
 
-    def test_since_ref_limits_range(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_since_ref_limits_range(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha_old = _commit(repo, "a.txt", "1", "feat: one")
         _commit(repo, "b.txt", "2", "fix: two")
         _commit(repo, "c.txt", "3", "docs: three")
@@ -266,10 +244,8 @@ class TestRecordMissingCommits:
         result = record_missing_commits(repo, jsonl, since_ref=sha_old)
         assert result.new_entries == 2  # two commits after sha_old
 
-    def test_preexisting_jsonl_hashes_skipped(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_preexisting_jsonl_hashes_skipped(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         sha = _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
         # Pre-seed jsonl with the existing commit's hash (simulates prior recording)
@@ -280,10 +256,8 @@ class TestRecordMissingCommits:
         assert result.existing_entries == 1
         assert count_jsonl_entries(jsonl) == 1
 
-    def test_legacy_append_new_commits_alias(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_legacy_append_new_commits_alias(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
 
@@ -309,14 +283,10 @@ class TestReadLatestDate:
 
 
 class TestDefaultDateCutoff:
-    def test_jsonl_date_used_as_default_cutoff(self, tmp_path: Path) -> None:
+    def test_jsonl_date_used_as_default_cutoff(self, tmp_path: Path, git_repo: Path) -> None:
         """When jsonl has a latest date, default scan uses it as git --since=."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+        repo = git_repo
         # Commit with committer-date in the past (before jsonl's latest date).
-        import os
-
         env = os.environ.copy()
         env["GIT_COMMITTER_DATE"] = "2025-01-01T12:00:00"
         env["GIT_AUTHOR_DATE"] = "2025-01-01T12:00:00"
@@ -393,10 +363,8 @@ class TestDefaultDateCutoff:
 class TestSchemaCompat:
     """Record shape matches what core.snapshot writes."""
 
-    def test_all_expected_keys_present(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_all_expected_keys_present(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         jsonl = tmp_path / "r.summaries.jsonl"
         record_missing_commits(repo, jsonl)
@@ -453,10 +421,8 @@ class TestSignatures:
         }
         assert _record_signature(rec) == ("feat: one", "b", ("x.py",))
 
-    def test_same_day_signature_dedup_skips_rewritten_hash(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_same_day_signature_dedup_skips_rewritten_hash(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         _commit(repo, "a.txt", "1", "feat: one")
         commit_date = subprocess.run(
             ["git", "show", "-s", "--format=%as", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
@@ -504,10 +470,8 @@ class TestSignatures:
         assert result.new_entries == 0
         assert result.skipped_dedup == 1
 
-    def test_same_day_new_commit_not_missed(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_repo(repo)
+    def test_same_day_new_commit_not_missed(self, tmp_path: Path, git_repo: Path) -> None:
+        repo = git_repo
         (repo / "a.txt").write_text("1")
         subprocess.run(["git", "add", "a.txt"], cwd=repo, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "feat: one"], cwd=repo, capture_output=True, check=True)

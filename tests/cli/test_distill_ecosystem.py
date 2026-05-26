@@ -17,27 +17,34 @@ from repogerbil.core.errors import GitCommandError
 
 
 def _init_test_repo(repo_path: Path, commits: list[str]) -> None:
-    """Create a test git repo with specified commits on the same date."""
+    """Create a test git repo at a caller-chosen path with seeded commits.
+
+    Mirrors the defaults of the shared ``git_repo`` fixture (identity,
+    ``commit.gpgsign=false``, ``init.defaultBranch=main``) — but kept as a
+    local helper because the shared ``make_git_repo`` factory only creates
+    repos under ``tmp_path/<name>``. These tests require repos under a
+    custom ``source_base = tmp_path / "source"`` so the CLI's
+    ``--source-base`` flag can traverse them.
+    """
     repo_path.mkdir(exist_ok=True)
-    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
+        ["git", "-c", "init.defaultBranch=main", "init"],
         cwd=repo_path,
         check=True,
         capture_output=True,
     )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "commit.gpgsign", "false"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
+    for key, value in (
+        ("user.email", "test@example.com"),
+        ("user.name", "Test User"),
+        ("commit.gpgsign", "false"),
+        ("init.defaultBranch", "main"),
+    ):
+        subprocess.run(
+            ["git", "config", key, value],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
 
     # Create commits on 2026-04-05
     for i, msg in enumerate(commits):

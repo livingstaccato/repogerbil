@@ -4,6 +4,7 @@
 """Tests for snapshot engine."""
 
 from datetime import UTC, datetime
+import os
 from pathlib import Path
 import subprocess
 
@@ -22,13 +23,38 @@ from repogerbil.core.tree_filter import exclude_files as _exclude_files, filter_
 
 
 def _init_repo(tmp_path: Path) -> Path:
+    """Seed ``tmp_path/source`` with two dated commits.
+
+    NOTE: Not migrated to the shared ``git_repo`` / ``make_git_repo``
+    fixtures because ~75 callers across this 3200-line module pass the
+    returned ``source`` path to other helpers (filter-tree, snapshot
+    construction). The helper body has been tightened to match the
+    shared fixture defaults (identity, ``commit.gpgsign=false``,
+    ``init.defaultBranch=main``) so behaviour is consistent — and the
+    ``HOME=tmp_path`` env trick was dropped because the session-scoped
+    ``_isolated_git_global_config`` fixture in ``tests/conftest.py`` now
+    isolates the developer's real ``~/.gitconfig`` automatically.
+    """
     repo = tmp_path / "source"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True, check=True)
-    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, capture_output=True, check=True)
-    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", "init"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    for key, value in (
+        ("user.email", "test@example.com"),
+        ("user.name", "Test User"),
+        ("commit.gpgsign", "false"),
+        ("init.defaultBranch", "main"),
+    ):
+        subprocess.run(
+            ["git", "config", key, value],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
 
     (repo / "a.py").write_text("a\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -37,7 +63,11 @@ def _init_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-07T10:00:00", "GIT_COMMITTER_DATE": "2026-04-07T10:00:00"},
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-04-07T10:00:00",
+            "GIT_COMMITTER_DATE": "2026-04-07T10:00:00",
+        },
     )
     (repo / "b.py").write_text("b\n")
     subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
@@ -46,7 +76,11 @@ def _init_repo(tmp_path: Path) -> Path:
         cwd=repo,
         capture_output=True,
         check=True,
-        env={**env, "GIT_AUTHOR_DATE": "2026-04-08T10:00:00", "GIT_COMMITTER_DATE": "2026-04-08T10:00:00"},
+        env={
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2026-04-08T10:00:00",
+            "GIT_COMMITTER_DATE": "2026-04-08T10:00:00",
+        },
     )
     return repo
 

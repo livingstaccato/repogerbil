@@ -70,3 +70,9 @@ jobs:
           path: |
             mutation-summary.txt
             mutation-results.json
+
+      # Fail the job if the killed/total ratio drops below 90%.
+      # Current baseline (2026-05): 95.6%. Tightens as the test suite grows.
+      - name: enforce minimum kill rate
+        if: always()
+        run: uv run python scripts/check_mutation_score.py 90

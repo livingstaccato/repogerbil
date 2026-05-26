@@ -111,6 +111,14 @@ class TestGroupByHour:
         assert groups[0].period_start == datetime(2026, 4, 7, 10, 0, tzinfo=UTC)
         assert groups[0].period_end == datetime(2026, 4, 7, 10, 59, 59, tzinfo=UTC)
 
+    def test_hour_group_files_affected_populated(self) -> None:
+        """files_affected must contain commit files, not be empty/missing."""
+        commits = [_make_commit("a1", "2026-04-07", files=["x.py", "y.py"])]
+        ts = {"a1": int(datetime(2026, 4, 7, 10, 15, tzinfo=UTC).timestamp())}
+        groups = group_by_cadence(commits, "hourly", timestamps=ts)
+        assert len(groups) == 1
+        assert set(groups[0].files_affected) == {"x.py", "y.py"}
+
 
 class TestGroupByWeek:
     def test_same_week(self) -> None:
@@ -138,6 +146,32 @@ class TestGroupByWeek:
 
         assert groups[0].period_start == datetime(2026, 4, 6, 0, 0, tzinfo=UTC)
         assert groups[0].period_end == datetime(2026, 4, 12, 23, 59, 59, tzinfo=UTC)
+
+    def test_week_uses_provided_timestamps(self) -> None:
+        """The weekly bucketing must pass timestamps dict (not None) to _get_timestamp.
+
+        Two commits with same date='2026-04-10' (Friday) but explicit timestamps
+        spanning a week boundary: midnight Mon Apr 13 vs Sat Apr 11.
+        With timestamps used: end up in two separate weeks.
+        With timestamps ignored: both use date='2026-04-10' → same week.
+        """
+        commits = [
+            _make_commit("a1", "2026-04-10"),
+            _make_commit("a2", "2026-04-10"),
+        ]
+        ts = {
+            "a1": int(datetime(2026, 4, 11, 12, 0, tzinfo=UTC).timestamp()),  # Sat (week of Apr 6)
+            "a2": int(datetime(2026, 4, 13, 12, 0, tzinfo=UTC).timestamp()),  # Mon (week of Apr 13)
+        }
+        groups = group_by_cadence(commits, "weekly", timestamps=ts)
+        assert len(groups) == 2
+
+    def test_week_files_affected_populated(self) -> None:
+        """files_affected must contain commit files for weekly grouping."""
+        commits = [_make_commit("a1", "2026-04-10", files=["w.py", "v.py"])]
+        groups = group_by_cadence(commits, "weekly")
+        assert len(groups) == 1
+        assert set(groups[0].files_affected) == {"w.py", "v.py"}
 
 
 class TestGroupByInvalidCadence:
@@ -170,6 +204,16 @@ class TestGroupsToJson:
         assert data["cadence"] == "daily"
         assert data["group_count"] == 1
         assert data["groups"][0]["commit_count"] == 1
+
+    def test_exports_with_exact_two_space_indent(self) -> None:
+        """JSON output must use exactly indent=2 (not 3)."""
+        commits = [_make_commit("a1", "2026-04-07", "first")]
+        groups = group_by_cadence(commits, "daily")
+        result = groups_to_json(groups, "daily")
+        # With indent=2, top-level keys are indented by exactly 2 spaces.
+        # With indent=3, they would be indented by 3 spaces.
+        assert '\n  "cadence":' in result  # exactly 2 spaces
+        assert '\n   "cadence":' not in result  # NOT 3 spaces
 
     def test_exports_exact_group_payload(self) -> None:
         import json
@@ -329,3 +373,133 @@ class TestGroupByGap:
         """Empty commits list returns empty groups."""
         groups = group_by_cadence([], "gap:1h")
         assert groups == []
+
+    def test_gap_minute_unit_uses_60_seconds_exactly(self) -> None:
+        """'30m' must mean exactly 30*60=1800 sec threshold (not 30*61=1830)."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        # Gap is exactly 1801 sec. With threshold=1800: 1801 > 1800 → split.
+        # With threshold=1830 (mutant 30*61): 1801 > 1830 False → no split.
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 1801,
+        }
+        groups = group_by_cadence(commits, "gap:30m", timestamps=ts)
+        # Must be 2 groups (threshold is 1800, not 1830)
+        assert len(groups) == 2
+
+    def test_gap_hour_unit_uses_3600_seconds_exactly(self) -> None:
+        """'1h' must mean exactly 1*3600=3600 sec threshold (not 1*3601=3601)."""
+        commits = [
+            _make_commit("a1", "2026-04-07"),
+            _make_commit("a2", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        # Gap is exactly 3601 sec. With threshold=3600: 3601 > 3600 → split.
+        # With threshold=3601 (mutant 1*3601): 3601 > 3601 False → no split.
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 3601,
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        # Must be 2 groups (threshold is 3600, not 3601)
+        assert len(groups) == 2
+
+    def test_gap_sort_uses_timestamps_dict_not_none(self) -> None:
+        """The sort key must use the provided timestamps dict, not pass None.
+
+        If timestamps were passed as None to _get_timestamp, the function would fall
+        back to commit.timestamp/date. With all commits having date='2026-04-07' and
+        no .timestamp field, sort order would not match the timestamps dict.
+        """
+        # All commits have same date and no .timestamp; use timestamps dict to set order.
+        commits = [
+            _make_commit("third", "2026-04-07"),
+            _make_commit("first", "2026-04-07"),
+            _make_commit("second", "2026-04-07"),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "first": base_time,
+            "second": base_time + 600,
+            "third": base_time + 1200,
+        }
+        # All within 30m → one group, sorted by timestamps dict.
+        groups = group_by_cadence(commits, "gap:30m", timestamps=ts)
+        assert len(groups) == 1
+        # Order must match timestamps dict, not input order.
+        assert [c.hash for c in groups[0].commits] == ["first", "second", "third"]
+
+    def test_gap_mid_loop_group_uses_correct_start_end_and_files(self) -> None:
+        """First (non-final) group's period_start/end and files_affected must be
+        derived from current_group's first/last commit (not None)."""
+        commits = [
+            _make_commit("a1", "2026-04-07", files=["a.py"]),
+            _make_commit("a2", "2026-04-07", files=["b.py"]),
+            _make_commit("a3", "2026-04-07", files=["c.py"]),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 600,  # +10m (same group as a1)
+            "a3": base_time + 7200,  # +2h (splits → new group)
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 2
+        # First group: starts at a1 timestamp, ends at a2 timestamp.
+        first = groups[0]
+        assert first.period_start == datetime.fromtimestamp(ts["a1"], tz=UTC)
+        assert first.period_end == datetime.fromtimestamp(ts["a2"], tz=UTC)
+        assert first.period_start.tzinfo == UTC
+        assert first.period_end.tzinfo == UTC
+        assert set(first.files_affected) == {"a.py", "b.py"}
+
+    def test_gap_final_group_uses_correct_start_end_and_files(self) -> None:
+        """Final group's period_start/end and files_affected must be derived from
+        current_group's first/last commit (not None)."""
+        commits = [
+            _make_commit("a1", "2026-04-07", files=["a.py"]),
+            _make_commit("a2", "2026-04-07", files=["b.py"]),
+            _make_commit("a3", "2026-04-07", files=["c.py"]),
+            _make_commit("a4", "2026-04-07", files=["d.py"]),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 600,  # +10m (same group as a1)
+            "a3": base_time + 7200,  # +2h (splits → new group with a3+a4)
+            "a4": base_time + 7800,  # +130m (same group as a3)
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 2
+        # Final group: starts at a3 timestamp, ends at a4 timestamp.
+        final = groups[1]
+        assert final.period_start == datetime.fromtimestamp(ts["a3"], tz=UTC)
+        assert final.period_end == datetime.fromtimestamp(ts["a4"], tz=UTC)
+        assert final.period_start.tzinfo == UTC
+        assert final.period_end.tzinfo == UTC
+        assert set(final.files_affected) == {"c.py", "d.py"}
+
+    def test_gap_single_group_final_uses_correct_values(self) -> None:
+        """When only the final group exists (no mid-loop splits), it must still
+        produce the right period boundaries and files."""
+        commits = [
+            _make_commit("a1", "2026-04-07", files=["a.py"]),
+            _make_commit("a2", "2026-04-07", files=["b.py"]),
+        ]
+        base_time = int(datetime(2026, 4, 7, 10, 0, tzinfo=UTC).timestamp())
+        ts = {
+            "a1": base_time,
+            "a2": base_time + 600,
+        }
+        groups = group_by_cadence(commits, "gap:1h", timestamps=ts)
+        assert len(groups) == 1
+        g = groups[0]
+        assert g.period_start == datetime.fromtimestamp(ts["a1"], tz=UTC)
+        assert g.period_end == datetime.fromtimestamp(ts["a2"], tz=UTC)
+        assert g.period_start.tzinfo == UTC
+        assert g.period_end.tzinfo == UTC
+        assert set(g.files_affected) == {"a.py", "b.py"}

@@ -3239,3 +3239,54 @@ class TestComputeWindowTimestampsAdditional:
         offset_minutes = utc_off.total_seconds() / 60
         assert offset_minutes != 0
         assert offset_minutes in (-480, -420)  # PST or PDT
+
+
+# ── _create_commits residual mutants ──────────────────────────────────────────
+#
+# After multiple targeted passes, 17 mutants in ``_create_commits`` still
+# survive. Each was inspected and is either practically equivalent or
+# masked by a fallback path. Documented here so future mutation runs don't
+# repeatedly chase them:
+#
+#   mut_1   ``progress: bool = True`` default — the value is unused because
+#           the only call site (``create_snapshot``) always passes
+#           ``progress`` positionally. Already covered by
+#           ``TestCreateCommitsProgressFormat.test_progress_default_is_false``
+#           via the *outer* (``create_snapshot``) default, which is the
+#           one users actually observe.
+#
+#   mut_32, 39, 44, 51, 56, 63  ``timeout=10`` → ``timeout=None``/``11``
+#           on the ``rev-parse`` calls. Both calls return promptly on any
+#           healthy repo; a 1-second swing in the timeout never produces
+#           a distinguishable outcome. Equivalent in any realistic test.
+#
+#   mut_36, 48, 60  Drop ``timeout=`` kwarg entirely on ``rev-parse`` calls.
+#           ``_run_git`` then uses its own default timeout; same equivalence
+#           argument as the timeout-value mutants above.
+#
+#   mut_46  Drops the ``"rev-parse"`` argument on the no-subdir branch —
+#           git rejects the invalid command, ``GitCommandError`` fires,
+#           the ``except GitCommandError`` fallback runs the SAME call
+#           (just with ``"rev-parse"`` present). Output identical;
+#           masked entirely by the fallback.
+#
+#   mut_49, 50  ``"rev-parse"`` → ``"XXrev-parseXX"``/``"REV-PARSE"`` on
+#           the no-subdir branch. Same fallback masking as mut_46.
+#
+#   mut_76  Drops the ``tree_sha`` argument to ``_run_git(dest_path,
+#           "read-tree", tree_sha)``. The ensuing ``commit-tree tree_sha``
+#           passes the tree explicitly, so the index state (which
+#           read-tree populates and read-tree-empty clears) is never
+#           consulted. Final commit object is identical.
+#
+#   mut_168, 171, 172  ``flush=True`` → ``flush=None``/``False``/dropped
+#           on the ``print(..., flush=...)`` progress line. Pytest's
+#           capsys captures the bytes regardless of flush semantics
+#           (Python buffers stderr line-by-line by default to a tty;
+#           when redirected to capsys's pipe, all output is captured
+#           on process termination anyway). No assertion is achievable
+#           in-process.
+#
+# Per the workflow guidance, these are deliberately left surviving rather
+# than asserted around with synthetic harnesses that wouldn't reflect real
+# code behavior.

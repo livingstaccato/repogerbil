@@ -7,10 +7,11 @@ from repogerbil.core.classify import (
     Classification,
     FileClassification,
     _try_conventional_prefix,
+    _try_verb_heuristic,
     classify_commit,
     classify_files,
 )
-from repogerbil.core.config import FileRule
+from repogerbil.core.config import FileRule, Settings, VocabularyConfig
 
 
 class TestClassifyCommitConventional:
@@ -275,3 +276,113 @@ class TestConventionalPrefixInternal:
         res = _try_conventional_prefix("feat!: message", "", False)
         assert res is not None
         assert res.severity == "minor"
+
+
+class TestClassifyMutationSurvivors:
+    """Pin exact defaults, exact strings, and exact propagation in classify."""
+
+    def test_default_body_is_empty_string(self) -> None:
+        """Default ``body=""`` — passing no body must equal passing body=""."""
+        without_body = classify_commit("feat: x")
+        with_empty = classify_commit("feat: x", body="")
+        assert without_body == with_empty
+        # And it must not behave as if BREAKING CHANGE is present.
+        assert without_body.severity == "minor"
+
+    def test_default_body_does_not_trigger_breaking(self) -> None:
+        """Empty default body cannot satisfy ``'BREAKING CHANGE:' in body``."""
+        r = classify_commit("feat: add thing")
+        assert r.severity == "minor"
+        assert r.severity != "major"
+
+    def test_default_auto_breaking_is_true(self) -> None:
+        """Default ``auto_breaking=True`` — ``feat!:`` must produce major."""
+        r = classify_commit("feat!: replace old API")
+        assert r.severity == "major"
+
+    def test_default_auto_breaking_true_via_body(self) -> None:
+        """BREAKING CHANGE in body triggers major when default auto_breaking is True."""
+        r = classify_commit("feat: x", body="BREAKING CHANGE: removed Y")
+        assert r.severity == "major"
+
+    def test_merge_reads_vocabulary_from_settings(self) -> None:
+        """Merge path must consult settings.vocabulary, not ignore it."""
+        custom_vocab = VocabularyConfig(severities={"errata": "merge-sev"})
+        settings = Settings(vocabulary=custom_vocab)
+        r = classify_commit("Merge branch 'x'", settings=settings)
+        assert r == Classification("baseline", "merge-sev", False)
+
+    def test_merge_severity_uses_errata_key(self) -> None:
+        """Merge must look up ``"errata"`` (lowercase, exact spelling) in sev_map."""
+        # Default SEVERITIES["errata"] is None.
+        r = classify_commit("Merge pull request #1")
+        assert r.severity is None
+        # With a vocab that has "errata" but NOT "ERRATA"/other, mapping happens.
+        custom_vocab = VocabularyConfig(severities={"errata": "trivia"})
+        settings = Settings(vocabulary=custom_vocab)
+        r2 = classify_commit("Merge xyz", settings=settings)
+        assert r2.severity == "trivia"
+
+    def test_merge_with_no_settings_has_severity_none(self) -> None:
+        """Default SEVERITIES['errata'] is None; merge must NOT return a non-None default."""
+        r = classify_commit("Merge branch 'main'", settings=None)
+        assert r.category == "baseline"
+        assert r.severity is None
+
+    def test_verb_path_severity_propagates(self) -> None:
+        """Verb-heuristic path must propagate the resolved severity, not None."""
+        # "Add" → instantiate/behavioral → severity "minor"
+        r = classify_commit("Added a feature")
+        assert r.category == "instantiate"
+        assert r.severity == "minor"
+        assert r.severity is not None
+
+    def test_verb_path_severity_resolves_via_vocab(self) -> None:
+        """Verb path applies sev_map vocabulary mapping (same as prefix path)."""
+        custom_vocab = VocabularyConfig(severities={"behavioral": "custom-beh"})
+        settings = Settings(vocabulary=custom_vocab)
+        r = classify_commit("Added a feature", settings=settings)
+        assert r.severity == "custom-beh"
+
+    def test_verb_path_severity_falls_back_when_key_missing(self) -> None:
+        """``sev_map.get(result.severity, result.severity)`` falls back to raw severity."""
+        # Provide a vocab where "internal" is absent → must return raw "internal".
+        custom_vocab = VocabularyConfig(severities={"behavioral": "minor"})
+        settings = Settings(vocabulary=custom_vocab)
+        r = classify_commit("Removed dead code", settings=settings)
+        # "Removed" → deprecate / internal; "internal" not in custom vocab → raw.
+        assert r.category == "deprecate"
+        assert r.severity == "internal"
+
+    def test_conventional_path_severity_falls_back_when_key_missing(self) -> None:
+        """Conventional path: missing key → raw severity (not None / not dropped)."""
+        custom_vocab = VocabularyConfig(severities={"behavioral": "minor"})
+        settings = Settings(vocabulary=custom_vocab)
+        # "chore" → baseline / internal; "internal" not in custom vocab.
+        r = classify_commit("chore: tidy", settings=settings)
+        assert r.severity == "internal"
+
+    def test_verb_path_needs_review_is_false(self) -> None:
+        """needs_review must be exactly False (not True / not None) for matched verbs."""
+        r = _try_verb_heuristic("Added thing")
+        assert r is not None
+        assert r.needs_review is False
+        assert r.needs_review is not True
+        assert r.needs_review is not None
+
+    def test_verb_path_severity_is_not_none(self) -> None:
+        """_try_verb_heuristic must return the matched severity, never None."""
+        r = _try_verb_heuristic("Added thing")
+        assert r is not None
+        assert r.severity == "behavioral"
+
+    def test_breaking_chore_keeps_architectural(self) -> None:
+        """When chore! is breaking, architectural severity must survive the prefix-override branch."""
+        # "chore" is in _PREFIX_SEVERITY → maps to internal, but breaking should win.
+        r = classify_commit("chore!: drop python 3.10")
+        assert r.severity == "major"  # architectural → major, not internal → patch
+
+    def test_breaking_ci_keeps_architectural(self) -> None:
+        """Same as above for ci! — architectural literal must be exactly 'architectural'."""
+        r = classify_commit("ci!: switch runners")
+        assert r.severity == "major"

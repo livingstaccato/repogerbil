@@ -493,3 +493,334 @@ class TestValidCategoriesDerivation:
         f = _write_yaml(tmp_path / "test.yaml", data)
         result = lint_file(f)
         assert result.ok, result.errors
+
+
+class TestMutantKillers:
+    """Targeted tests pinning exact strings, boundaries, and propagation.
+
+    These exist to kill mutation-test survivors. They assert on exact
+    error/warning message contents and on the exact propagation of the
+    ``loc`` location string into nested checker errors.
+    """
+
+    # ------------------------------------------------------------------
+    # lint_file: default errors_only=False and UTF-8 decoding
+    # ------------------------------------------------------------------
+
+    def test_lint_file_default_errors_only_emits_warnings(self, tmp_path: Path) -> None:
+        """Default `errors_only=False` must surface warnings (mutmut: default flipped to True)."""
+        data = _valid_changelog()
+        del data["changes"][0]["category"]
+        del data["changes"][0]["severity"]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        # Call without errors_only kwarg so default value is exercised.
+        result = lint_file(f)
+        assert result.warnings, "default must produce warnings"
+
+    def test_lint_directory_default_errors_only_emits_warnings(self, tmp_path: Path) -> None:
+        """Default `errors_only=False` for lint_directory must surface warning-only files."""
+        warning_only = _valid_changelog()
+        del warning_only["changes"][0]["category"]
+        _write_yaml(
+            tmp_path / "repo-a" / "2026-04-08-repo-a-changelog.yaml",
+            warning_only,
+        )
+        # Call without errors_only kwarg so default value is exercised.
+        results = lint_directory(tmp_path)
+        assert len(results) == 1
+        assert results[0].warnings
+
+    def test_lint_file_uses_utf8_encoding_for_non_ascii(self, tmp_path: Path) -> None:
+        """UTF-8 decoding must succeed for non-ASCII content (mutmut: encoding=None)."""
+        f = tmp_path / "utf8.yaml"
+        # Hand-write with explicit UTF-8 bytes so a None / non-UTF8 default
+        # could fail or misinterpret.
+        data = _valid_changelog()
+        data["title"] = "naïve café — résumé"
+        f.write_bytes(yaml.dump(data, allow_unicode=True).encode("utf-8"))
+        result = lint_file(f)
+        assert result.ok, result.errors
+
+    # ------------------------------------------------------------------
+    # Exact error/warning message strings
+    # ------------------------------------------------------------------
+
+    def test_invalid_stats_block_exact_message(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["stats"] = "not a dict"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert "missing or invalid 'stats' block" in result.errors
+
+    def test_bulk_must_be_list_exact_message(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["bulk"] = "not a list"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert "'bulk' must be a list" in result.errors
+
+    def test_changes_must_be_list_exact_message(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"] = "not a list"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert "'changes' must be a list" in result.errors
+
+    def test_empty_changes_warning_exact_message(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"] = []
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert "'changes' list is empty" in result.warnings
+
+    # ------------------------------------------------------------------
+    # _check_bulk: boundary `bfiles < 0` (negative is an error; zero is allowed)
+    # ------------------------------------------------------------------
+
+    def test_bulk_files_zero_is_allowed(self, tmp_path: Path) -> None:
+        """`bfiles < 0` means zero must pass; mutmut: `<=0` / `<1` would reject zero."""
+        data = _valid_changelog()
+        data["bulk"] = [{"category": "baseline", "files": 0, "reason": "Empty"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert not any("positive integer" in e for e in result.errors), result.errors
+
+    def test_bulk_files_negative_is_error(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["bulk"] = [{"category": "baseline", "files": -1, "reason": "Bad"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("positive integer" in e for e in result.errors)
+
+    # ------------------------------------------------------------------
+    # bloc / loc / floc / ploc propagation: errors must mention correct index
+    # ------------------------------------------------------------------
+
+    def test_bulk_bloc_includes_index_in_error(self, tmp_path: Path) -> None:
+        """Mutmut sets `bloc = None`; error msg should contain `bulk[0]`."""
+        data = _valid_changelog()
+        data["bulk"] = ["not a dict"]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("bulk[0]" in e for e in result.errors)
+
+    def test_bulk_continue_processes_remaining_entries(self, tmp_path: Path) -> None:
+        """Mutmut swaps `continue` -> `break`; the second bulk entry's error must still appear."""
+        data = _valid_changelog()
+        data["bulk"] = ["not a dict", {"files": 1, "reason": "ok"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        # First entry's "must be a mapping" error AND second's "missing 'category'".
+        assert any("bulk[0]" in e and "must be a mapping" in e for e in result.errors)
+        assert any("bulk[1]" in e and "missing 'category'" in e for e in result.errors)
+
+    def test_changes_loc_includes_index_in_error(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"] = ["not a dict"]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0]" in e for e in result.errors)
+
+    def test_changes_continue_processes_remaining_entries(self, tmp_path: Path) -> None:
+        """Mutmut swaps `continue` -> `break`; second change's missing title must still appear."""
+        data = _valid_changelog()
+        data["changes"] = ["not a dict", {"category": "instantiate"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0]" in e and "must be a mapping" in e for e in result.errors)
+        assert any("changes[1]" in e and "missing 'title'" in e for e in result.errors)
+
+    def test_section_stats_error_includes_loc_prefix(self, tmp_path: Path) -> None:
+        """_check_changes must pass loc to _check_section_stats (mutmut: loc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["stats"] = "not a dict"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].stats: must be a mapping" in e for e in result.errors)
+
+    def test_impact_error_includes_loc_prefix(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"][0]["impact"] = "not a dict"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].impact: must be a mapping" in e for e in result.errors)
+
+    def test_category_severity_error_includes_loc_prefix(self, tmp_path: Path) -> None:
+        """_check_changes must pass loc to _check_category_severity (mutmut: loc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["category"] = "bogus"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0]: unknown category 'bogus'" in e for e in result.errors)
+
+    def test_files_error_includes_loc_prefix(self, tmp_path: Path) -> None:
+        """_check_changes must pass loc to _check_files (mutmut: loc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["files"] = "not a list"
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0]: 'files' must be a list" in e for e in result.errors)
+
+    def test_files_errors_only_propagates(self, tmp_path: Path) -> None:
+        """_check_changes must pass errors_only to _check_files (mutmut: errors_only=None).
+
+        With errors_only=True, the file-summary-missing warning must be suppressed.
+        Note Python truthiness: None is falsy → `not None` is True so the warning
+        would still be emitted by the mutant; we test errors_only=True path to pin
+        the value rather than just truthiness.
+        """
+        data = _valid_changelog()
+        data["changes"][0]["files"] = [{"path": "a.py"}]  # missing summary
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f, errors_only=True)
+        assert not any("missing 'summary'" in w for w in result.warnings)
+
+    def test_points_loc_passed_through(self, tmp_path: Path) -> None:
+        """_check_changes must pass loc to _check_points (mutmut: loc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["points"] = [42]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].points[0]: must be a string or mapping" in e for e in result.errors)
+
+    # ------------------------------------------------------------------
+    # _check_section_stats: tuple identity, val-None semantics
+    # ------------------------------------------------------------------
+
+    def test_section_stats_all_three_fields_validated(self, tmp_path: Path) -> None:
+        """Each of files_changed/insertions/deletions must be checked individually."""
+        data = _valid_changelog()
+        data["changes"][0]["stats"] = {
+            "files_changed": "bad1",
+            "insertions": "bad2",
+            "deletions": "bad3",
+        }
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        joined = "\n".join(result.errors)
+        assert "changes[0].stats.files_changed: must be an integer" in joined
+        assert "changes[0].stats.insertions: must be an integer" in joined
+        assert "changes[0].stats.deletions: must be an integer" in joined
+
+    def test_section_stats_missing_keys_do_not_error(self, tmp_path: Path) -> None:
+        """When a stats field is absent (val is None), no error (mutmut: `is None` swap)."""
+        data = _valid_changelog()
+        data["changes"][0]["stats"] = {}  # all three keys absent
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert not any(".stats." in e for e in result.errors), result.errors
+
+    # ------------------------------------------------------------------
+    # _check_impact: all three field strings must be exact
+    # ------------------------------------------------------------------
+
+    def test_impact_all_three_fields_validated(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"][0]["impact"] = {
+            "files": "x",
+            "packages": "y",
+            "repos": "z",
+        }
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        joined = "\n".join(result.errors)
+        assert "changes[0].impact.files: must be a list" in joined
+        assert "changes[0].impact.packages: must be a list" in joined
+        assert "changes[0].impact.repos: must be a list" in joined
+
+    # ------------------------------------------------------------------
+    # _check_files: floc includes filename index
+    # ------------------------------------------------------------------
+
+    def test_file_entry_floc_includes_index(self, tmp_path: Path) -> None:
+        """floc must be `<loc>.files[<fi>]` (mutmut: floc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["files"] = [{"path": "a.py"}, {"summary": "no path"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].files[1]: missing 'path'" in e for e in result.errors)
+
+    # ------------------------------------------------------------------
+    # _check_points: ploc, continue→break, sub-call loc propagation
+    # ------------------------------------------------------------------
+
+    def test_points_ploc_includes_index(self, tmp_path: Path) -> None:
+        data = _valid_changelog()
+        data["changes"][0]["points"] = ["plain"]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].points[0]: plain string" in w for w in result.warnings)
+
+    def test_points_after_string_continue_processes_rest(self, tmp_path: Path) -> None:
+        """A string point must not stop processing of later bad points (mutmut: continue→break)."""
+        data = _valid_changelog()
+        data["changes"][0]["points"] = ["plain", 42]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        # Second point (42) must still produce its own error.
+        assert any("changes[0].points[1]: must be a string or mapping" in e for e in result.errors)
+
+    def test_points_after_invalid_type_continue_processes_rest(self, tmp_path: Path) -> None:
+        """A non-dict non-str point must not stop processing (mutmut: continue→break)."""
+        data = _valid_changelog()
+        data["changes"][0]["points"] = [42, {"category": "bogus"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        # Both errors should appear: index 0 type error AND index 1 unknown category + missing text.
+        assert any("changes[0].points[0]: must be a string or mapping" in e for e in result.errors)
+        assert any("changes[0].points[1]: unknown category 'bogus'" in e for e in result.errors)
+
+    def test_point_files_error_includes_ploc(self, tmp_path: Path) -> None:
+        """_check_point_files receives ploc (mutmut: ploc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["points"] = [{"text": "ok", "files": "not a list"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].points[0]: 'files' must be a list" in e for e in result.errors)
+
+    def test_point_category_severity_error_includes_ploc(self, tmp_path: Path) -> None:
+        """_check_point_category_severity receives ploc (mutmut: ploc=None)."""
+        data = _valid_changelog()
+        data["changes"][0]["points"] = [{"text": "ok", "category": "bogus"}]
+        f = _write_yaml(tmp_path / "test.yaml", data)
+        result = lint_file(f)
+        assert any("changes[0].points[0]: unknown category 'bogus'" in e for e in result.errors)
+
+    # ------------------------------------------------------------------
+    # lint_directory: continue→break in two distinct places
+    # ------------------------------------------------------------------
+
+    def test_lint_directory_continues_past_hidden_dir(self, tmp_path: Path) -> None:
+        """A hidden dir must not stop processing of later dirs (mutmut: continue→break)."""
+        bad = _valid_changelog()
+        del bad["title"]
+        # `.hidden` sorts before `repo-z`; original continues past hidden then
+        # processes repo-z. Mutant break would exit the whole loop early.
+        _write_yaml(
+            tmp_path / ".hidden" / "2026-04-08-hidden-changelog.yaml",
+            _valid_changelog(),
+        )
+        _write_yaml(
+            tmp_path / "repo-z" / "2026-04-08-repo-z-changelog.yaml",
+            bad,
+        )
+        results = lint_directory(tmp_path)
+        assert len(results) == 1
+        assert results[0].path.parent.name == "repo-z"
+
+    def test_lint_directory_continues_past_filtered_repo(self, tmp_path: Path) -> None:
+        """A filtered-out repo must not stop processing of later dirs (mutmut: continue→break)."""
+        bad = _valid_changelog()
+        del bad["title"]
+        # `repo-a` (filtered out) sorts before `repo-b` (the one we want).
+        _write_yaml(
+            tmp_path / "repo-a" / "2026-04-08-repo-a-changelog.yaml",
+            _valid_changelog(),
+        )
+        _write_yaml(
+            tmp_path / "repo-b" / "2026-04-08-repo-b-changelog.yaml",
+            bad,
+        )
+        results = lint_directory(tmp_path, repos=["repo-b"])
+        assert len(results) == 1
+        assert results[0].path.parent.name == "repo-b"

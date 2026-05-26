@@ -1116,3 +1116,185 @@ class TestMainEntryPoint:
 
         with pytest.raises(RuntimeError, match="boom"):
             main()
+
+
+class TestMainEntryPointMutationSurvivors:
+    """Pin the unexpected-exception branch's exact message routing.
+
+    The Console must write to stderr (not stdout) and the f-string must use
+    ``str(e) or type(e).__name__`` — verified by examining captured streams
+    and by sending a zero-length-message exception to force the OR fallback.
+    """
+
+    def test_unexpected_exception_writes_to_stderr_not_stdout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from repogerbil.cli.main import main
+
+        def _raise() -> None:
+            raise RuntimeError("explode-stderr-marker")
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+        with pytest.raises(SystemExit):
+            main()
+        captured = capsys.readouterr()
+        # Message must land on stderr (Console(stderr=True)), never on stdout.
+        assert "explode-stderr-marker" in captured.err
+        assert "explode-stderr-marker" not in captured.out
+
+    def test_unexpected_exception_formats_message_with_str_e(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``str(e)`` (not ``str(None)``) must appear in the formatted line."""
+        from repogerbil.cli.main import main
+
+        def _raise() -> None:
+            raise RuntimeError("unique-formatted-message-XYZ")
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+        with pytest.raises(SystemExit):
+            main()
+        err = capsys.readouterr().err
+        assert "unique-formatted-message-XYZ" in err
+        # Defend against ``str(None)`` (which would render "None") and against
+        # ``str(e) and type(e).__name__`` (which would render the class name
+        # because str(e) is truthy → "and" → "RuntimeError").
+        assert "RuntimeError" not in err
+        # Defend against ``console.print(None)`` — the label must be present.
+        assert "Unexpected Error:" in err
+
+    def test_unexpected_exception_falls_back_to_type_name_for_empty_str(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``str(e) or type(e).__name__`` — when str(e) is empty, class name shows.
+
+        Also pins ``type(e).__name__`` (not ``type(None).__name__`` = "NoneType").
+        """
+        from repogerbil.cli.main import main
+
+        class CustomZeroStrError(Exception):
+            def __str__(self) -> str:
+                return ""
+
+        def _raise() -> None:
+            raise CustomZeroStrError
+
+        monkeypatch.setattr("repogerbil.cli.main.cli", _raise)
+        with pytest.raises(SystemExit):
+            main()
+        err = capsys.readouterr().err
+        # ``str(e)`` is "" → falsy → ``or`` falls back to ``type(e).__name__``.
+        assert "CustomZeroStrError" in err
+        # ``type(None).__name__`` would be "NoneType"; must not appear.
+        assert "NoneType" not in err
+
+
+class TestHandlePromptModeMutationSurvivors:
+    """Pin thorough-branch string literal and mkdir kwargs for ``_handle_prompt_mode``."""
+
+    def test_thorough_backfill_depth_triggers_diff_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``settings.backfill_depth == 'thorough'`` (exact, lowercase) routes through get_diff_content."""
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "out"
+
+        seen: dict[str, object] = {}
+
+        def fake_get_diff_content(path: Path, a: str, b: str) -> dict[str, str]:
+            seen["called"] = True
+            seen["path"] = path
+            seen["a"] = a
+            seen["b"] = b
+            return {"f.py": "diff-body"}
+
+        def fake_generate_prompt(
+            repo_name: str, date: str, commits: list[object], stats: object, diff_content: dict[str, str]
+        ) -> str:
+            seen["diff_content"] = diff_content
+            return "prompt-with-diffs"
+
+        monkeypatch.setattr("repogerbil.core.diff.get_diff_content", fake_get_diff_content)
+        monkeypatch.setattr("repogerbil.cli.main.generate_prompt", fake_generate_prompt)
+
+        commits = [SimpleNamespace(hash="aaa"), SimpleNamespace(hash="bbb")]
+        stats = SimpleNamespace(files_changed=2)
+        settings = SimpleNamespace(backfill_depth="thorough")
+
+        _handle_prompt_mode(repo, repo.name, "2026-04-07", commits, stats, settings, out)
+
+        assert seen.get("called") is True
+        assert seen["a"] == "aaa"
+        assert seen["b"] == "bbb"
+        assert seen["diff_content"] == {"f.py": "diff-body"}
+
+    def test_non_thorough_backfill_depth_skips_diff_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Any non-``'thorough'`` value (incl. ``'THOROUGH'``) must NOT call get_diff_content."""
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "out"
+        called: list[bool] = []
+
+        def fake_get_diff_content(*args: object, **kwargs: object) -> dict[str, str]:
+            called.append(True)
+            return {}
+
+        monkeypatch.setattr("repogerbil.core.diff.get_diff_content", fake_get_diff_content)
+        monkeypatch.setattr(
+            "repogerbil.cli.main.generate_prompt",
+            lambda *a, **k: "p",
+        )
+
+        commits = [SimpleNamespace(hash="a"), SimpleNamespace(hash="b")]
+        stats = SimpleNamespace(files_changed=1)
+        # Uppercase variant — would match a "THOROUGH" string mutation but
+        # must NOT match the real lowercase literal.
+        settings = SimpleNamespace(backfill_depth="THOROUGH")
+
+        _handle_prompt_mode(repo, repo.name, "2026-04-07", commits, stats, settings, out)
+        assert called == []
+
+    def test_mkdir_succeeds_when_parent_already_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exist_ok=True`` must hold — pre-existing parent dir must NOT raise."""
+        repo = _init_test_repo(tmp_path)
+        out = tmp_path / "out"
+        # Pre-create the prompt parent directory so exist_ok=False would raise.
+        (out / repo.name).mkdir(parents=True)
+
+        monkeypatch.setattr("repogerbil.cli.main.generate_prompt", lambda *a, **k: "p")
+
+        commits = [SimpleNamespace(hash="a"), SimpleNamespace(hash="b")]
+        stats = SimpleNamespace(files_changed=1)
+        settings = SimpleNamespace(backfill_depth="standard")
+
+        # No exception should be raised even though parent already exists.
+        _handle_prompt_mode(repo, repo.name, "2026-04-07", commits, stats, settings, out)
+        assert (out / repo.name / "2026-04-07-repo-prompt.md").exists()
+
+    def test_mkdir_creates_nested_missing_parents(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``parents=True`` must hold — deeply nested missing parents must be created."""
+        repo = _init_test_repo(tmp_path)
+        # Use a 3-level-deep output directory; parents=False would raise.
+        out = tmp_path / "deep" / "nest" / "out"
+
+        monkeypatch.setattr("repogerbil.cli.main.generate_prompt", lambda *a, **k: "deep-prompt")
+
+        commits = [SimpleNamespace(hash="a"), SimpleNamespace(hash="b")]
+        stats = SimpleNamespace(files_changed=1)
+        settings = SimpleNamespace(backfill_depth="standard")
+
+        _handle_prompt_mode(repo, repo.name, "2026-04-07", commits, stats, settings, out)
+        target = out / repo.name / "2026-04-07-repo-prompt.md"
+        assert target.exists()
+        assert target.read_text() == "deep-prompt"

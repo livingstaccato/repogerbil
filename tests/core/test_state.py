@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from repogerbil.core.state import State, StateStore
 
 
@@ -145,6 +147,98 @@ def test_state_store_save_cleans_tmp_when_replace_fails(tmp_path: Path) -> None:
 
     leftovers = sorted(tmp_path.glob(".repogerbil-state-*.tmp"))
     assert leftovers == []
+
+
+def test_state_path_name_is_exact_literal(tmp_path: Path) -> None:
+    """StateStore.path.name must be the exact literal ``.repogerbil-state.json``.
+
+    Uses the in-memory ``.name`` (case-sensitive string compare) rather than
+    filesystem existence checks, since macOS APFS is case-insensitive by
+    default — case-mutated filenames would otherwise appear to "exist".
+    """
+    store = StateStore(tmp_path)
+    assert store.path.name == ".repogerbil-state.json"
+    # Defend against bare/empty literal mutations and uppercase mutations.
+    assert store.path.name != "XX.repogerbil-state.jsonXX"
+    assert store.path.name != ".REPOGERBIL-STATE.JSON"
+    # Confirm the parent directory is correctly anchored.
+    assert store.path.parent == tmp_path
+
+
+def test_state_store_save_creates_missing_parent_dirs(tmp_path: Path) -> None:
+    """save() must create parent directories with parents=True (recursive).
+
+    Pins ``parents=True``: a missing two-level parent should still succeed.
+    parents=False/None would raise FileNotFoundError on the mkdir call.
+    """
+    deep = tmp_path / "a" / "b" / "c"
+    # Don't pre-create the directory; constructor needs only the path.
+    store = StateStore(deep)
+    # No state to write yet — save() should still succeed and create parents.
+    store.save()
+    assert store.path.exists()
+    assert store.path.parent == deep
+
+
+def test_state_store_save_is_idempotent_when_parent_exists(tmp_path: Path) -> None:
+    """Calling save() twice must succeed (exist_ok=True semantics)."""
+    store = StateStore(tmp_path)
+    store.save()
+    store.save()  # Would raise FileExistsError if exist_ok were False.
+    assert store.path.exists()
+
+
+def test_state_store_save_temp_file_prefix_and_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify the tempfile.mkstemp call uses dir/prefix/suffix exactly.
+
+    Spies on ``tempfile.mkstemp`` to capture the keyword args at call time,
+    pinning every argument against argument-dropping and string mutations.
+    """
+    import tempfile as real_tempfile
+
+    captured: dict[str, object] = {}
+    original = real_tempfile.mkstemp
+
+    def spy(**kwargs: object) -> tuple[int, str]:
+        captured.update(kwargs)
+        # Re-dispatch with the captured kwargs; mkstemp accepts these keys.
+        return original(  # type: ignore[no-any-return,call-overload]  # spy passthrough
+            **kwargs,
+        )
+
+    monkeypatch.setattr("repogerbil.core.state.tempfile.mkstemp", spy)
+
+    store = StateStore(tmp_path)
+    store.save()
+
+    assert captured["dir"] == store.path.parent
+    assert captured["prefix"] == ".repogerbil-state-"
+    assert captured["suffix"] == ".tmp"
+    # Defend against the dropped-kwarg + None mutations explicitly.
+    assert captured["dir"] is not None
+    assert captured["prefix"] is not None
+    assert captured["suffix"] is not None
+
+
+def test_state_store_save_writes_indented_json(tmp_path: Path) -> None:
+    """Persisted JSON must be indented with exactly 2 spaces and end with a newline."""
+    store = StateStore(tmp_path)
+    f = tmp_path / "x.yaml"
+    f.write_text("c")
+    store.update(f)
+    store.save()
+
+    text = store.path.read_text()
+    # Trailing newline must be present.
+    assert text.endswith("\n")
+    # The JSON body before the newline must equal a 2-space-indent dump
+    # (and NOT an indent=3 or indent=None dump).
+    body = text[:-1]
+    expected_indent_2 = store.state.model_dump_json(indent=2)
+    assert body == expected_indent_2
+    # Sanity: indent=3 and indent=None would differ.
+    assert body != store.state.model_dump_json(indent=3)
+    assert body != store.state.model_dump_json(indent=None)
 
 
 def test_state_store_outside_dir(tmp_path: Path) -> None:

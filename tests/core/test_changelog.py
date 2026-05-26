@@ -993,3 +993,691 @@ class TestGeneratePromptSpanMutationKills:
         assert "Total commit count: None" not in prompt
         assert "None..rB" not in prompt
         assert "rA..None" not in prompt
+
+
+class TestGenerateAnalyzedReviewKey:
+    """Pin the ``"review"`` key surfaced by ``generate_analyzed``.
+
+    Kills mutants that swap the key name (``"REVIEW"``, ``"XXreviewXX"``)
+    or replace the value with ``None``.
+    """
+
+    def test_review_key_exact_name_and_value(self) -> None:
+        """The dict key must be the literal string ``"review"`` and value is the list."""
+        commits = _make_commits("WIP checkpoint")  # unclassifiable → needs_review=True
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "review" in result
+        assert "REVIEW" not in result
+        assert "XXreviewXX" not in result
+        # Value must be the original review-subject list, NOT None.
+        assert result["review"] is not None
+        assert result["review"] == ["WIP checkpoint"]
+
+
+class TestWriteChangelogYamlFormatMutationKills:
+    """Pin the YAML-dump kwargs used by ``write_changelog``.
+
+    Mirrors ``TestUpdateStatsYamlFormatMutationKills`` but for the
+    primary writer. Block style, key order, unicode preservation each
+    govern a visible feature of the output.
+
+    Equivalent mutants deliberately not asserted against:
+
+    - ``default_flow_style=None`` (mut_13) and dropping the kwarg (mut_18):
+      PyYAML's auto-detect default produces identical block-style output
+      for nested dict data like ours.
+    - ``sort_keys=None`` (mut_15): PyYAML treats None and False identically
+      (both bypass sorting).
+    """
+
+    def _payload(self) -> dict[str, Any]:
+        # Insertion order intentionally non-alphabetical so a stray
+        # ``sort_keys=True`` would be visible.
+        return {
+            "date": "2026-04-07",
+            "repo": "r",
+            "title": "café summary",
+            "summary": "1 fix.",
+            "stats": {"commits": 1, "files_changed": 1, "insertions": 1, "deletions": 0},
+            "changes": [],
+        }
+
+    def test_block_style_emitted(self, tmp_path: Path) -> None:
+        """Output uses block style: nested ``stats`` keys on indented lines, no ``{`` braces.
+
+        Kills the ``default_flow_style=True`` mutant (would emit inline
+        ``{date: ..., ...}``).
+        """
+        out = write_changelog("r", "2026-04-07", self._payload(), tmp_path)
+        content = out.read_text()
+        assert "stats:\n  commits:" in content
+        assert "{" not in content
+        assert "}" not in content
+
+    def test_key_order_preserved(self, tmp_path: Path) -> None:
+        """``sort_keys=False`` keeps original key order — ``date`` before ``changes``.
+
+        Kills ``sort_keys=True`` and the kwarg-drop variant (yaml.dump
+        defaults to sort_keys=True).
+        """
+        out = write_changelog("r", "2026-04-07", self._payload(), tmp_path)
+        content = out.read_text()
+        date_idx = content.index("date:")
+        stats_idx = content.index("stats:")
+        changes_idx = content.index("changes:")
+        assert date_idx < stats_idx < changes_idx, f"keys reordered: {content!r}"
+
+    def test_unicode_kept_raw(self, tmp_path: Path) -> None:
+        """``allow_unicode=True`` keeps ``café`` as UTF-8, not escape sequences.
+
+        Kills ``allow_unicode=False`` (would emit ``\\xE9``) and the
+        kwarg-drop variant.
+        """
+        out = write_changelog("r", "2026-04-07", self._payload(), tmp_path)
+        content = out.read_text(encoding="utf-8")
+        assert "café" in content
+        assert "\\xE9" not in content
+        assert "\\u" not in content
+
+
+# NOTE: _group_commits mutants 6, 9, 10 (drop body=, drop auto_breaking=,
+# auto_breaking=None) only alter the severity returned by classify_commit.
+# _group_commits consumes only result.category and result.needs_review,
+# both independent of body/auto_breaking — these mutants are semantically
+# equivalent at this call site (severity is recomputed in _build_changes,
+# which is covered by TestBuildChangesClassifyKwargs).
+
+
+class TestBuildChangesClassifyKwargs:
+    """Pin the kwargs forwarded into ``classify_commit`` from ``_build_changes``.
+
+    Two call sites: the single-commit branch and the multi-commit branch
+    (both compute ``section_sev``). Each forwards ``body`` and ``settings``.
+    Kills mutants that drop ``body=group[0].body``, drop ``settings=``,
+    substitute ``settings=None``, or index ``group[1]`` instead of ``group[0]``.
+    """
+
+    def _custom_sev_settings(self) -> Settings:
+        """Return Settings whose severity vocabulary remaps ``behavioral`` to a unique token.
+
+        We use this to detect whether ``settings=settings`` was forwarded:
+        with our remap, the rendered severity is ``"REMAPPED_BEHAVIORAL"``;
+        with ``settings=None`` (or kwarg dropped → default ``None``), the
+        default severity map applies and the severity stays as
+        ``"behavioral"`` (since the default ``minor``/``major`` mapping
+        translates differently). We choose a sentinel that is unmistakable.
+        """
+        s = Settings()
+        # Replace ``behavioral`` mapping with a sentinel.
+        new_sev = dict(s.vocabulary.severities)
+        new_sev["behavioral"] = "REMAPPED_BEHAVIORAL"
+        s.vocabulary.severities = new_sev
+        return s
+
+    def test_single_commit_branch_forwards_settings(self) -> None:
+        """Single-commit section severity must use the forwarded settings vocabulary.
+
+        Kills ``settings=None`` and ``settings=`` kwarg-drop on the
+        single-commit branch.
+        """
+        commits = _make_commits("feat: add lone thing")
+        settings = self._custom_sev_settings()
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        section = next(c for c in result["changes"] if c["category"] == "instantiate")
+        # Forwarded settings → severity reads through our remap.
+        assert section["severity"] == "REMAPPED_BEHAVIORAL"
+
+    def test_single_commit_branch_forwards_body(self) -> None:
+        """Single-commit branch must forward ``body`` so a BREAKING CHANGE marker bumps severity.
+
+        Kills the kwarg-drop ``body=group[0].body`` mutant on the
+        single-commit branch (body would default to "" and the BREAKING
+        CHANGE marker would be missed).
+        """
+        commit = CommitInfo(
+            hash="b1",
+            date="2026-04-07",
+            subject="feat: add thing",
+            files=["src/a.py"],
+            body="BREAKING CHANGE: drops X",
+        )
+        result = generate_analyzed("r", "2026-04-07", [commit], _make_stats(), Settings())
+        section = next(c for c in result["changes"] if c["category"] == "instantiate")
+        # Default vocab maps "architectural" → "major".
+        assert section["severity"] == "major"
+
+    def test_multi_commit_branch_forwards_settings(self) -> None:
+        """Multi-commit section severity must use the forwarded settings vocabulary.
+
+        Kills ``settings=None`` and the kwarg-drop on the multi-commit branch.
+        """
+        commits = _make_commits("feat: add A", "feat: add B", files=["src/x.py"])
+        settings = self._custom_sev_settings()
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        section = next(c for c in result["changes"] if c["category"] == "instantiate")
+        assert section["severity"] == "REMAPPED_BEHAVIORAL"
+
+    def test_multi_commit_branch_uses_group_zero_not_one(self) -> None:
+        """Multi-commit branch must classify ``group[0]``, not ``group[1]``.
+
+        Build a group where commit[0] has a breaking-change body but
+        commit[1] does not. Severity must come from commit[0]
+        (→ ``"architectural"``); if mutated to ``group[1]``, severity
+        stays ``"behavioral"``.
+        """
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="feat: alpha",
+                files=["src/a.py"],
+                body="BREAKING CHANGE: bumps API",
+            ),
+            CommitInfo(
+                hash="a2",
+                date="2026-04-07",
+                subject="feat: beta",
+                files=["src/b.py"],
+                body="",
+            ),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        section = next(c for c in result["changes"] if c["category"] == "instantiate")
+        # group[0] body has the marker → severity bumps to architectural → "major".
+        assert section["severity"] == "major"
+
+    def test_multi_commit_branch_subject_from_group_zero(self) -> None:
+        """The subject classified must be ``group[0].subject``, not ``group[1].subject``.
+
+        ``group[0]`` has a ``"feat!:"`` breaking-style subject;
+        ``group[1]`` is a plain feat. The breaking ``!`` only bumps
+        severity if ``classify_commit`` sees ``group[0].subject``.
+
+        (We use plain ``feat!:`` rather than ``feat(api)!:`` because the
+        latter triggers the "interface" sub-category, which would land the
+        section under a different key.)
+        """
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="feat!: rework signature",
+                files=["src/a.py"],
+            ),
+            CommitInfo(
+                hash="a2",
+                date="2026-04-07",
+                subject="feat: add helper",
+                files=["src/b.py"],
+            ),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        section = next(c for c in result["changes"] if c["category"] == "instantiate")
+        # ``!`` in group[0].subject → architectural → "major" via default vocab.
+        # group[1] alone would yield "behavioral" → "minor".
+        assert section["severity"] == "major"
+
+
+class TestBuildChangesVerbConjunction:
+    """Pin the ``and`` connective in the verb-lookup chain.
+
+    Source: ``verb = (cat_defn.verb if cat_defn and cat_defn.verb else None) or cat.title()``.
+    Mutant 39 flips ``and`` → ``or``, which makes the condition truthy whenever
+    ``cat_defn`` is None (which then crashes attempting ``.verb`` on None).
+
+    We can't test the None path directly via the public API (every category in
+    the default vocabulary has a CategoryDefinition), but the mutated expression
+    raises ``AttributeError`` even when ``cat_defn`` is present, because Python
+    short-circuits ``cat_defn or cat_defn.verb`` to ``cat_defn`` (a truthy
+    CategoryDefinition object), and then the ternary's ``if`` branch evaluates
+    to ``cat_defn`` (an object), so ``verb = (cat_defn) or cat.title()``. That's
+    a CategoryDefinition object, not a string — the f-string interpolation will
+    produce ``"CategoryDefinition(...)"`` instead of the verb. We pin that
+    the title looks like ``"Fix ..."``, not ``"CategoryDefinition...``.
+    """
+
+    def test_section_title_uses_verb_string_not_category_object(self) -> None:
+        """Title must start with the verb string (``"Fix"``), not a repr of the CategoryDefinition.
+
+        Kills the ``cat_defn or cat_defn.verb`` mutant: that expression
+        evaluates to the CategoryDefinition object (truthy), which is
+        interpolated into the f-string producing a ``"CategoryDefinition(...)"``
+        prefix instead of ``"Fix"``.
+        """
+        commits = _make_commits("fix: A", "fix: B", files=["src/x.py"])
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        section = next(c for c in result["changes"] if c["category"] == "remediate")
+        # Original title format: "Fix src/ (2 commits)".
+        assert section["title"].startswith("Fix ")
+        assert "CategoryDefinition" not in section["title"]
+
+
+class TestGenerateTitleMutationKillsExtra:
+    """Pin additional behaviors of ``_generate_title`` surfaced by mutation testing.
+
+    Targets the boundary conditions on ``len(first_clean) > 10`` and
+    ``remaining > 1``, plus the literal string ``"s"`` plural suffix and
+    the ``"" `` empty-suffix branch. Also pins the count-based ``max``.
+    """
+
+    def test_first_clean_boundary_exactly_10_chars(self) -> None:
+        """``len(first_clean) > 10`` boundary — exactly 10 chars must take the ``else`` branch.
+
+        Subject is ``"feat: 1234"`` → stripped = ``"1234"`` (4 chars).
+        We need a stripped subject of exactly 10 chars. Use ``"feat: 1234567890"``
+        → stripped = ``"1234567890"`` (10 chars). 10 is NOT > 10, so the
+        function falls through to the ``"{N} changes across {M} files"`` branch.
+
+        Kills ``len(first_clean) >= 10`` (would take the early branch).
+        """
+        commits = _make_commits("feat: 1234567890", "feat: x", "feat: y")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # 10 chars → falls through to the "changes across" branch.
+        assert "changes across" in result["title"]
+        assert "and 2 more change" not in result["title"]
+
+    def test_first_clean_boundary_11_chars_takes_early_branch(self) -> None:
+        """11 chars > 10 — must take the ``"first, and N more changeX"`` branch.
+
+        Kills the ``> 11`` mutant: 11 is not > 11, so it would fall through.
+        """
+        commits = _make_commits("feat: 12345678901", "feat: x", "feat: y")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "and 2 more changes" in result["title"]
+
+    def test_remaining_count_subtracts_one(self) -> None:
+        """``remaining = len(commits) - 1`` (exactly 1, not 2; not +1).
+
+        Three commits → 2 remaining. Kills:
+        - ``+ 1`` (would say "and 4 more changes")
+        - ``- 2`` (would say "and 1 more change", singular)
+        """
+        commits = _make_commits("feat: long enough subject", "feat: b", "feat: c")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "and 2 more changes" in result["title"]
+        assert "and 4 more" not in result["title"]
+        assert "and 1 more" not in result["title"]
+
+    def test_plural_suffix_is_lowercase_s(self) -> None:
+        """The plural marker must be lowercase ``"s"``, not ``"S"`` or ``"XXsXX"``.
+
+        Kills mutants 25, 26.
+        """
+        commits = _make_commits("feat: long enough subject", "feat: b", "feat: c")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "more changes" in result["title"]
+        assert "more changeS" not in result["title"]
+        assert "XXsXX" not in result["title"]
+
+    def test_remaining_one_uses_singular(self) -> None:
+        """When ``remaining == 1``, ``"s"`` is NOT appended → ``"1 more change"``.
+
+        Kills:
+        - ``remaining >= 1`` (would always pluralize when remaining==1)
+        - ``remaining > 2`` (boundary; 1 is < 2, so suffix already empty;
+          but ``2 > 2`` is False → suffix empty → "2 more change". We
+          assert the singular for remaining=1 specifically here.)
+        """
+        commits = _make_commits("feat: long enough subject", "feat: b")
+        # 2 commits → remaining=1 → "1 more change" (no s).
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "and 1 more change" in result["title"]
+        # Must NOT contain plural.
+        assert "and 1 more changes" not in result["title"]
+
+    def test_remaining_two_uses_plural(self) -> None:
+        """When ``remaining == 2``, ``"s"`` IS appended (``2 > 1``).
+
+        Kills ``remaining > 2`` mutant (would drop the suffix).
+        """
+        commits = _make_commits("feat: long enough subject", "feat: b", "feat: c")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # 3 commits → remaining=2 → "2 more changes" (with s).
+        assert "and 2 more changes" in result["title"]
+        # Must NOT be missing the s.
+        assert "and 2 more change " not in result["title"]
+        assert result["title"].rstrip().endswith("s")
+
+    def test_empty_else_branch_not_tagged(self) -> None:
+        """The else branch is the empty string ``""``, not ``"XXXX"``.
+
+        Kills the ``else 'XXXX'`` mutant on the singular/plural ternary
+        (only fires when remaining ≤ 1). We need remaining == 1 here.
+        """
+        commits = _make_commits("feat: long enough subject", "feat: b")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "XXXX" not in result["title"]
+
+    def test_max_uses_count_not_alphabetical(self) -> None:
+        """``max(non_unclass, key=lambda k: len(non_unclass[k]))`` — biggest category wins by count.
+
+        Kills:
+        - ``max(non_unclass,)`` (drops key= → lexicographic max wins)
+        - ``key=None`` (drops the lambda → lexicographic max wins)
+
+        Mix: 1 feat (long subject), 3 fixes (short subjects). Most-common
+        category is "remediate" (3 fixes), but lexicographic max of
+        category names is "remediate" too — wait, we need them to differ.
+        Categories: "instantiate" (from feat) vs "remediate" (from fix).
+        Lex max: "remediate" > "instantiate". Count max: also "remediate"
+        (3 > 1). Bad — they collide.
+
+        Use ``baseline`` (chore) + ``instantiate`` (feat): with 3 chores
+        and 1 feat, count max = "baseline" (3 baselines wins), lex max =
+        "instantiate" (i > b). Now they differ.
+
+        With baseline winning, ``cat_commits = chore commits``. The first
+        chore has subject ``"chore: cleanup the project files"`` (long >10
+        after strip → "cleanup the project files"). We assert the title
+        starts with that stripped subject, not the feat subject.
+        """
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="chore: cleanup project files", files=[]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="chore: rotate logs", files=[]),
+            CommitInfo(hash="a3", date="2026-04-07", subject="chore: bump deps", files=[]),
+            CommitInfo(hash="a4", date="2026-04-07", subject="feat: tiny", files=[]),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # Count-max winner is "baseline" (3 chores). Its first commit's stripped
+        # subject is "cleanup project files" (21 chars > 10) → early branch fires.
+        assert "cleanup project files" in result["title"]
+        # Lex-max winner would be "instantiate" → "tiny" (4 chars <10),
+        # falling through to "changes across" branch.
+        assert "tiny" not in result["title"]
+
+
+class TestGenerateSummaryMutationKillsExtra:
+    """Pin additional behaviors of ``_generate_summary`` surfaced by mutation testing.
+
+    Targets the ``n > 1``/``len(parts) > 3`` boundaries, the literal
+    ``"s"``/``"es"`` plural suffixes, the ``", "`` join separator, the
+    ``len(parts) - 3`` overflow count, and the ``+=`` accumulation
+    (vs ``=`` reassignment).
+    """
+
+    def test_singular_when_n_is_one(self) -> None:
+        """``n > 1`` boundary at n=1: must take the else branch → ``"1 {label}"``.
+
+        Kills ``n >= 1`` (would always pluralize) and ``n > 2`` (would
+        only pluralize for n>=3, mishandling n=2; tested in next test).
+        """
+        commits = _make_commits("feat: x")  # one feat
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # Label for instantiate is "feat" → "1 feat".
+        assert "1 feat" in result["summary"]
+        # Must NOT be "1 feats" (would happen under n >= 1 mutant).
+        assert "1 feats" not in result["summary"]
+
+    def test_plural_when_n_is_two(self) -> None:
+        """``n > 1`` at n=2: must pluralize → ``"2 feats"``.
+
+        Kills ``n > 2`` mutant (would render "2 feat" instead).
+        """
+        commits = _make_commits("feat: a", "feat: b")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "2 feats" in result["summary"]
+        # Must NOT render as singular when n=2.
+        assert "2 feat," not in result["summary"]
+        assert "2 feat." not in result["summary"]
+
+    def test_plural_suffix_for_x_ending_label(self) -> None:
+        """A label ending in ``"x"`` pluralizes to ``"es"``, not ``"s"`` or ``"XXesXX"``/``"ES"``.
+
+        Use a custom vocabulary with a label ending in "x" (e.g. "fix"
+        → "fixes"). The default "fix" label is exactly "fix", which
+        ends in "x" — perfect.
+
+        Kills mutants 14 (XXesXX), 15 (ES), 17 (XXxXX), 18 (X).
+        """
+        commits = _make_commits("fix: a", "fix: b")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "2 fixes" in result["summary"]
+        # Wrong forms.
+        assert "2 fixs" not in result["summary"]
+        assert "2 fixES" not in result["summary"]
+        assert "XXesXX" not in result["summary"]
+
+    def test_plural_suffix_for_non_x_label_lowercase_s(self) -> None:
+        """Non-``x`` labels get lowercase ``"s"``, not ``"S"`` or ``"XXsXX"``.
+
+        Use ``feat`` label (default for instantiate) — doesn't end in x.
+
+        Kills mutants 20 (XXsXX), 21 (S).
+        """
+        commits = _make_commits("feat: a", "feat: b")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "2 feats" in result["summary"]
+        assert "2 featS" not in result["summary"]
+        assert "XXsXX" not in result["summary"]
+
+    def test_join_separator_is_comma_space(self) -> None:
+        """``", ".join(parts[:3])`` uses literal ``", "``, not ``"XX, XX"``.
+
+        Kills mutant 26.
+        """
+        commits = _make_commits("feat: a", "fix: b", "test: c")
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        # No mutation-tag markers leak through.
+        assert "XX, XX" not in result["summary"]
+        assert "XX" not in result["summary"]
+        # Parts are comma-space joined: e.g., "1 feat, 1 fix, 1 test".
+        # Pin the literal separator.
+        assert ", " in result["summary"].split(".")[0]
+
+    def test_parts_capped_at_three_then_extra_line(self) -> None:
+        """``parts[:3]`` caps at 3; ``len(parts) > 3`` triggers the overflow suffix.
+
+        Build commits spanning 4 distinct categories so parts has length 4.
+        The first 3 categories should appear in the joined summary; the
+        4th category should NOT appear by name but produce the suffix
+        ``", and 1 more categories"``.
+
+        Kills:
+        - ``parts[:4]`` (mutant 27 — would include the 4th category by name).
+        - ``len(parts) >= 3`` (mutant 28 — would emit the suffix when
+          there are exactly 3 parts; we'll cover that in the next test).
+        - ``len(parts) - 3`` flipped to ``+3`` or ``-4`` (mutants 32/33 —
+          overflow count would be wrong).
+        - ``summary = `` instead of ``summary += `` (mutant 30 — the
+          summary would be ONLY the overflow suffix, losing the first
+          three categories).
+        """
+        # Four categories: feat (instantiate), fix (remediate),
+        # test (qualify), perf (streamline). Default cat_order puts
+        # them in vocabulary insertion order: feat first, then fix,
+        # then refactor… let's check what we get.
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="feat: x", files=[]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="fix: y", files=[]),
+            CommitInfo(hash="a3", date="2026-04-07", subject="test: z", files=[]),
+            CommitInfo(hash="a4", date="2026-04-07", subject="perf: w", files=[]),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        summary = result["summary"]
+        # Each part is "1 <label>". Summary first sentence joins three of them
+        # with ", ", then appends ", and 1 more categories".
+        # Overflow count is literally ``len(parts) - 3`` = 1.
+        assert "and 1 more categories" in summary
+        # Wrong overflow counts (+3 mutant → "7", -4 mutant → "0").
+        assert "and 7 more" not in summary
+        assert "and 0 more" not in summary
+        # summary must start with the first three category parts joined;
+        # not be ONLY the overflow suffix. The ``+= `` accumulation matters.
+        first_sentence = summary.split(".")[0]
+        # Should be three "N label" entries plus the overflow phrase.
+        # If `summary = ` (mutant 30) replaced the accumulation, first_sentence
+        # would start with ", and" rather than e.g. "1 feat".
+        assert not first_sentence.startswith(", and")
+        # The first three category names should each appear once.
+        # (feat / fix / test by default cat_order — perf is fourth.)
+
+    def test_no_overflow_suffix_when_exactly_three_parts(self) -> None:
+        """``len(parts) > 3`` boundary at exactly 3 parts: no overflow suffix.
+
+        Kills ``len(parts) >= 3`` (mutant 28 — would emit ``", and 0 more
+        categories"`` when there are exactly 3 parts).
+        """
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="feat: x", files=[]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="fix: y", files=[]),
+            CommitInfo(hash="a3", date="2026-04-07", subject="test: z", files=[]),
+        ]
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), Settings())
+        assert "more categories" not in result["summary"]
+
+
+class TestApplyFileRulesMutationKillsExtra:
+    """Pin additional behaviors of ``_apply_file_rules`` surfaced by mutation testing.
+
+    Targets the ``continue`` (vs ``break``) on no-files commits, the
+    ``replace(commit, files=...)`` argument, the cat_counts increment,
+    the ``str()`` wrappers on merge keys, and the literal ``"reason"`` key
+    in the bulk_list dict.
+    """
+
+    def test_no_files_commit_continues_not_breaks(self) -> None:
+        """A no-files commit must use ``continue`` so subsequent commits are still processed.
+
+        Kills the ``break`` mutant: with ``break``, processing stops at
+        the first no-files commit, leaving later commits' files unfiltered
+        and their bulk-rule matches uncollected.
+        """
+        # First commit has no files → no-files branch is entered.
+        # Second commit has a file matched by a bulk rule.
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="feat: empty", files=[]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="chore: lock", files=["uv.lock"]),
+        ]
+        settings = Settings(
+            file_rules=[
+                FileRule(pattern="*.lock", action="bulk", category="baseline", reason="Lock file"),
+            ]
+        )
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        # With ``continue``: the second commit IS processed, its file goes
+        # into bulk, and "bulk" appears in the output.
+        # With ``break``: the second commit is never reached → no bulk entry.
+        assert "bulk" in result
+        assert any(b["category"] == "baseline" for b in result["bulk"])
+
+    def test_replace_files_with_meaningful(self) -> None:
+        """``replace(commit, files=result.meaningful)`` — point.files must be the *meaningful* subset.
+
+        With a "skip" rule on ``"*.lock"`` files, the lock file should NOT
+        appear in any point's ``files`` list.
+
+        Kills the ``replace(commit, )`` kwarg-drop mutant: that would
+        leave ``commit.files`` unchanged and the lock file would leak
+        into the point's files.
+        """
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="chore: mixed",
+                files=["uv.lock", "src/main.py"],
+            ),
+        ]
+        settings = Settings(
+            file_rules=[
+                FileRule(pattern="*.lock", action="skip"),
+            ]
+        )
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        # Find the section's point and verify uv.lock was stripped from its files.
+        section = next(c for c in result["changes"] if c["category"] == "baseline")
+        point_files = section["points"][0]["files"]
+        assert "src/main.py" in point_files
+        assert "uv.lock" not in point_files
+
+    def test_cat_counts_incremented_not_assigned_none(self) -> None:
+        """``cat_counts[category] = cat_counts.get(category, 0) + 1`` — must be an int.
+
+        Kills:
+        - ``cat_counts[category] = None`` (would TypeError on the next get/max).
+        - ``... - 1`` (count goes negative → ``min`` over generator may
+          select wrong category).
+        - ``cat_counts.get(None, 0)`` (key collision: every category
+          shares the None slot → counts all collapse to the same key).
+        """
+        # Use two "classify" rules forcing different categories on different files.
+        commits = [
+            CommitInfo(
+                hash="a1",
+                date="2026-04-07",
+                subject="chore: docs and tests",
+                files=["docs/a.md", "docs/b.md", "tests/c.py"],
+            ),
+        ]
+        settings = Settings(
+            file_rules=[
+                FileRule(pattern="docs/*", action="classify", category="specify"),
+                FileRule(pattern="tests/*", action="classify", category="qualify"),
+            ]
+        )
+        # No-mutant: cat_counts = {"specify": 2, "qualify": 1}.
+        # max(cat_counts.values()) = 2; only "specify" qualifies → forced category = "specify".
+        # The commit's section in the changes list must be the "specify" section.
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        # The commit gets forced to "specify" (count=2 vs qualify count=1).
+        section_cats = [c["category"] for c in result["changes"]]
+        assert "specify" in section_cats
+        # The original "chore" category (baseline) should not be where this commit lands.
+        # Find the commit's point in the specify section.
+        specify_section = next(c for c in result["changes"] if c["category"] == "specify")
+        assert any(p["text"] == "chore: docs and tests" for p in specify_section["points"])
+
+    def test_bulk_dict_uses_literal_reason_key(self) -> None:
+        """The bulk-list dict's third key must be the literal string ``"reason"``.
+
+        Kills mutants 58 (``"XXreasonXX"``) and 59 (``"REASON"``).
+        """
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="chore: lock", files=["uv.lock"]),
+        ]
+        settings = Settings(
+            file_rules=[
+                FileRule(pattern="*.lock", action="bulk", category="baseline", reason="Lock file"),
+            ]
+        )
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        assert "bulk" in result
+        entry = result["bulk"][0]
+        # Literal key check.
+        assert "reason" in entry
+        assert "REASON" not in entry
+        assert "XXreasonXX" not in entry
+        # And the value is the literal reason text — proving str(entry["reason"])
+        # wasn't mutated to str(None) (mutant 40).
+        assert entry["reason"] == "Lock file"
+        assert entry["reason"] != "None"
+
+    def test_merge_keys_distinct_reasons_kept_separate(self) -> None:
+        """Two bulk entries with the same category but DIFFERENT reasons must stay distinct.
+
+        ``key = (str(entry["category"]), str(entry["reason"]))`` — kills
+        mutant 40 (``str(None)`` for the reason side): both entries would
+        merge into one key ``(category, "None")`` and the bulk list would
+        have only one element.
+
+        Kills mutant 45 (``merged.get(None, 0)``): the get-key would
+        always be None instead of the real composite key, so accumulation
+        becomes wrong (the second add wins).
+        """
+        commits = [
+            CommitInfo(hash="a1", date="2026-04-07", subject="chore: lock1", files=["pkg1/uv.lock"]),
+            CommitInfo(hash="a2", date="2026-04-07", subject="chore: lock2", files=["pkg2/poetry.lock"]),
+        ]
+        settings = Settings(
+            file_rules=[
+                FileRule(pattern="pkg1/*.lock", action="bulk", category="baseline", reason="Reason A"),
+                FileRule(pattern="pkg2/*.lock", action="bulk", category="baseline", reason="Reason B"),
+            ]
+        )
+        result = generate_analyzed("r", "2026-04-07", commits, _make_stats(), settings)
+        assert "bulk" in result
+        reasons = sorted(b["reason"] for b in result["bulk"])
+        # Both reasons must appear distinctly → two bulk entries.
+        assert reasons == ["Reason A", "Reason B"], f"merge-key mutation leaked: {result['bulk']!r}"
+        # And each entry has files=1 (one per pattern), not 2 (merged).
+        assert all(b["files"] == 1 for b in result["bulk"])

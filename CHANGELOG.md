@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.0 (2026-05-25)
+
+Versioning lift: the 0.1.0 → 0.1.1 section below grew well past what the
+0.1.x range implies. The codebase now carries 1347 tests with 100% line
++ branch coverage, a 95.6% mutation kill rate (gated nightly at 90%),
+strict mypy + ruff + bandit + xenon + vulture + max-loc + plugin-sync +
+changelog-check + approxidate-check gates, a 16-step CI pipeline on
+Python 3.11/3.12/3.13, end-to-end `make act-ci` local validation, and a
+release pipeline aligned with the provide-io family. Bumping to 0.4.0
+puts repogerbil in the same maturity cohort as `livingstaccato/octowright`
+and the provide-io family (flavorpack, plating, provide-foundation,
+provide-telemetry, provide-testkit, pyvider, pyvider-cty are all at
+0.4.x). Development Status classifier upgraded from `3 - Alpha` to
+`4 - Beta` to match.
+
+### Build / CI / Chore
+
+- **Release pipeline aligned with the provide-io family**:
+  `.github/workflows/release.yml` rewritten to mirror the family
+  pattern — `release: published` trigger, canonical reusable workflow
+  ref `provide-io/ci-tooling/.github/workflows/python-release.yml@v0.4.2`,
+  `secrets: inherit` (was the broken `with: GITHUB_TOKEN: ...`),
+  per-job `permissions:` stanzas, and follow-up jobs for TestPyPI
+  publish → install-and-verify → PyPI publish → Sigstore signing + SBOM
+  attachment. Three regression tests pin the canonical workflow ref,
+  the release-published trigger, and the testpypi → verify → pypi
+  ordering.
+- **`__version__` attribute** exposed in `repogerbil.__init__` via
+  `importlib.metadata.version("repogerbil")`. Required by the release
+  pipeline's verify-testpypi step.
+- **`pyproject.toml` setuptools dynamic version**: switched from list
+  form `{file = ["VERSION"]}` to string form `{file = "VERSION"}` to
+  match the family convention.
+
+### Docs
+
+- **README badges + links block**: family-style badge row (License,
+  Python 3.11+, uv, Ruff, CI, Mutation) and a links section pointing
+  at Source / Issues / Releases on GitHub plus every doc file under
+  `docs/` and the CHANGELOG. License footer upgraded from bare
+  "Apache-2.0" to a link to LICENSE + SPDX `REUSE.toml` pointer.
+- **ARCHITECTURE.md module map filled in**: 10 source files that had
+  been missing from the layer tree (`core/_jsonl.py`, the four `llm/`
+  modules, and nine `cli/commands/*.py` command files) are now listed
+  with one-line roles. Verified via a grep diff against the actual
+  `src/` tree — zero source files remain undocumented.
+- **SKILL.md** (both canonical and mirror copies): added the
+  `distill-ecosystem` row that was missing from the command reference
+  table.
+
 ## 0.1.1 (2026-05-24)
 
 Six weeks of follow-up work on top of the 0.1.0 release. Headline additions:

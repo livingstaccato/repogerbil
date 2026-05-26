@@ -1,4 +1,14 @@
 {
-  "counts": {},
-  "run_returncode": 1
+  "counts": {
+    "killed": 0,
+    "survived": 0,
+    "total": 2920,
+    "no_tests": 0,
+    "skipped": 0,
+    "suspicious": 0,
+    "timeout": 0,
+    "check_was_interrupted_by_user": 0,
+    "segfault": 186
+  },
+  "run_returncode": 0
 }

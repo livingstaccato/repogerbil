@@ -55,6 +55,7 @@ Global flags: `--verbose` is a group-level flag (no short form; `-v` is reserved
 | `preflight` | `<source>` | `--since`, `--until`, `--emit-flags`, `--verbose` | Inspect source repo — classify files as artifact/source/unknown, suggest exclude flags |
 | `snapshot` | `<source> <dest>` | `--cadence`, `--since`, `--exclude-path`, `--time-window-start`, `--time-window-end`, `--timezone`, `--commit-time`, `--source-branch`, `--changelog-dir`, `--extra-source`, `--all-branches`, `--source-subdir`, `--llm-refine` | Create an independent repo with distilled history |
 | `multi-snapshot` | `<dest>` | `--repo NAME:PATH`, `--since`, `--exclude-path`, `--commit-time`, `--timezone`, `--ecosystem-label`, `--llm-refine`, `--dry-run` | Merge multiple source repos into one distilled snapshot |
+| `distill-ecosystem` | — | `--source-base`, `--report-base`, `--dest-base`, `--targets`, `--min-changelogs`, `--parallel`, `--commit-time`, `--timezone`, `--all-branches` | Parallel batch wrapper around `snapshot` — distills many source repos at once, one snapshot per source |
 | `export-cadence` | `<repo>` | `--cadence`, `--since`, `-o` | JSON export of time-grouped commits |
 | `audit` | `<repo>` | `--since`, `--show-bad` | Commit message prefix adoption |
 | `summary` | `<cl_dir>` | `--year`, `--week`, `--output-dir`, `--prompt`, `--force` | Weekly cross-repo summary |

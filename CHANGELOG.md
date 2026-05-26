@@ -20,6 +20,18 @@ hierarchical, configurable vocabulary.
 - **TOML-extensible preflight patterns**: `extra_artifact_patterns` Settings
   field appends user-defined regex rules to the built-in preflight artifact
   table.
+- **Global `--verbose` flag**: CLI group-level flag bumps the `repogerbil`
+  logger to INFO. Short form `-v` is intentionally NOT bound at the group
+  level so subcommand `-v` (e.g. `preflight -v`) keeps its existing meaning.
+- **`corrupt_lines` field on `RealignResult`**: counts JSONL records that
+  failed to parse and were preserved verbatim by the realign rewrite.
+- **`snapshot_author_*` validator**: pydantic `model_validator` rejects
+  half-set name/email at config load with an error message that names
+  both `.repogerbil.toml` and the `REPOGERBIL_SNAPSHOT_AUTHOR_*` env vars.
+- **Session-scoped git isolation**: `_isolated_git_global_config` autouse
+  test fixture in `tests/conftest.py` provides a sandboxed
+  `GIT_CONFIG_GLOBAL` so tests on machines without git identity (or with
+  signing keys) still pass without touching the user's real `~/.gitconfig`.
 - **Snapshot engine**: tree-level snapshot consolidation with cadence export,
   rich preview, and `summary --force` (7045402).
 - **Multi-snapshot command**: multi-repo daily distillation across an
@@ -119,6 +131,21 @@ hierarchical, configurable vocabulary.
   output.
 - **`realign.py` atomic JSONL write**: switched to unique `mkstemp` tmp
   names so concurrent realign runs over the same sidecar cannot collide.
+- **`preflight.py` approxidate**: sibling-bug of the catch_up fix —
+  bare-date `--since` / `--until` values now pinned to `T00:00:00` /
+  `T23:59:59` so preflight doesn't silently exclude same-day commits
+  earlier than current time-of-day.
+- **`_configure_cli_logging` library hygiene**: only sets the package
+  logger's level on FIRST-time setup when level is NOTSET; embedder apps
+  that pre-configured `repogerbil` logger keep their level on subsequent
+  CLI invocations. The CLI's StreamHandler tracks its own level for
+  `--verbose`.
+- **`_collect_day_context` window widened to ±30 days**: rebased commits
+  whose committer date diverges from author date by more than a week
+  (e.g. cherry-picks of old commits) are no longer silently dropped.
+- **`_KNOWN_PREFIX_RE` honors `extra_prefix_map`**: `_changelog_to_message`
+  accepts a `vocabulary` kwarg; user-defined custom prefixes in TOML are
+  now respected by the double-prefix guard.
 
 ### Refactors
 
@@ -145,6 +172,20 @@ hierarchical, configurable vocabulary.
   carrying a hardcoded prefix list.
 - **`_cleanup_index_files` shared helper**: cross-imported by
   `_multi_snapshot_git.py` instead of duplicated in both call sites.
+- **`core/_jsonl.py` shared `iter_jsonl_records`**: catch_up and realign
+  no longer duplicate the corrupt-line skip-and-continue loop; both
+  modules consume the shared generator.
+- **`lint.VALID_CATEGORIES` from vocabulary**: derives the accepted
+  category set from `CATEGORIES` plus a small `_CATEGORY_SYNONYMS`
+  frozenset, so new vocabulary categories are picked up automatically.
+- **`audit.find_missing(today=...)`**: injectable `today` parameter for
+  test determinism; defaults to `date.today()`.
+- **Conftest fixture adoption**: 11 test files migrated to use the
+  shared `git_repo` / `make_git_repo` fixtures from `tests/conftest.py`
+  (9 wholesale, 2 with conservative tightening). Removes ~600 lines of
+  duplicated boilerplate and aligns every test repo on the same defaults
+  (`user.email`, `user.name`, `commit.gpgsign=false`,
+  `init.defaultBranch=main` via `-c`).
 
 ### Docs
 
@@ -153,6 +194,19 @@ hierarchical, configurable vocabulary.
   surface (1d655be, 49897fe, 9531399).
 - **LLM commit-message refinement design spec** and implementation plan
   added under `docs/` (21ea99b).
+- **AGENTS.md sections**: "Destructive Operations" convention (the
+  `--confirm-source-*` flag pattern, with `gerbil distill` as the
+  grandfathered warn-only example) and "Plugin Editing Workflow"
+  (canonical `plugins/repogerbil/` vs packaged `assistant_plugins/`
+  mirror) added.
+- **Settings reference**: section-header comments in `core/config.py`
+  group the 23 top-level fields and document the
+  `REPOGERBIL_<FIELD>` / `REPOGERBIL_VOCABULARY__<NESTED>` env-var
+  convention. No behavior change.
+- **Gerbil skill description tightened**: names repogerbil explicitly,
+  declares it is NOT a Keep-a-Changelog / conventional-changelog /
+  release-please / towncrier replacement, and adds a "Do NOT use when"
+  stanza for unrelated changelog tasks.
 
 ### Build / CI / Chore
 
@@ -181,6 +235,47 @@ hierarchical, configurable vocabulary.
 - **`scripts/audit_zero_stats.py`** added to find changelogs affected by
   the diff-stats bug (65f9960). (Later moved to `scripts/forensics/audit_zero_stats.py`.)
 - **Default LLM model**: switched to `qwen3-coder-next:q8_0` (80fbb51).
+- **Mutation kill rate raised to 95.6%** (+22.1pp from the 73.5%
+  baseline). 626 -> 118 surviving mutants, +378 test methods across two
+  rounds of targeted survivor-killing. Remaining 118 are documented as
+  semantically equivalent (typing.cast no-ops, PyYAML default-format
+  detection, max()/min() invariants, fallback-masked git mutations,
+  pragma:no-cover branches).
+- **Mutation-score CI gate**: `scripts/check_mutation_score.py` reads
+  `mutants/mutmut-cicd-stats.json` and fails the nightly mutation
+  workflow if killed/(total - no_tests - skipped) drops below the
+  threshold passed on argv (currently 90; gives ~5pp headroom).
+- **`make act-ci` end-to-end local CI**: `.actrc` pins
+  `catthehacker/ubuntu:runner-24.04`; `Makefile` exposes `act-dry`
+  (validates workflow + .actrc) and `act-ci` (runs the quality job
+  in Docker). Workflow gains an act-only first step that
+  sudo-symlinks the toolcache node into `/usr/local/bin/node` because
+  act's `docker exec` doesn't inherit the image's PATH and JS actions
+  (upload-artifact, setup-uv Post hook) would otherwise fail to find
+  `node`. `upload-artifact` skipped under act.
+- **`scripts/check_approxidate.py`**: scans `src/repogerbil/` for
+  argv-construction sites passing bare ISO dates to `git log
+  --since=` / `--until=` without the midnight pin, preventing
+  regression of the recurring approxidate bug class. Wired into
+  `make quality` and CI.
+- **Action version bumps**: `actions/checkout` v4 -> v6,
+  `astral-sh/setup-uv` v5 -> v8 (now also provides Python via its
+  `python-version` input — dropped `actions/setup-python` from both
+  workflows), `actions/upload-artifact` v4 -> v7, `actions/cache`
+  v4 -> v5.
+- **Mutmut sandbox config minimized**: `also_copy` collapsed from a
+  per-subdir enumeration (which silently rotted when `llm/` was added)
+  to a single `src/repogerbil/` wholesale entry, plus `scripts/`,
+  `LICENSE`, and `.github/workflows/` (needed by specific tests).
+  Excluded `vocabulary.py` from `paths_to_mutate` (its dict-literal
+  factory functions produced ~185 hypothesis-induced timeouts).
+- **Codespell ignore list**: added partial-word regex prefixes used as
+  classification patterns (`clos`, `secur`, `delet`, `updat`, `ned`,
+  `increas`, `bloc`) plus dual-spelling words (`unparseable`,
+  `re-used`).
+- **`make plugin-sync-copy`**: rsync convenience that mirrors
+  `plugins/repogerbil/` -> `src/repogerbil/assistant_plugins/repogerbil/`
+  in one command.
 
 ## 0.1.0 (2026-04-07)
 

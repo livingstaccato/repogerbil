@@ -11,4 +11,7 @@ build/
 htmlcov/
 mutants/
 .mutmut-cache/
+mutation-results.json
+mutation-summary.txt
 /.claude/scheduled_tasks.lock
+/.claude/settings.local.json
